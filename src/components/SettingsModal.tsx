@@ -1,11 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, RefreshCw, Settings, Info, Bell, Download, CheckCircle2 } from 'lucide-react';
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
-}
+import { X, RefreshCw, Smartphone, Settings, Info, Bell } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -15,93 +10,15 @@ interface SettingsModalProps {
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefresh, onUpdate }) => {
-  const [isChecking, setIsChecking] = useState(false);
-  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
-  const [isInIframe, setIsInIframe] = useState(false);
-  const [isIOS, setIsIOS] = useState(false);
-  const [showGuide, setShowGuide] = useState(false);
-
-  useEffect(() => {
-    // Check if running inside iframe
-    if (typeof window !== 'undefined' && window.self !== window.top) {
-      setIsInIframe(true);
-    }
-
-    // Check iOS
-    const userAgent = window.navigator.userAgent.toLowerCase();
-    if (/iphone|ipad|ipod/.test(userAgent)) {
-      setIsIOS(true);
-    }
-
-    // Check if already in standalone mode
-    if (window.matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone) {
-      setIsInstalled(true);
-    }
-
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setInstallPrompt(e as BeforeInstallPromptEvent);
-    };
-
-    const handleAppInstalled = () => {
-      setIsInstalled(true);
-      setInstallPrompt(null);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    window.addEventListener('appinstalled', handleAppInstalled);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-    };
-  }, []);
-
-  const handleInstallClick = async () => {
-    if (!installPrompt) {
-      if (isInIframe) {
-        window.open(window.location.href, '_blank');
-        return;
-      }
-      setShowGuide(!showGuide);
-      return;
-    }
-    await installPrompt.prompt();
-    const { outcome } = await installPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setIsInstalled(true);
-      setInstallPrompt(null);
-    }
-  };
-
   const checkUpdates = async () => {
-    if (!('serviceWorker' in navigator)) {
-      alert('Tarayıcınız servis çalışanlarını desteklemiyor.');
-      return;
-    }
-
-    setIsChecking(true);
-    try {
+    if ('serviceWorker' in navigator) {
       const registration = await navigator.serviceWorker.getRegistration();
       if (registration) {
-        // Trigger the update check
         await registration.update();
-        
-        // Wait a bit to simulate checking if it's too fast
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        if (!registration.waiting && !registration.installing) {
-          alert('Uygulamanız güncel. Herhangi bir yeni sürüm bulunamadı.');
-        }
+        alert('Güncelleme denetimi yapıldı. Eğer yeni bir sürüm varsa tarayıcı otomatik olarak bildirecektir.');
       } else {
-        alert('Servis çalışanı kaydı bulunamadı. Lütfen sayfayı yenileyin.');
+        alert('Servis çalışanı bulunamadı.');
       }
-    } catch (err) {
-      console.error('Update check failed:', err);
-      alert('Güncelleme denetimi sırasında bir hata oluştu.');
-    } finally {
-      setIsChecking(false);
     }
   };
 
@@ -129,7 +46,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
                     <Settings className="text-blue-400" size={20} />
                     <h3 className="text-2xl font-display font-bold">Ayarlar</h3>
                   </div>
-                  <p className="text-slate-400 text-sm">Uygulama tercihleri ve PWA yönetimi</p>
+                  <p className="text-slate-400 text-sm">Uygulama tercihleri ve sistem bilgileri</p>
                 </div>
                 <button 
                   onClick={onClose}
@@ -141,84 +58,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
             </div>
             
             <div className="p-8 space-y-6">
-              {/* PWA Installation Section */}
-              <div className="space-y-4">
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                  <Download size={14} />
-                  Uygulama Yükleme (PWA)
-                </h4>
-                
-                <div className="bg-white/5 border border-white/10 p-5 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <p className="text-sm font-bold text-white">Cihaza Yükle</p>
-                      <p className="text-xs text-slate-400">
-                        {isInstalled 
-                          ? 'Uygulama cihazınıza masaüstü/mobil uygulama olarak yüklendi.' 
-                          : isInIframe
-                          ? 'Önizleme penceresinde (iframe) tarayıcı yükleme isteğini engeller.'
-                          : 'Uygulamayı cihazınıza yükleyerek çevrimdışı erişebilirsiniz.'}
-                      </p>
-                    </div>
-
-                    {isInstalled ? (
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs font-bold shrink-0">
-                        <CheckCircle2 size={14} />
-                        Yüklendi
-                      </div>
-                    ) : installPrompt ? (
-                      <button
-                        onClick={handleInstallClick}
-                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-600/20 shrink-0"
-                      >
-                        <Download size={14} />
-                        Uygulamayı Yükle
-                      </button>
-                    ) : isInIframe ? (
-                      <button
-                        onClick={() => window.open(window.location.href, '_blank')}
-                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-blue-600/20 shrink-0"
-                      >
-                        <Download size={14} />
-                        Yeni Sekmede Aç & Yükle
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setShowGuide(!showGuide)}
-                        className="flex items-center gap-2 px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white border border-white/10 rounded-xl text-xs font-bold transition-all shrink-0"
-                      >
-                        {showGuide ? 'Kapat' : 'Nasıl Yüklenir?'}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Manual Installation Guide */}
-                  {(showGuide || (!installPrompt && !isInstalled && !isInIframe)) && (
-                    <div className="mt-3 pt-3 border-t border-white/10 text-xs text-slate-300 space-y-2 bg-slate-900/60 p-3.5 rounded-xl">
-                      <p className="font-bold text-blue-400 flex items-center gap-1.5">
-                        <Info size={14} />
-                        Manuel Yükleme Adımları:
-                      </p>
-                      {isIOS ? (
-                        <p className="leading-relaxed text-slate-300">
-                          1. Safari alt menüsündeki <strong className="text-white">Paylaş (Share)</strong> simgesine dokunun.<br />
-                          2. Listeden <strong className="text-white">'Ana Ekrana Ekle'</strong> seçeneğine tıklayın.
-                        </p>
-                      ) : (
-                        <p className="leading-relaxed text-slate-300">
-                          1. Tarayıcı adres çubuğunun sağ tarafındaki <strong className="text-white">'Yükle' (veya +)</strong> simgesine tıklayın.<br />
-                          2. Veya tarayıcı menüsünden (⋮) <strong className="text-white">'Uygulamayı Yükle'</strong> veya <strong className="text-white">'Ana Ekrana Ekle'</strong>yi seçin.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
               {/* PWA Update Section */}
               <div className="space-y-4">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                  <RefreshCw size={14} className={isChecking ? 'animate-spin' : ''} />
+                  <RefreshCw size={14} />
                   Sistem Güncellemeleri
                 </h4>
                 
@@ -230,15 +73,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
                     </div>
                     <button 
                       onClick={checkUpdates}
-                      disabled={isChecking}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all border ${
-                        isChecking 
-                          ? 'bg-slate-700/50 text-slate-500 border-slate-700 cursor-not-allowed'
-                          : 'bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border-blue-600/30'
-                      }`}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-600/30 rounded-xl text-xs font-bold transition-all"
                     >
-                      <RefreshCw size={14} className={isChecking ? 'animate-spin' : ''} />
-                      {isChecking ? 'Denetleniyor...' : 'Güncellemeleri Denetle'}
+                      <RefreshCw size={14} />
+                      Şimdi Denetle
                     </button>
                   </div>
 
@@ -250,12 +88,32 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
                       </div>
                       <button 
                         onClick={onUpdate}
-                        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-[10px] font-bold shadow-lg shadow-blue-600/20"
+                        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-[10px] font-bold"
                       >
-                        Şimdi Güncelle
+                        Güncelle
                       </button>
                     </div>
                   )}
+                </div>
+              </div>
+
+              {/* Device Info */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                  <Smartphone size={14} />
+                  Cihaz Bilgisi
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-white/5 border border-white/10 p-4 rounded-xl">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Platform</p>
+                    <p className="text-sm font-medium text-white">{navigator.platform}</p>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 p-4 rounded-xl">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">PWA Durumu</p>
+                    <p className="text-sm font-medium text-white">
+                      {'serviceWorker' in navigator ? 'Yüklü' : 'Desteklenmiyor'}
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -268,7 +126,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
                   <div className="space-y-1">
                     <p className="text-xs font-bold text-white">HydroFlood PWA</p>
                     <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Bu uygulama çevrimdışı çalışma, hızlı harita ve veri önbellekleme yeteneklerine sahip Progressive Web App teknolojisini kullanır.
+                      Bu uygulama çevrimdışı çalışma ve hızlı yükleme için Progressive Web App teknolojisini kullanır.
                     </p>
                   </div>
                 </div>

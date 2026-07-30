@@ -13,75 +13,24 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        devOptions: {
-          enabled: true,
-          type: 'module',
-          navigateFallback: 'index.html',
-        },
-        includeAssets: ['favicon.png', 'apple-touch-icon.png', 'icon.svg', 'pwa-192x192.png', 'pwa-512x512.png', 'maskable-icon-512x512.png'],
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
         manifest: {
-          name: 'HydroFlood - Taşkın Analiz',
+          name: 'HydroFlood',
           short_name: 'HydroFlood',
-          description: 'Hidrolojik Taşkın Analizi ve Simülasyon Uygulaması',
-          theme_color: '#0f172a',
-          background_color: '#0f172a',
+          description: 'Hidrolojik Taşkın Analizi Uygulaması',
+          theme_color: '#0a0a0a',
+          background_color: '#0a0a0a',
           display: 'standalone',
-          orientation: 'any',
-          start_url: '/',
-          scope: '/',
-          id: '/',
-          categories: ['utilities', 'productivity', 'education'],
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: 'https://picsum.photos/seed/flood192/192/192',
               sizes: '192x192',
-              type: 'image/png',
-              purpose: 'any'
+              type: 'image/png'
             },
             {
-              src: '/pwa-512x512.png',
+              src: 'https://picsum.photos/seed/flood512/512/512',
               sizes: '512x512',
-              type: 'image/png',
-              purpose: 'any'
-            },
-            {
-              src: '/maskable-icon-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
-              purpose: 'maskable'
-            }
-          ]
-        },
-        workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,geotiff,wasm}'],
-          runtimeCaching: [
-            {
-              urlPattern: /^https:\/\/.*\.tile\.openstreetmap\.org\/.*$/,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'openstreetmap-tiles',
-                expiration: {
-                  maxEntries: 500,
-                  maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-            {
-              urlPattern: /^https:\/\/.*\.basemaps\.cartocdn\.com\/.*$/,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'carto-tiles',
-                expiration: {
-                  maxEntries: 500,
-                  maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
+              type: 'image/png'
             }
           ]
         }
