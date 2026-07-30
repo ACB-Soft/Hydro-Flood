@@ -15,6 +15,7 @@ import 'leaflet/dist/leaflet.css';
 import Dashboard from './components/Dashboard';
 import Analysis from './components/Analysis';
 import About from './components/About';
+import HowItWorks from './components/HowItWorks';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
 import Header from './components/Header';
@@ -125,7 +126,7 @@ export default function App() {
     },
   });
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'how-it-works'>('dashboard');
   const [currentStep, setCurrentStep] = useState(1);
   const [dem, setDem] = useState<DEMData | null>(null);
   const [params, setParams] = useState({
@@ -1493,6 +1494,7 @@ ${floodPolygons.join('\n')}
                 setCurrentStep(1);
               }}
               onOpenAbout={() => setActiveTab('about')}
+              onOpenHowItWorks={() => setActiveTab('how-it-works')}
               onOpenSettings={() => setActiveTab('settings')}
               isSimulating={isSimulating}
               progress={progress}
@@ -1520,6 +1522,9 @@ ${floodPolygons.join('\n')}
               needRefresh={needRefresh}
               onUpdate={() => updateServiceWorker(true)}
             />
+          )}
+          {activeTab === 'how-it-works' && (
+            <HowItWorks />
           )}
           {activeTab === 'about' && (
             <About />

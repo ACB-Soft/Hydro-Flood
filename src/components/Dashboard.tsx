@@ -1,10 +1,11 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Droplets, Layers, ChevronRight, Settings, HelpCircle } from 'lucide-react';
+import { Droplets, Layers, ChevronRight, Settings, HelpCircle, BookOpen } from 'lucide-react';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
   onOpenAbout: () => void;
+  onOpenHowItWorks: () => void;
   onOpenSettings: () => void;
   isSimulating?: boolean;
   progress?: number;
@@ -13,6 +14,7 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({
   onSelectMethod,
   onOpenAbout,
+  onOpenHowItWorks,
   onOpenSettings,
   isSimulating,
   progress,
@@ -41,7 +43,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end flex-wrap">
           {isSimulating && (
             <div className="flex items-center gap-2 bg-blue-500/10 px-3 py-2 rounded-xl border border-blue-500/20 text-xs font-bold text-blue-400">
               <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
@@ -51,7 +53,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
           <button
             onClick={onOpenSettings}
-            className="px-4 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
+            className="px-3.5 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
             title="Ayarlar"
           >
             <Settings size={18} />
@@ -59,8 +61,17 @@ const Dashboard: React.FC<DashboardProps> = ({
           </button>
 
           <button
+            onClick={onOpenHowItWorks}
+            className="px-3.5 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
+            title="Nasıl Çalışır?"
+          >
+            <BookOpen size={18} />
+            <span>Nasıl Çalışır?</span>
+          </button>
+
+          <button
             onClick={onOpenAbout}
-            className="px-4 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
+            className="px-3.5 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
             title="Yardım & Hakkında"
           >
             <HelpCircle size={18} />

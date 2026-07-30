@@ -2,8 +2,8 @@ import React from 'react';
 import { ChevronLeft } from 'lucide-react';
 
 interface HeaderProps {
-  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings';
-  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings') => void;
+  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'how-it-works';
+  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'how-it-works') => void;
   currentStep: number;
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   isSimulating: boolean;
@@ -31,6 +31,8 @@ const Header: React.FC<HeaderProps> = ({
     switch (activeTab) {
       case 'settings':
         return 'Ayarlar';
+      case 'how-it-works':
+        return 'Nasıl Çalışır?';
       case 'about':
         return 'Yardım & Hakkında';
       case 'analysis':
