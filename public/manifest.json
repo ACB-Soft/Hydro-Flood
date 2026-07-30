@@ -1,0 +1,21 @@
+{
+  "name": "HydroFlood PWA",
+  "short_name": "HydroFlood",
+  "description": "Hidrolojik Taşkın Analizi Uygulaması",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/flood/192/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://picsum.photos/seed/flood/512/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

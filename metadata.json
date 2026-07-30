@@ -1,0 +1,6 @@
+{
+  "name": "HydroFlood PWA",
+  "description": "İnteraktif Bathtub (Bataryalı Kap) modeli ile taşkın analizi ve Google Uydu haritası üzerinde görselleştirme aracı.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
