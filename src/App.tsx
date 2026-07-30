@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, Settings, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, MapPin, HelpCircle } from 'lucide-react';
+import { Upload, Play, Settings, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, MapPin, HelpCircle, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useRegisterSW } from 'virtual:pwa-register/react';
 import BathtubWorker from './workers/bathtub-worker?worker';
 import * as GeoTIFF from 'geotiff';
 import proj4 from 'proj4';
@@ -16,6 +17,7 @@ import Analysis from './components/Analysis';
 import About from './components/About';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
+import SettingsModal from './components/SettingsModal';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -109,7 +111,21 @@ const MANNING_PRESETS = [
 ];
 
 export default function App() {
+  const {
+    needRefresh: [needRefresh, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onRegistered(r) {
+      if (r) {
+        setInterval(() => {
+          r.update();
+        }, 60 * 60 * 1000);
+      }
+    },
+  });
+
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about'>('dashboard');
+  const [showSettings, setShowSettings] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [dem, setDem] = useState<DEMData | null>(null);
   const [params, setParams] = useState({
@@ -1424,6 +1440,46 @@ ${floodPolygons.join('\n')}
         )}
       </AnimatePresence>
 
+      {/* Settings Modal */}
+      <SettingsModal 
+        isOpen={showSettings} 
+        onClose={() => setShowSettings(false)}
+        needRefresh={needRefresh}
+        onUpdate={() => updateServiceWorker(true)}
+      />
+
+      <AnimatePresence>
+        {needRefresh && (
+          <motion.div
+            initial={{ y: -100 }}
+            animate={{ y: 0 }}
+            exit={{ y: -100 }}
+            className="fixed top-24 left-1/2 -translate-x-1/2 z-[60] w-full max-w-md px-4"
+          >
+            <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-4 border border-blue-400">
+              <div className="flex items-center gap-3">
+                <Bell className="animate-bounce" size={20} />
+                <p className="text-sm font-bold">Yeni bir güncelleme mevcut!</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => updateServiceWorker(true)}
+                  className="px-4 py-2 bg-white text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-50 transition-colors"
+                >
+                  Güncelle
+                </button>
+                <button 
+                  onClick={() => setNeedRefresh(false)}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="sticky top-0 z-50 glass border-b border-white/10 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-6">
@@ -1471,13 +1527,22 @@ ${floodPolygons.join('\n')}
               </div>
             )}
             {activeTab === 'dashboard' && (
-              <button 
-                onClick={() => setActiveTab('about')}
-                className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 hover:bg-blue-500/20 transition-all shadow-sm"
-                title="Hakkında"
-              >
-                <HelpCircle size={22} />
-              </button>
+              <>
+                <button 
+                  onClick={() => setShowSettings(true)}
+                  className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 hover:bg-blue-500/20 transition-all shadow-sm"
+                  title="Ayarlar"
+                >
+                  <Settings size={22} />
+                </button>
+                <button 
+                  onClick={() => setActiveTab('about')}
+                  className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 hover:bg-blue-500/20 transition-all shadow-sm"
+                  title="Hakkında"
+                >
+                  <HelpCircle size={22} />
+                </button>
+              </>
             )}
           </div>
         </div>

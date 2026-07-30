@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+        includeAssets: ['icon.jpg'],
         manifest: {
           name: 'HydroFlood',
           short_name: 'HydroFlood',
@@ -23,14 +23,14 @@ export default defineConfig(({ mode }) => {
           display: 'standalone',
           icons: [
             {
-              src: 'https://picsum.photos/seed/flood192/192/192',
+              src: 'icon.jpg',
               sizes: '192x192',
-              type: 'image/png'
+              type: 'image/jpeg'
             },
             {
-              src: 'https://picsum.photos/seed/flood512/512/512',
+              src: 'icon.jpg',
               sizes: '512x512',
-              type: 'image/png'
+              type: 'image/jpeg'
             }
           ]
         }
