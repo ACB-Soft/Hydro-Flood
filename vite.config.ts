@@ -13,24 +13,70 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.jpg'],
+        includeAssets: ['favicon.png', 'apple-touch-icon.png', 'icon.svg'],
         manifest: {
-          name: 'HydroFlood',
+          name: 'HydroFlood - Taşkın Analiz',
           short_name: 'HydroFlood',
-          description: 'Hidrolojik Taşkın Analizi Uygulaması',
-          theme_color: '#0a0a0a',
-          background_color: '#0a0a0a',
+          description: 'Hidrolojik Taşkın Analizi ve Simülasyon Uygulaması',
+          theme_color: '#0f172a',
+          background_color: '#0f172a',
           display: 'standalone',
+          orientation: 'any',
+          start_url: './',
+          scope: './',
+          id: '/',
+          categories: ['utilities', 'productivity', 'education'],
           icons: [
             {
-              src: 'icon.jpg',
+              src: 'pwa-192x192.png',
               sizes: '192x192',
-              type: 'image/jpeg'
+              type: 'image/png',
+              purpose: 'any'
             },
             {
-              src: 'icon.jpg',
+              src: 'pwa-512x512.png',
               sizes: '512x512',
-              type: 'image/jpeg'
+              type: 'image/png',
+              purpose: 'any'
+            },
+            {
+              src: 'maskable-icon-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable'
+            }
+          ]
+        },
+        workbox: {
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,geotiff,wasm}'],
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/.*\.tile\.openstreetmap\.org\/.*$/,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'openstreetmap-tiles',
+                expiration: {
+                  maxEntries: 500,
+                  maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/.*\.basemaps\.cartocdn\.com\/.*$/,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'carto-tiles',
+                expiration: {
+                  maxEntries: 500,
+                  maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
             }
           ]
         }

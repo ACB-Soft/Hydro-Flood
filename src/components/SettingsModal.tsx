@@ -1,6 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, RefreshCw, Smartphone, Settings, Info, Bell } from 'lucide-react';
+import { X, RefreshCw, Settings, Info, Bell, Download, CheckCircle2 } from 'lucide-react';
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,7 +15,44 @@ interface SettingsModalProps {
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefresh, onUpdate }) => {
-  const [isChecking, setIsChecking] = React.useState(false);
+  const [isChecking, setIsChecking] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  useEffect(() => {
+    // Check if already in standalone mode
+    if (window.matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone) {
+      setIsInstalled(true);
+    }
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e as BeforeInstallPromptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+    }
+  };
 
   const checkUpdates = async () => {
     if (!('serviceWorker' in navigator)) {
@@ -66,7 +108,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
                     <Settings className="text-blue-400" size={20} />
                     <h3 className="text-2xl font-display font-bold">Ayarlar</h3>
                   </div>
-                  <p className="text-slate-400 text-sm">Uygulama tercihleri ve sistem bilgileri</p>
+                  <p className="text-slate-400 text-sm">Uygulama tercihleri ve PWA yönetimi</p>
                 </div>
                 <button 
                   onClick={onClose}
@@ -78,6 +120,46 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
             </div>
             
             <div className="p-8 space-y-6">
+              {/* PWA Installation Section */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                  <Download size={14} />
+                  Uygulama Yükleme (PWA)
+                </h4>
+                
+                <div className="bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold text-white">Cihaza Yükle</p>
+                    <p className="text-xs text-slate-400">
+                      {isInstalled 
+                        ? 'Uygulama cihazınıza başarıyla yüklendi.' 
+                        : installPrompt 
+                        ? 'Uygulamayı masaüstüne veya mobil cihazınıza yükleyin.' 
+                        : 'Web tarayıcınızda çalışıyor.'}
+                    </p>
+                  </div>
+
+                  {isInstalled ? (
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs font-bold">
+                      <CheckCircle2 size={14} />
+                      Yüklendi
+                    </div>
+                  ) : installPrompt ? (
+                    <button
+                      onClick={handleInstallClick}
+                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-600/20"
+                    >
+                      <Download size={14} />
+                      Yükle
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-500 italic">
+                      Yüklenebilir durumda
+                    </span>
+                  )}
+                </div>
+              </div>
+
               {/* PWA Update Section */}
               <div className="space-y-4">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
@@ -131,7 +213,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
                   <div className="space-y-1">
                     <p className="text-xs font-bold text-white">HydroFlood PWA</p>
                     <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Bu uygulama çevrimdışı çalışma ve yüksek performans için Progressive Web App teknolojisini kullanır. Yeni bir güncelleme olduğunda sistem sizi otomatik olarak uyaracaktır.
+                      Bu uygulama çevrimdışı çalışma, hızlı harita ve veri önbellekleme yeteneklerine sahip Progressive Web App teknolojisini kullanır.
                     </p>
                   </div>
                 </div>
