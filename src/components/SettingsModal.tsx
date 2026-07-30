@@ -18,8 +18,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
   const [isChecking, setIsChecking] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
+  const [isInIframe, setIsInIframe] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
+    // Check if running inside iframe
+    if (typeof window !== 'undefined' && window.self !== window.top) {
+      setIsInIframe(true);
+    }
+
+    // Check iOS
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    if (/iphone|ipad|ipod/.test(userAgent)) {
+      setIsIOS(true);
+    }
+
     // Check if already in standalone mode
     if (window.matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone) {
       setIsInstalled(true);
@@ -45,7 +59,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
   }, []);
 
   const handleInstallClick = async () => {
-    if (!installPrompt) return;
+    if (!installPrompt) {
+      if (isInIframe) {
+        window.open(window.location.href, '_blank');
+        return;
+      }
+      setShowGuide(!showGuide);
+      return;
+    }
     await installPrompt.prompt();
     const { outcome } = await installPrompt.userChoice;
     if (outcome === 'accepted') {
@@ -127,35 +148,69 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, needRefr
                   Uygulama Yükleme (PWA)
                 </h4>
                 
-                <div className="bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center justify-between">
-                  <div className="space-y-1">
-                    <p className="text-sm font-bold text-white">Cihaza Yükle</p>
-                    <p className="text-xs text-slate-400">
-                      {isInstalled 
-                        ? 'Uygulama cihazınıza başarıyla yüklendi.' 
-                        : installPrompt 
-                        ? 'Uygulamayı masaüstüne veya mobil cihazınıza yükleyin.' 
-                        : 'Web tarayıcınızda çalışıyor.'}
-                    </p>
+                <div className="bg-white/5 border border-white/10 p-5 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="text-sm font-bold text-white">Cihaza Yükle</p>
+                      <p className="text-xs text-slate-400">
+                        {isInstalled 
+                          ? 'Uygulama cihazınıza masaüstü/mobil uygulama olarak yüklendi.' 
+                          : isInIframe
+                          ? 'Önizleme penceresinde (iframe) tarayıcı yükleme isteğini engeller.'
+                          : 'Uygulamayı cihazınıza yükleyerek çevrimdışı erişebilirsiniz.'}
+                      </p>
+                    </div>
+
+                    {isInstalled ? (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs font-bold shrink-0">
+                        <CheckCircle2 size={14} />
+                        Yüklendi
+                      </div>
+                    ) : installPrompt ? (
+                      <button
+                        onClick={handleInstallClick}
+                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-600/20 shrink-0"
+                      >
+                        <Download size={14} />
+                        Uygulamayı Yükle
+                      </button>
+                    ) : isInIframe ? (
+                      <button
+                        onClick={() => window.open(window.location.href, '_blank')}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-blue-600/20 shrink-0"
+                      >
+                        <Download size={14} />
+                        Yeni Sekmede Aç & Yükle
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setShowGuide(!showGuide)}
+                        className="flex items-center gap-2 px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white border border-white/10 rounded-xl text-xs font-bold transition-all shrink-0"
+                      >
+                        {showGuide ? 'Kapat' : 'Nasıl Yüklenir?'}
+                      </button>
+                    )}
                   </div>
 
-                  {isInstalled ? (
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs font-bold">
-                      <CheckCircle2 size={14} />
-                      Yüklendi
+                  {/* Manual Installation Guide */}
+                  {(showGuide || (!installPrompt && !isInstalled && !isInIframe)) && (
+                    <div className="mt-3 pt-3 border-t border-white/10 text-xs text-slate-300 space-y-2 bg-slate-900/60 p-3.5 rounded-xl">
+                      <p className="font-bold text-blue-400 flex items-center gap-1.5">
+                        <Info size={14} />
+                        Manuel Yükleme Adımları:
+                      </p>
+                      {isIOS ? (
+                        <p className="leading-relaxed text-slate-300">
+                          1. Safari alt menüsündeki <strong className="text-white">Paylaş (Share)</strong> simgesine dokunun.<br />
+                          2. Listeden <strong className="text-white">'Ana Ekrana Ekle'</strong> seçeneğine tıklayın.
+                        </p>
+                      ) : (
+                        <p className="leading-relaxed text-slate-300">
+                          1. Tarayıcı adres çubuğunun sağ tarafındaki <strong className="text-white">'Yükle' (veya +)</strong> simgesine tıklayın.<br />
+                          2. Veya tarayıcı menüsünden (⋮) <strong className="text-white">'Uygulamayı Yükle'</strong> veya <strong className="text-white">'Ana Ekrana Ekle'</strong>yi seçin.
+                        </p>
+                      )}
                     </div>
-                  ) : installPrompt ? (
-                    <button
-                      onClick={handleInstallClick}
-                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-600/20"
-                    >
-                      <Download size={14} />
-                      Yükle
-                    </button>
-                  ) : (
-                    <span className="text-xs text-slate-500 italic">
-                      Yüklenebilir durumda
-                    </span>
                   )}
                 </div>
               </div>
