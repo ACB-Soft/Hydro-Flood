@@ -1,5 +1,4 @@
 import React from 'react';
-import { ExternalLink } from 'lucide-react';
 
 const Footer: React.FC = () => {
   return (
@@ -9,14 +8,6 @@ const Footer: React.FC = () => {
           ACB MAPS - HydroFlood v1.0
         </div>
       </div>
-      
-      <button
-        onClick={() => window.open(window.location.href, '_blank')}
-        className="flex items-center gap-2 text-[11px] font-bold text-slate-500 hover:text-cyan-400 transition-colors bg-white/5 px-4 py-2 rounded-full border border-white/10"
-      >
-        <ExternalLink size={12} />
-        Yeni Sekmede Aç
-      </button>
     </footer>
   );
 };

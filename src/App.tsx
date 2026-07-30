@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, Settings, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, ExternalLink, MapPin, HelpCircle } from 'lucide-react';
+import { Upload, Play, Settings, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, MapPin, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import BathtubWorker from './workers/bathtub-worker?worker';
 import * as GeoTIFF from 'geotiff';
