@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, Settings, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, MapPin, HelpCircle, Bell } from 'lucide-react';
+import { Upload, Play, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, MapPin, HelpCircle, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import BathtubWorker from './workers/bathtub-worker?worker';
@@ -17,7 +17,8 @@ import Analysis from './components/Analysis';
 import About from './components/About';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
-import SettingsModal from './components/SettingsModal';
+import Header from './components/Header';
+import Settings from './components/Settings';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -124,8 +125,7 @@ export default function App() {
     },
   });
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about'>('dashboard');
-  const [showSettings, setShowSettings] = useState(false);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings'>('dashboard');
   const [currentStep, setCurrentStep] = useState(1);
   const [dem, setDem] = useState<DEMData | null>(null);
   const [params, setParams] = useState({
@@ -1348,7 +1348,7 @@ ${floodPolygons.join('\n')}
   const stats = React.useMemo(() => calculateStats(), [waterDepth, coords.cellSize]);
 
   return (
-    <div className="min-h-screen text-slate-100 selection:bg-blue-500/30 selection:text-white">
+    <div className="h-screen h-[100dvh] w-screen overflow-hidden flex flex-col bg-slate-950 text-slate-100 selection:bg-blue-500/30 selection:text-white">
       {/* Stats Modal */}
       <AnimatePresence>
         {showStats && stats && (
@@ -1440,14 +1440,6 @@ ${floodPolygons.join('\n')}
         )}
       </AnimatePresence>
 
-      {/* Settings Modal */}
-      <SettingsModal 
-        isOpen={showSettings} 
-        onClose={() => setShowSettings(false)}
-        needRefresh={needRefresh}
-        onUpdate={() => updateServiceWorker(true)}
-      />
-
       <AnimatePresence>
         {needRefresh && (
           <motion.div
@@ -1480,86 +1472,18 @@ ${floodPolygons.join('\n')}
         )}
       </AnimatePresence>
 
-      <header className="sticky top-0 z-50 glass border-b border-white/10 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-4">
-              {activeTab !== 'dashboard' && (
-                <button 
-                  onClick={() => {
-                    if (activeTab === 'analysis' && currentStep > 1) {
-                      setCurrentStep(prev => prev - 1);
-                    } else {
-                      setActiveTab('dashboard');
-                      setCurrentStep(1);
-                    }
-                  }}
-                  className="p-2 hover:bg-white/10 rounded-xl transition-colors text-blue-400 border border-white/10"
-                >
-                  <ChevronLeft size={20} />
-                </button>
-              )}
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
-                  <Droplets className="text-white" size={22} />
-                </div>
-                <div>
-                  <h1 className="text-3xl font-display font-bold tracking-tight bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
-                    HydroFlood
-                  </h1>
-                </div>
-              </div>
-            </div>
+      {activeTab !== 'dashboard' && (
+        <Header
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          currentStep={currentStep}
+          setCurrentStep={setCurrentStep}
+          isSimulating={isSimulating}
+          progress={progress}
+        />
+      )}
 
-            {isSimulating && (
-              <div className="hidden sm:flex items-center gap-3 bg-blue-500/10 px-4 py-2 rounded-xl border border-blue-500/20 animate-pulse">
-                <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
-                <span className="text-xs font-bold text-blue-400">Simülasyon Çalışıyor... %{Math.round(progress)}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3">
-            {isSimulating && (
-              <div className="sm:hidden flex items-center gap-2 bg-blue-500/10 p-2 rounded-lg border border-blue-500/20">
-                <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
-                <span className="text-[10px] font-bold text-blue-400">%{Math.round(progress)}</span>
-              </div>
-            )}
-            {activeTab === 'dashboard' && (
-              <>
-                <button 
-                  onClick={() => setShowSettings(true)}
-                  className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 hover:bg-blue-500/20 transition-all shadow-sm"
-                  title="Ayarlar"
-                >
-                  <Settings size={22} />
-                </button>
-                <button 
-                  onClick={() => setActiveTab('about')}
-                  className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 hover:bg-blue-500/20 transition-all shadow-sm"
-                  title="Hakkında"
-                >
-                  <HelpCircle size={22} />
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        {activeTab === 'dashboard' && (
-          <motion.div 
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-6 text-center"
-          >
-            <p className="text-lg text-slate-400 max-w-3xl mx-auto leading-relaxed">
-              HydroFlood uygulaması ile hızlı ve profesyonel hidrolojik simülasyonlar üretebilirsiniz.
-            </p>
-          </motion.div>
-        )}
+      <main className="flex-1 overflow-y-auto max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
             <Dashboard 
@@ -1569,6 +1493,9 @@ ${floodPolygons.join('\n')}
                 setCurrentStep(1);
               }}
               onOpenAbout={() => setActiveTab('about')}
+              onOpenSettings={() => setActiveTab('settings')}
+              isSimulating={isSimulating}
+              progress={progress}
             />
           )}
           {activeTab === 'analysis' && (
@@ -1588,16 +1515,14 @@ ${floodPolygons.join('\n')}
               }}
             />
           )}
+          {activeTab === 'settings' && (
+            <Settings
+              needRefresh={needRefresh}
+              onUpdate={() => updateServiceWorker(true)}
+            />
+          )}
           {activeTab === 'about' && (
-            <div className="space-y-6">
-              <About />
-              <button 
-                onClick={() => setActiveTab('dashboard')}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-500/20"
-              >
-                Geri Dön
-              </button>
-            </div>
+            <About />
           )}
         </AnimatePresence>
       </main>

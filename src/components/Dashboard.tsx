@@ -1,21 +1,74 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { BarChart3, Droplets, Layers, Info, ChevronRight } from 'lucide-react';
+import { Droplets, Layers, ChevronRight, Settings, HelpCircle } from 'lucide-react';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
   onOpenAbout: () => void;
+  onOpenSettings: () => void;
+  isSimulating?: boolean;
+  progress?: number;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onSelectMethod, onOpenAbout }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  onSelectMethod,
+  onOpenAbout,
+  onOpenSettings,
+  isSimulating,
+  progress,
+}) => {
   return (
     <motion.div
       key="dashboard"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="max-w-4xl mx-auto space-y-4 py-4"
+      className="max-w-4xl mx-auto space-y-6 py-2"
     >
+      {/* Dashboard Top Branding & Action Bar (Replaces Global Header on Dashboard) */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-white/10">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+            <Droplets className="text-white" size={26} />
+          </div>
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
+              HydroFlood
+            </h1>
+            <p className="text-[11px] text-slate-400 font-semibold tracking-wider uppercase">
+              ACB MAPS GIS Systems
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+          {isSimulating && (
+            <div className="flex items-center gap-2 bg-blue-500/10 px-3 py-2 rounded-xl border border-blue-500/20 text-xs font-bold text-blue-400">
+              <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
+              <span>%{Math.round(progress || 0)}</span>
+            </div>
+          )}
+
+          <button
+            onClick={onOpenSettings}
+            className="px-4 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
+            title="Ayarlar"
+          >
+            <Settings size={18} />
+            <span>Ayarlar</span>
+          </button>
+
+          <button
+            onClick={onOpenAbout}
+            className="px-4 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
+            title="Yardım & Hakkında"
+          >
+            <HelpCircle size={18} />
+            <span>Yardım</span>
+          </button>
+        </div>
+      </div>
+
       <div className="flex flex-col gap-4">
         <motion.button 
           whileHover={{ md: { x: 8, scale: 1.01 } }}
