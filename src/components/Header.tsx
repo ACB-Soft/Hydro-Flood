@@ -2,8 +2,8 @@ import React from 'react';
 import { ChevronLeft } from 'lucide-react';
 
 interface HeaderProps {
-  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'how-it-works';
-  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'how-it-works') => void;
+  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-viewer' | 'dgn-converter';
+  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-viewer' | 'dgn-converter') => void;
   currentStep: number;
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   isSimulating: boolean;
@@ -31,10 +31,12 @@ const Header: React.FC<HeaderProps> = ({
     switch (activeTab) {
       case 'settings':
         return 'Ayarlar';
-      case 'how-it-works':
-        return 'Nasıl Çalışır?';
       case 'about':
         return 'Yardım & Hakkında';
+      case 'dgn-viewer':
+        return 'DGN Dosya Görüntüleyici';
+      case 'dgn-converter':
+        return 'DGN -> DEM Dönüştürücü';
       case 'analysis':
         return 'Taşkın Simülasyon Analizi';
       default:

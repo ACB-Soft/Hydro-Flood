@@ -1,12 +1,13 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Droplets, Layers, ChevronRight, Settings, HelpCircle, BookOpen } from 'lucide-react';
+import { Droplets, Layers, ChevronRight, Settings, HelpCircle, Eye, FileCode } from 'lucide-react';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
   onOpenAbout: () => void;
-  onOpenHowItWorks: () => void;
   onOpenSettings: () => void;
+  onOpenDGNViewer: () => void;
+  onOpenDGNConverter: () => void;
   isSimulating?: boolean;
   progress?: number;
 }
@@ -14,8 +15,9 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({
   onSelectMethod,
   onOpenAbout,
-  onOpenHowItWorks,
   onOpenSettings,
+  onOpenDGNViewer,
+  onOpenDGNConverter,
   isSimulating,
   progress,
 }) => {
@@ -61,15 +63,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           </button>
 
           <button
-            onClick={onOpenHowItWorks}
-            className="px-3.5 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
-            title="Nasıl Çalışır?"
-          >
-            <BookOpen size={18} />
-            <span>Nasıl Çalışır?</span>
-          </button>
-
-          <button
             onClick={onOpenAbout}
             className="px-3.5 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
             title="Yardım & Hakkında"
@@ -80,12 +73,15 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      <div className="flex flex-col gap-4">
+      {/* Main Feature Cards */}
+      <div className="space-y-4">
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Simülasyon Modülleri</h2>
+        
         <motion.button 
           whileHover={{ md: { x: 8, scale: 1.01 } }}
           whileTap={{ scale: 0.99 }}
           onClick={() => onSelectMethod('bathtub')}
-          className="group relative glass rounded-2xl md:rounded-[2.5rem] p-6 md:p-10 text-left overflow-hidden border border-white/20 hover:border-cyan-500/40 transition-all duration-300 shadow-2xl w-full"
+          className="group relative glass rounded-2xl md:rounded-[2.5rem] p-6 md:p-8 text-left overflow-hidden border border-white/20 hover:border-cyan-500/40 transition-all duration-300 shadow-2xl w-full"
         >
           <div className="absolute top-0 right-0 w-64 h-64 bg-cyan-600/10 blur-[100px] -mr-32 -mt-32 group-hover:bg-cyan-600/25 transition-all duration-700" />
           
@@ -109,6 +105,51 @@ const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
         </motion.button>
+
+        {/* DGN CAD & Map Tools Section */}
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider pt-4">DGN Harita & CAD Araçları</h2>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            onClick={onOpenDGNViewer}
+            className="group glass rounded-2xl p-5 text-left border border-white/10 hover:border-cyan-500/30 transition-all shadow-lg flex items-start gap-4"
+          >
+            <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl text-cyan-400 group-hover:bg-cyan-500/20 transition-colors">
+              <Eye size={24} />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-white text-base group-hover:text-cyan-400 transition-colors flex items-center gap-1.5">
+                DGN Dosya Görüntüleyici
+                <ChevronRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                MicroStation (.dgn) formatındaki CAD haritalarınızı doğrudan görüntüleyin ve katmanlarını inceleyin.
+              </p>
+            </div>
+          </motion.button>
+
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            onClick={onOpenDGNConverter}
+            className="group glass rounded-2xl p-5 text-left border border-white/10 hover:border-indigo-500/30 transition-all shadow-lg flex items-start gap-4"
+          >
+            <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400 group-hover:bg-indigo-500/20 transition-colors">
+              <FileCode size={24} />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-white text-base group-hover:text-indigo-400 transition-colors flex items-center gap-1.5">
+                DGN → DEM Dönüştürücü
+                <ChevronRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                DGN haritalarındaki eş yükseklik eğrileri ve kot noktalarından Sayısal Yükseklik Modeli (DEM) üretin.
+              </p>
+            </div>
+          </motion.button>
+        </div>
       </div>
     </motion.div>
   );
