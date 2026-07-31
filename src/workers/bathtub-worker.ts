@@ -39,40 +39,47 @@ self.onmessage = function(e) {
     // Calculate water depth for current cell
     bathtubDepth[idx] = Math.max(0, targetElevation - cellElev);
     
-    // Check 4 neighbors
-    const neighbors = [
-      { nx: x + 1, ny: y },
-      { nx: x - 1, ny: y },
-      { nx: x, ny: y + 1 },
-      { nx: x, ny: y - 1 }
-    ];
-    
-    for (const { nx, ny } of neighbors) {
-      if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-        const nIdx = ny * width + nx;
+  // 4 neighbors
+  const neighbors = [
+    { nx: x + 1, ny: y },
+    { nx: x - 1, ny: y },
+    { nx: x, ny: y + 1 },
+    { nx: x, ny: y - 1 }
+  ];
+  
+  for (const { nx, ny } of neighbors) {
+    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+      const nIdx = ny * width + nx;
 
-        // Strict boundary validation:
-        // 1. Must not be visited
-        // 2. Must be a valid DEM cell (not NoData, NaN, or <= -9000)
-        // 3. Must be within areaMask if areaMask is provided
-        // 4. Terrain elevation must be <= targetElevation
-        const nElev = dem[nIdx];
-        const isValidCell = !isNaN(nElev) && nElev > -9000;
-        const isAllowedByMask = !areaMask || areaMask[nIdx] !== 0;
+      // Strict boundary validation:
+      // 1. Must not be visited
+      // 2. Must be a valid DEM cell (not NoData, NaN, or <= -9000)
+      // 3. Terrain elevation must be <= targetElevation
+      const nElev = dem[nIdx];
+      const isValidCell = !isNaN(nElev) && nElev > -9000;
 
-        if (!visited[nIdx] && isValidCell && isAllowedByMask && nElev <= targetElevation) {
-          visited[nIdx] = 1;
-          queue.push(nIdx);
-        }
+      if (!visited[nIdx] && isValidCell && nElev <= targetElevation) {
+        visited[nIdx] = 1;
+        queue.push(nIdx);
       }
-    }
-    
-    // Periodic progress for very large areas
-    if (head % 10000 === 0) {
-      self.postMessage({ type: 'progress', step: head, total: width * height });
     }
   }
   
-  self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
+  // Periodic progress for very large areas
+  if (head % 10000 === 0) {
+    self.postMessage({ type: 'progress', step: head, total: width * height });
+  }
+}
+
+// If areaMask is provided, clip bathtubDepth to the study area mask
+if (areaMask && areaMask.length === bathtubDepth.length) {
+  for (let i = 0; i < bathtubDepth.length; i++) {
+    if (areaMask[i] === 0) {
+      bathtubDepth[i] = 0;
+    }
+  }
+}
+
+self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
 };
 

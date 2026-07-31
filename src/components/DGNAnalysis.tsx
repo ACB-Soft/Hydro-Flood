@@ -210,7 +210,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     if (!uploadedFile) return;
 
     setIsLoadingFile(true);
-    setUploadMessage(`${uploadedFile.name} GDAL.js OGR motoru ile ayrıştırılıyor...`);
+    setUploadMessage(`${uploadedFile.name} MicroStation DGN vektör ayrıştırıcı ile işleniyor...`);
 
     try {
       const parsedResult = await parseDGNFile(uploadedFile, crs);
@@ -239,7 +239,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       }
 
       setUploadMessage(
-        `DGN Başarıyla Yüklendi! ${parsedResult.layers.length} Katman ve ${parsedResult.elements.length} Eleman GDAL.js / Leaflet Vektör Olarak İşlendi.`
+        `DGN Başarıyla Yüklendi! ${parsedResult.layers.length} Katman ve ${parsedResult.elements.length} Vektör Elemanı Ayrıştırıldı.`
       );
     } catch (error) {
       console.error('DGN Parsing Error:', error);
@@ -381,18 +381,21 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       // Grid lines centered around CAD bounds
       if (showGrid) {
         ctx.strokeStyle = canvasBg === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(56,189,248,0.15)';
-        ctx.lineWidth = 1 / zoom;
-        const gridSize = Math.max(20, Math.round(spanX / 10));
-        for (let x = -spanX * 2; x <= spanX * 2; x += gridSize) {
+        ctx.lineWidth = 1 / Math.max(0.01, zoom);
+        const safeSpanX = Math.max(10, isFinite(spanX) && spanX > 0 ? spanX : 100);
+        const safeSpanY = Math.max(10, isFinite(spanY) && spanY > 0 ? spanY : 100);
+        const gridSize = Math.max(20, Math.round(safeSpanX / 10)) || 50;
+
+        for (let x = -safeSpanX * 2; x <= safeSpanX * 2; x += gridSize) {
           ctx.beginPath();
-          ctx.moveTo(x * fitScale, -spanY * 2 * fitScale);
-          ctx.lineTo(x * fitScale, spanY * 2 * fitScale);
+          ctx.moveTo(x * fitScale, -safeSpanY * 2 * fitScale);
+          ctx.lineTo(x * fitScale, safeSpanY * 2 * fitScale);
           ctx.stroke();
         }
-        for (let y = -spanY * 2; y <= spanY * 2; y += gridSize) {
+        for (let y = -safeSpanY * 2; y <= safeSpanY * 2; y += gridSize) {
           ctx.beginPath();
-          ctx.moveTo(-spanX * 2 * fitScale, y * fitScale);
-          ctx.lineTo(spanX * 2 * fitScale, y * fitScale);
+          ctx.moveTo(-safeSpanX * 2 * fitScale, y * fitScale);
+          ctx.lineTo(safeSpanX * 2 * fitScale, y * fitScale);
           ctx.stroke();
         }
       }

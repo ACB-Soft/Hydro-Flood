@@ -472,16 +472,26 @@ export default function App() {
   useEffect(() => {
     if (areaKml && dem) {
       try {
-        const gridPolygon = areaKml.coords.map(([lat, lon]: [number, number]) => {
+        const gridPolygon: [number, number][] = [];
+        for (const [lat, lon] of areaKml.coords) {
+          if (isNaN(lat) || isNaN(lon)) continue;
           const projected = proj4('EPSG:4326', selectedCRS.def, [lon, lat]);
+          if (!projected || isNaN(projected[0]) || isNaN(projected[1])) continue;
           const x = (projected[0] - dem.xll) / dem.cellSize;
           const y = dem.height - (projected[1] - dem.yll) / dem.cellSize;
-          return [x, y] as [number, number];
-        });
-        const mask = computeScanlineAreaMask(dem.width, dem.height, gridPolygon);
-        setAreaMask(mask);
+          if (!isNaN(x) && !isNaN(y)) {
+            gridPolygon.push([x, y]);
+          }
+        }
+        if (gridPolygon.length >= 3) {
+          const mask = computeScanlineAreaMask(dem.width, dem.height, gridPolygon);
+          setAreaMask(mask);
+        } else {
+          setAreaMask(null);
+        }
       } catch (e) {
         console.error("Failed to compute scanline mask:", e);
+        setAreaMask(null);
       }
     } else {
       setAreaMask(null);
@@ -1515,7 +1525,7 @@ ${floodPolygons.join('\n')}
         />
       )}
 
-      <main className="flex-1 overflow-y-auto max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
+      <main className="flex-1 overflow-y-auto w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
             <Dashboard 
