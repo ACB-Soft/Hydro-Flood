@@ -8,6 +8,7 @@ interface HeaderProps {
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   isSimulating: boolean;
   progress: number;
+  simMethod?: 'hydraulic' | 'bathtub' | null;
 }
 
 const Header: React.FC<HeaderProps> = ({
@@ -17,10 +18,11 @@ const Header: React.FC<HeaderProps> = ({
   setCurrentStep,
   isSimulating,
   progress,
+  simMethod,
 }) => {
   const handleBack = () => {
-    if (activeTab === 'analysis' && currentStep > 1) {
-      setCurrentStep(prev => prev - 1);
+    if (activeTab === 'analysis' && currentStep === 5) {
+      setCurrentStep(1);
     } else {
       setActiveTab('dashboard');
       setCurrentStep(1);
@@ -38,7 +40,10 @@ const Header: React.FC<HeaderProps> = ({
       case 'dwg-analysis':
         return 'DWG Dosya Analizleri';
       case 'analysis':
-        return 'Taşkın Simülasyon Analizi';
+        if (currentStep === 5) {
+          return 'Statik Simülasyon Sonucu';
+        }
+        return simMethod === 'bathtub' ? 'Statik Taşkın Simülasyonu' : 'Hidrolik Taşkın Simülasyonu';
       default:
         return '';
     }

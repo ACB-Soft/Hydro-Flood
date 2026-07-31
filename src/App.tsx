@@ -1481,6 +1481,7 @@ ${floodPolygons.join('\n')}
           setCurrentStep={setCurrentStep}
           isSimulating={isSimulating}
           progress={progress}
+          simMethod={simMethod}
         />
       )}
 
