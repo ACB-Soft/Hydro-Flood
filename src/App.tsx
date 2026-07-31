@@ -375,13 +375,23 @@ export default function App() {
         for (let i = 0; i < waterDepth.length; i++) {
           const idx = i * 4;
           const isDemValid = !isNaN(dem.data[i]) && dem.data[i] > -9000;
-          const isMaskValid = !areaMask || areaMask[i] !== 0;
-          if (waterDepth[i] > 0.01 && isDemValid && isMaskValid) {
+          if (waterDepth[i] > 0.01 && isDemValid) {
+            const isRiskArea = Boolean(areaMask && areaMask[i] === 1);
             const wVal = Math.min(1, waterDepth[i] / 2);
-            d[idx] = 0;
-            d[idx + 1] = Math.round(100 * (1 - wVal));
-            d[idx + 2] = 255;
-            d[idx + 3] = 180;
+            
+            if (isRiskArea) {
+              // Kırmızı renkli çalışma alanıyla kesişimi olan riskli alan
+              d[idx] = 239; // R
+              d[idx + 1] = Math.round(68 * (1 - wVal)); // G
+              d[idx + 2] = Math.round(68 * (1 - wVal)); // B
+              d[idx + 3] = 210; // Alpha ~82%
+            } else {
+              // Mavi renkli genel taşkın alanı
+              d[idx] = 14; // R
+              d[idx + 1] = Math.round(116 + 80 * (1 - wVal)); // G
+              d[idx + 2] = 244; // B
+              d[idx + 3] = 180; // Alpha ~70%
+            }
           } else {
             d[idx + 3] = 0;
           }
@@ -390,7 +400,7 @@ export default function App() {
         setFloodImage(canvas.toDataURL());
       }
     }
-  }, [waterDepth, dem]);
+  }, [waterDepth, dem, areaMask]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!dem || !canvasRef.current) return;
