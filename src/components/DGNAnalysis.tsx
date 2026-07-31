@@ -1,5 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { MapContainer, TileLayer, GeoJSON, Popup, useMap, LayersControl } from 'react-leaflet';
+import L from 'leaflet';
 import {
   Eye,
   EyeOff,
@@ -31,6 +33,7 @@ import {
   CheckCircle2,
   FileText,
   AlertTriangle,
+  Map as MapIcon,
 } from 'lucide-react';
 import {
   CADLayer,
@@ -38,7 +41,33 @@ import {
   DGNParsedResult,
   parseDGNFile,
   generateSampleDgnData,
+  dgnToGeoJSON,
 } from '../utils/dgnParser';
+
+// Fix Leaflet marker icon issue safely
+if (typeof window !== 'undefined' && L && L.Icon && L.Icon.Default) {
+  try {
+    delete (L.Icon.Default.prototype as any)._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    });
+  } catch (err) {
+    console.warn('Leaflet icon config notice:', err);
+  }
+}
+
+// Helper component to recenter Leaflet map when bounds/center changes
+function MapRecenter({ center }: { center?: [number, number] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (center && center[0] && center[1] && !isNaN(center[0])) {
+      map.setView(center, 15);
+    }
+  }, [center, map]);
+  return null;
+}
 
 interface DGNAnalysisProps {
   dgnData?: DGNParsedResult | null;
@@ -89,6 +118,8 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     maxY: number;
     minZ: number;
     maxZ: number;
+    centerLat?: number;
+    centerLng?: number;
   }>(
     dgnData
       ? dgnData.bounds
@@ -98,6 +129,11 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
   const [isLoadingFile, setIsLoadingFile] = useState<boolean>(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
+  const [geoJSONData, setGeoJSONData] = useState<any>(
+    dgnData?.geoJSON || generateSampleDgnData('EPSG:5254').geoJSON
+  );
+  const [viewerMode, setViewerMode] = useState<'gis_map' | '2d' | '3d'>('gis_map');
+
   // Sync with prop changes
   useEffect(() => {
     if (dgnData) {
@@ -105,6 +141,9 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       setLayers(dgnData.layers);
       setElements(dgnData.elements);
       setBounds(dgnData.bounds);
+      if (dgnData.geoJSON) {
+        setGeoJSONData(dgnData.geoJSON);
+      }
     }
   }, [dgnData]);
 
@@ -171,10 +210,10 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     if (!uploadedFile) return;
 
     setIsLoadingFile(true);
-    setUploadMessage(`${uploadedFile.name} dosyası ayrıştırılıyor...`);
+    setUploadMessage(`${uploadedFile.name} GDAL.js OGR motoru ile ayrıştırılıyor...`);
 
     try {
-      const parsedResult = await parseDGNFile(uploadedFile);
+      const parsedResult = await parseDGNFile(uploadedFile, crs);
 
       setFileInfo({
         name: parsedResult.fileName,
@@ -184,6 +223,11 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       setLayers(parsedResult.layers);
       setElements(parsedResult.elements);
       setBounds(parsedResult.bounds);
+      if (parsedResult.geoJSON) {
+        setGeoJSONData(parsedResult.geoJSON);
+      } else {
+        setGeoJSONData(dgnToGeoJSON(parsedResult, crs));
+      }
 
       setZoom(1);
       setPan({ x: 0, y: 0 });
@@ -195,7 +239,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       }
 
       setUploadMessage(
-        `DGN Başarıyla Yüklendi! ${parsedResult.layers.length} Katman ve ${parsedResult.elements.length} Eleman Ayrıştırıldı.`
+        `DGN Başarıyla Yüklendi! ${parsedResult.layers.length} Katman ve ${parsedResult.elements.length} Eleman GDAL.js / Leaflet Vektör Olarak İşlendi.`
       );
     } catch (error) {
       console.error('DGN Parsing Error:', error);
@@ -209,9 +253,9 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
   // Load realistic reference CAD sample
   const handleLoadSample = () => {
     setIsLoadingFile(true);
-    setUploadMessage('Örnek MicroStation DGN harita projesi hazırlanıyor...');
+    setUploadMessage('Örnek MicroStation DGN harita projesi GDAL.js / Leaflet ortamında hazırlanıyor...');
     setTimeout(() => {
-      const sample = generateSampleDgnData();
+      const sample = generateSampleDgnData(crs);
       setFileInfo({
         name: sample.fileName,
         size: sample.fileSize,
@@ -220,6 +264,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       setLayers(sample.layers);
       setElements(sample.elements);
       setBounds(sample.bounds);
+      setGeoJSONData(sample.geoJSON || dgnToGeoJSON(sample, crs));
 
       setZoom(1);
       setPan({ x: 0, y: 0 });
@@ -231,7 +276,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       }
 
       setIsLoadingFile(false);
-      setUploadMessage('Örnek DGN projesi yüklendi! (6 Katman, İzohipsler, Kot Noktaları, Dere ve Yapılar)');
+      setUploadMessage('Örnek DGN projesi yüklendi! (Leaflet Vektör Katmanları, İzohipsler, Kot Noktaları, Su Yolları)');
       setTimeout(() => setUploadMessage(null), 4000);
     }, 250);
   };
@@ -246,6 +291,61 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
   // Toggle all layers
   const setAllLayers = (visible: boolean) => {
     setLayers((prev) => prev.map((l) => ({ ...l, visible })));
+  };
+
+  // Computed GeoJSON filtering & map styling
+  const filteredGeoJSON = useMemo(() => {
+    if (!geoJSONData || !geoJSONData.features) return null;
+    const visibleLevels = new Set(layers.filter((l) => l.visible).map((l) => l.level));
+    return {
+      type: 'FeatureCollection' as const,
+      features: geoJSONData.features.filter((f: any) => visibleLevels.has(f.properties?.level)),
+    };
+  }, [geoJSONData, layers]);
+
+  const mapCenter: [number, number] = useMemo(() => {
+    if (bounds.centerLat && bounds.centerLng && !isNaN(bounds.centerLat) && !isNaN(bounds.centerLng)) {
+      return [bounds.centerLat, bounds.centerLng];
+    }
+    return [39.9208, 32.8541];
+  }, [bounds]);
+
+  const getFeatureStyle = (feature: any) => {
+    const layerType = feature?.properties?.layerType;
+    const color = feature?.properties?.color || '#06b6d4';
+    let weight = 2;
+    let dashArray = '';
+
+    if (layerType === 'contour_major') weight = 2.5;
+    else if (layerType === 'contour_minor') weight = 1.0;
+    else if (layerType === 'water') weight = 3.5;
+    else if (layerType === 'boundary') { weight = 2.0; dashArray = '6, 4'; }
+    else if (layerType === 'buildings') weight = 2.0;
+
+    return {
+      color,
+      weight,
+      dashArray,
+      fillColor: color,
+      fillOpacity: layerType === 'buildings' ? 0.35 : 0.1,
+    };
+  };
+
+  const onEachFeature = (feature: any, layer: any) => {
+    if (feature.properties) {
+      const p = feature.properties;
+      layer.bindPopup(`
+        <div style="font-family: system-ui, sans-serif; padding: 4px; color: #1e293b;">
+          <div style="font-weight: bold; font-size: 13px; color: #0284c7; margin-bottom: 4px;">
+            ${p.layerName || 'CAD Objesi'}
+          </div>
+          <div style="font-size: 11px; margin-bottom: 2px;"><b>Katman Seviyesi:</b> Level ${p.level || 1}</div>
+          <div style="font-size: 11px; margin-bottom: 2px;"><b>Kategori:</b> ${p.layerType || 'Vektör'}</div>
+          <div style="font-size: 11px; margin-bottom: 2px;"><b>Yükseklik (Z):</b> +${p.elevation?.toFixed(1) || 0} m</div>
+          ${p.text ? `<div style="font-size: 11px; color: #475569; margin-top: 4px;"><b>Yazı/Etiket:</b> ${p.text}</div>` : ''}
+        </div>
+      `);
+    }
   };
 
   // --- RENDERING VIEWER CANVAS ---
@@ -894,97 +994,123 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
             {/* Interactive Canvas Map Viewer */}
             <div className="lg:col-span-3 space-y-3">
               <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-4 space-y-3 shadow-md">
-                {/* Canvas Toolbar */}
+                {/* Canvas & Map Toolbar */}
                 <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950/80 rounded-2xl p-2.5 border border-slate-800">
                   <div className="flex items-center gap-2 flex-wrap">
-                    {/* 2D / 3D View Toggles */}
+                    {/* View Mode Switcher */}
                     <div className="bg-slate-900 p-0.5 rounded-xl border border-slate-800 flex items-center">
                       <button
-                        onClick={() => setViewMode('2d')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                          viewMode === '2d'
+                        onClick={() => setViewerMode('gis_map')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                          viewerMode === 'gis_map'
                             ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-inner'
                             : 'text-slate-400 hover:text-slate-200'
                         }`}
                       >
-                        <span>2D Plan</span>
+                        <MapIcon size={14} />
+                        <span>Leaflet Harita (GDAL)</span>
                       </button>
                       <button
                         onClick={() => {
+                          setViewerMode('2d');
+                          setViewMode('2d');
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
+                          viewerMode === '2d'
+                            ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-inner'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>2D CAD Tuvali</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setViewerMode('3d');
                           setViewMode('3d');
                           setRotX(0.55);
                           setRotY(0.65);
                         }}
                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                          viewMode === '3d'
+                          viewerMode === '3d'
                             ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-inner'
                             : 'text-slate-400 hover:text-slate-200'
                         }`}
                       >
-                        <Box size={14} className={viewMode === '3d' ? 'animate-pulse' : ''} />
+                        <Box size={14} className={viewerMode === '3d' ? 'animate-pulse' : ''} />
                         <span>3D İzometrik</span>
                       </button>
                     </div>
 
-                    <button
-                      onClick={() => setZoom((z) => Math.min(z + 0.25, 4))}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
-                      title="Yakınlaş"
-                    >
-                      <ZoomIn size={16} />
-                    </button>
-                    <button
-                      onClick={() => setZoom((z) => Math.max(z - 0.25, 0.5))}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
-                      title="Uzaklaş"
-                    >
-                      <ZoomOut size={16} />
-                    </button>
-                    <button
-                      onClick={() => {
-                        setZoom(1);
-                        setPan({ x: 0, y: 0 });
-                      }}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors flex items-center gap-1 text-xs font-semibold px-2.5"
-                    >
-                      <Maximize2 size={14} />
-                      <span>Sığdır</span>
-                    </button>
+                    {viewerMode !== 'gis_map' && (
+                      <>
+                        <button
+                          onClick={() => setZoom((z) => Math.min(z + 0.25, 4))}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
+                          title="Yakınlaş"
+                        >
+                          <ZoomIn size={16} />
+                        </button>
+                        <button
+                          onClick={() => setZoom((z) => Math.max(z - 0.25, 0.5))}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
+                          title="Uzaklaş"
+                        >
+                          <ZoomOut size={16} />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setZoom(1);
+                            setPan({ x: 0, y: 0 });
+                          }}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors flex items-center gap-1 text-xs font-semibold px-2.5"
+                        >
+                          <Maximize2 size={14} />
+                          <span>Sığdır</span>
+                        </button>
+                      </>
+                    )}
                   </div>
 
-                  {/* Display options */}
-                  <div className="flex items-center gap-3 text-xs flex-wrap">
-                    <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={showGrid}
-                        onChange={(e) => setShowGrid(e.target.checked)}
-                        className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0"
-                      />
-                      <span>Grid Kılavuz</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={showLabels}
-                        onChange={(e) => setShowLabels(e.target.checked)}
-                        className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0"
-                      />
-                      <span>Kot Yazıları</span>
-                    </label>
-                    <button
-                      onClick={() => setCanvasBg((bg) => (bg === 'dark' ? 'blueprint' : 'dark'))}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold"
-                    >
-                      {canvasBg === 'dark' ? 'Koyu Plan' : 'Mavi Plan'}
-                    </button>
-                  </div>
+                  {/* Display options for canvas */}
+                  {viewerMode !== 'gis_map' ? (
+                    <div className="flex items-center gap-3 text-xs flex-wrap">
+                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showGrid}
+                          onChange={(e) => setShowGrid(e.target.checked)}
+                          className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0"
+                        />
+                        <span>Grid Kılavuz</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showLabels}
+                          onChange={(e) => setShowLabels(e.target.checked)}
+                          className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0"
+                        />
+                        <span>Kot Yazıları</span>
+                      </label>
+                      <button
+                        onClick={() => setCanvasBg((bg) => (bg === 'dark' ? 'blueprint' : 'dark'))}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold"
+                      >
+                        {canvasBg === 'dark' ? 'Koyu Plan' : 'Mavi Plan'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-cyan-300 font-mono flex items-center gap-1.5 bg-cyan-950/60 px-2.5 py-1 rounded-lg border border-cyan-500/20">
+                      <Globe size={13} className="text-cyan-400 animate-spin [animation-duration:12s]" />
+                      <span>GDAL.js + Leaflet Vektör CBS Motoru</span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Canvas Box */}
-                <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 cursor-grab active:cursor-grabbing min-h-[480px]">
+                {/* Viewer Box */}
+                <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 min-h-[480px]">
                   {layers.length === 0 ? (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-slate-400 space-y-3 bg-slate-950/95">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-slate-400 space-y-3 bg-slate-950/95 z-20">
                       <Layers size={40} className="text-slate-600" />
                       <div>
                         <p className="text-sm font-bold text-slate-200">Hiç Katman Veya Eleman Bulunmuyor</p>
@@ -993,14 +1119,39 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
                         </p>
                       </div>
                     </div>
+                  ) : viewerMode === 'gis_map' ? (
+                    /* LEAFLET GIS MAP VIEW */
+                    <div className="w-full h-[480px] relative z-0">
+                      <MapContainer
+                        center={mapCenter}
+                        zoom={15}
+                        scrollWheelZoom={true}
+                        className="w-full h-[480px] rounded-2xl z-0"
+                      >
+                        <TileLayer
+                          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        />
+                        <MapRecenter center={mapCenter} />
+                        {filteredGeoJSON && (
+                          <GeoJSON
+                            key={JSON.stringify(filteredGeoJSON)}
+                            data={filteredGeoJSON}
+                            style={getFeatureStyle}
+                            onEachFeature={onEachFeature}
+                          />
+                        )}
+                      </MapContainer>
+                    </div>
                   ) : (
+                    /* 2D / 3D CANVAS VIEW */
                     <canvas
                       ref={viewerCanvasRef}
                       onMouseDown={handleMouseDown}
                       onMouseMove={handleMouseMove}
                       onMouseUp={handleMouseUp}
                       onMouseLeave={handleMouseUp}
-                      className="w-full h-[480px] block"
+                      className="w-full h-[480px] block cursor-grab active:cursor-grabbing"
                     />
                   )}
 

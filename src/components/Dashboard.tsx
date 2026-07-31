@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Droplets, Layers, ChevronRight, Settings, HelpCircle, Eye, FileCode, Globe, Download, Laptop, MonitorCheck } from 'lucide-react';
+import { Droplets, Layers, ChevronRight, Settings, HelpCircle, FileCode, Globe } from 'lucide-react';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
@@ -11,8 +11,6 @@ interface DashboardProps {
   onOpenDWGAnalysis: () => void;
   isSimulating?: boolean;
   progress?: number;
-  isInstalled?: boolean;
-  onInstallPWA?: () => void;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
@@ -24,8 +22,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   onOpenDWGAnalysis,
   isSimulating,
   progress,
-  isInstalled,
-  onInstallPWA,
 }) => {
   return (
     <motion.div
@@ -59,22 +55,6 @@ const Dashboard: React.FC<DashboardProps> = ({
             </div>
           )}
 
-          {onInstallPWA && (
-            <button
-              onClick={onInstallPWA}
-              disabled={isInstalled}
-              className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all shadow-sm ${
-                isInstalled
-                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 cursor-default'
-                  : 'bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/30'
-              }`}
-              title={isInstalled ? 'Masaüstüne Yüklendi' : 'Bilgisayara Yükle (PWA)'}
-            >
-              {isInstalled ? <MonitorCheck size={18} /> : <Download size={18} />}
-              <span>{isInstalled ? 'PWA Yüklü' : 'PWA Yükle'}</span>
-            </button>
-          )}
-
           <button
             onClick={onOpenSettings}
             className="px-3.5 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm"
@@ -100,7 +80,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Simülasyon Modülleri</h2>
         
         <motion.button 
-          whileHover={{ md: { x: 8, scale: 1.01 } }}
+          whileHover={{ x: 4, scale: 1.01 }}
           whileTap={{ scale: 0.99 }}
           onClick={() => onSelectMethod('bathtub')}
           className="group relative glass rounded-2xl md:rounded-[2.5rem] p-6 md:p-8 text-left overflow-hidden border border-white/20 hover:border-cyan-500/40 transition-all duration-300 shadow-2xl w-full"
@@ -133,7 +113,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         
         <div className="space-y-4">
           <motion.button
-            whileHover={{ md: { x: 8, scale: 1.01 } }}
+            whileHover={{ x: 4, scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
             onClick={onOpenDGNViewer}
             className="group relative glass rounded-2xl md:rounded-[2rem] p-6 text-left overflow-hidden border border-white/10 hover:border-cyan-500/30 transition-all duration-300 shadow-lg w-full flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6"
@@ -157,7 +137,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           </motion.button>
 
           <motion.button
-            whileHover={{ md: { x: 8, scale: 1.01 } }}
+            whileHover={{ x: 4, scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
             onClick={onOpenDWGAnalysis}
             className="group relative glass rounded-2xl md:rounded-[2rem] p-6 text-left overflow-hidden border border-white/10 hover:border-amber-500/30 transition-all duration-300 shadow-lg w-full flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6"

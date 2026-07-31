@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Play, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, MapPin, HelpCircle, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useRegisterSW } from 'virtual:pwa-register/react';
 import BathtubWorker from './workers/bathtub-worker?worker';
 import * as GeoTIFF from 'geotiff';
 import proj4 from 'proj4';
@@ -116,72 +115,6 @@ const MANNING_PRESETS = [
 ];
 
 export default function App() {
-  const {
-    needRefresh: [needRefresh, setNeedRefresh],
-    updateServiceWorker,
-  } = useRegisterSW({
-    onRegistered(r) {
-      if (r) {
-        setInterval(() => {
-          r.update();
-        }, 60 * 60 * 1000);
-      }
-    },
-  });
-
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [isInstalled, setIsInstalled] = useState<boolean>(false);
-
-  useEffect(() => {
-    // Detect standalone mode
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
-    if (isStandalone) {
-      setIsInstalled(true);
-    }
-
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-
-    const handleAppInstalled = () => {
-      setIsInstalled(true);
-      setDeferredPrompt(null);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    window.addEventListener('appinstalled', handleAppInstalled);
-
-    // Register Service Worker fallback
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js', { scope: './' })
-        .then((reg) => console.log('PWA Service Worker registered:', reg.scope))
-        .catch((err) => console.warn('PWA SW register info:', err));
-    }
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-    };
-  }, []);
-
-  const handleInstallPWA = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const choice = await deferredPrompt.userChoice;
-      if (choice && choice.outcome === 'accepted') {
-        setIsInstalled(true);
-        setDeferredPrompt(null);
-      }
-    } else {
-      alert(
-        "Masaüstü Tarayıcınızda HydroFlood Uygulamasını Yüklemek İçin:\n\n" +
-        "1. Chrome veya Edge adres çubuğunun sağındaki 'Uygulamayı Yükle' (monitör/indirme) simgesine tıklayın.\n" +
-        "2. VEYA tarayıcı menüsünden (⋮) 'Kaydet ve Paylaş' -> 'HydroFlood Uygulamasını Yükle' seçeneğini tıklayın."
-      );
-    }
-  };
-
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis' | 'dwg-analysis'>('dashboard');
   const [dgnSubTab, setDgnSubTab] = useState<'viewer' | 'converter'>('viewer');
   const [currentStep, setCurrentStep] = useState(1);
@@ -1540,38 +1473,6 @@ ${floodPolygons.join('\n')}
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {needRefresh && (
-          <motion.div
-            initial={{ y: -100 }}
-            animate={{ y: 0 }}
-            exit={{ y: -100 }}
-            className="fixed top-24 left-1/2 -translate-x-1/2 z-[60] w-full max-w-md px-4"
-          >
-            <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-4 border border-blue-400">
-              <div className="flex items-center gap-3">
-                <Bell className="animate-bounce" size={20} />
-                <p className="text-sm font-bold">Yeni bir güncelleme mevcut!</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => updateServiceWorker(true)}
-                  className="px-4 py-2 bg-white text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-50 transition-colors"
-                >
-                  Güncelle
-                </button>
-                <button 
-                  onClick={() => setNeedRefresh(false)}
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {activeTab !== 'dashboard' && (
         <Header
           activeTab={activeTab}
@@ -1580,8 +1481,6 @@ ${floodPolygons.join('\n')}
           setCurrentStep={setCurrentStep}
           isSimulating={isSimulating}
           progress={progress}
-          isInstalled={isInstalled}
-          onInstallPWA={handleInstallPWA}
         />
       )}
 
@@ -1609,8 +1508,6 @@ ${floodPolygons.join('\n')}
               }}
               isSimulating={isSimulating}
               progress={progress}
-              isInstalled={isInstalled}
-              onInstallPWA={handleInstallPWA}
             />
           )}
           {activeTab === 'analysis' && (
@@ -1631,13 +1528,7 @@ ${floodPolygons.join('\n')}
             />
           )}
           {activeTab === 'settings' && (
-            <Settings
-              needRefresh={needRefresh}
-              onUpdate={() => updateServiceWorker(true)}
-              deferredPrompt={deferredPrompt}
-              isInstalled={isInstalled}
-              onInstallPWA={handleInstallPWA}
-            />
+            <Settings />
           )}
           {activeTab === 'about' && (
             <About />

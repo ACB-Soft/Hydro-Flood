@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, Download, MonitorCheck } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
 
 interface HeaderProps {
   activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis' | 'dwg-analysis';
@@ -8,8 +8,6 @@ interface HeaderProps {
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   isSimulating: boolean;
   progress: number;
-  isInstalled?: boolean;
-  onInstallPWA?: () => void;
 }
 
 const Header: React.FC<HeaderProps> = ({
@@ -19,8 +17,6 @@ const Header: React.FC<HeaderProps> = ({
   setCurrentStep,
   isSimulating,
   progress,
-  isInstalled,
-  onInstallPWA,
 }) => {
   const handleBack = () => {
     if (activeTab === 'analysis' && currentStep > 1) {
@@ -34,7 +30,7 @@ const Header: React.FC<HeaderProps> = ({
   const getPageTitle = () => {
     switch (activeTab) {
       case 'settings':
-        return 'Ayarlar & PWA';
+        return 'Uygulama Ayarları';
       case 'about':
         return 'Yardım & Hakkında';
       case 'dgn-analysis':
@@ -79,22 +75,6 @@ const Header: React.FC<HeaderProps> = ({
               <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
               <span className="text-[10px] font-bold text-blue-400">%{Math.round(progress)}</span>
             </div>
-          )}
-
-          {onInstallPWA && (
-            <button
-              onClick={onInstallPWA}
-              disabled={isInstalled}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                isInstalled
-                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 cursor-default'
-                  : 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20 shadow-sm'
-              }`}
-              title={isInstalled ? 'Uygulama Bilgisayara Yüklendi' : 'Masaüstü PWA Uygulamasını Yükle'}
-            >
-              {isInstalled ? <MonitorCheck size={14} /> : <Download size={14} />}
-              <span className="hidden sm:inline">{isInstalled ? 'PWA Yüklü' : 'PWA Yükle'}</span>
-            </button>
           )}
         </div>
       </div>
