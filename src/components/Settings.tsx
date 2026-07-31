@@ -1,13 +1,22 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { RefreshCw, Smartphone, Settings as SettingsIcon, Info, Bell, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { RefreshCw, Smartphone, Settings as SettingsIcon, Info, Bell, ShieldCheck, CheckCircle2, Download, MonitorCheck, Laptop } from 'lucide-react';
 
 interface SettingsProps {
   needRefresh: boolean;
   onUpdate: () => void;
+  deferredPrompt?: any;
+  isInstalled?: boolean;
+  onInstallPWA?: () => void;
 }
 
-const Settings: React.FC<SettingsProps> = ({ needRefresh, onUpdate }) => {
+const Settings: React.FC<SettingsProps> = ({
+  needRefresh,
+  onUpdate,
+  deferredPrompt,
+  isInstalled,
+  onInstallPWA,
+}) => {
   const [checking, setChecking] = useState(false);
   const [checkMessage, setCheckMessage] = useState<string | null>(null);
 
@@ -21,7 +30,9 @@ const Settings: React.FC<SettingsProps> = ({ needRefresh, onUpdate }) => {
           await registration.update();
           setCheckMessage('Güncelleme denetimi tamamlandı. Yeni sürüm mevcutsa sistem otomatik bildirecektir.');
         } else {
-          setCheckMessage('Servis çalışanı (Service Worker) aktif değil.');
+          // Register SW if not registered
+          await navigator.serviceWorker.register('./sw.js', { scope: './' });
+          setCheckMessage('Servis çalışanı (Service Worker) başarıyla kaydedildi.');
         }
       } else {
         setCheckMessage('Tarayıcınız PWA Servis Çalışanı teknolojisini desteklemiyor.');
@@ -50,14 +61,76 @@ const Settings: React.FC<SettingsProps> = ({ needRefresh, onUpdate }) => {
           </div>
           <div>
             <h2 className="text-2xl sm:text-3xl font-display font-bold text-white">
-              Uygulama Ayarları
+              Uygulama Ayarları & PWA Kurulumu
             </h2>
             <p className="text-slate-400 text-sm">
-              PWA tercihleriniz, güncellemeler ve sistem durumu
+              Masaüstü PWA yükleme, güncellemeler ve sistem çalışma tercihleri
             </p>
           </div>
         </div>
       </div>
+
+      {/* PWA Desktop Installation Banner Card */}
+      <section className="glass rounded-3xl p-6 sm:p-8 border border-cyan-500/30 space-y-6 relative overflow-hidden bg-gradient-to-r from-cyan-950/40 via-slate-900/60 to-blue-950/40">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+          <div className="flex items-start gap-4">
+            <div className="p-3 bg-cyan-500/20 rounded-2xl text-cyan-400 border border-cyan-500/30 shrink-0 mt-1">
+              <Laptop size={28} />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-white text-lg sm:text-xl">
+                  HydroFlood Masaüstü Uygulaması (PWA)
+                </h3>
+                {isInstalled ? (
+                  <span className="px-2.5 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-bold flex items-center gap-1">
+                    <MonitorCheck size={12} /> Yüklü
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-full text-[10px] font-bold">
+                    Kuruluma Hazır
+                  </span>
+                )}
+              </div>
+              <p className="text-slate-300 text-xs sm:text-sm leading-relaxed">
+                HydroFlood'u bilgisayarınıza bağımsız bir masaüstü yazılımı olarak yükleyin. Tarayıcı çubuğu olmadan tam ekran çalışır, çevrimdışı önbellekleme desteği sunar.
+              </p>
+            </div>
+          </div>
+
+          <div className="shrink-0 w-full sm:w-auto">
+            <button
+              onClick={onInstallPWA}
+              disabled={isInstalled}
+              className={`w-full sm:w-auto px-6 py-3.5 rounded-2xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2.5 transition-all shadow-lg ${
+                isInstalled
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 cursor-default'
+                  : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/25 hover:scale-[1.02]'
+              }`}
+            >
+              <Download size={18} />
+              <span>{isInstalled ? 'Masaüstüne Yüklendi' : 'Bilgisayara Yükle (PWA)'}</span>
+            </button>
+          </div>
+        </div>
+
+        {!isInstalled && (
+          <div className="pt-4 border-t border-white/10 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-300">
+            <div className="bg-white/5 p-3 rounded-xl border border-white/5 space-y-1">
+              <p className="font-bold text-cyan-400">1. Chrome / Edge</p>
+              <p className="text-slate-400">Adres çubuğundaki (URL) sağ köşedeki 'Uygulamayı Yükle' simgesine tıklayın.</p>
+            </div>
+            <div className="bg-white/5 p-3 rounded-xl border border-white/5 space-y-1">
+              <p className="font-bold text-cyan-400">2. Tarayıcı Menüsü</p>
+              <p className="text-slate-400">Sağ üst 3 noktadan 'Kaydet ve Paylaş' → 'HydroFlood Yükle' adımlarını izleyin.</p>
+            </div>
+            <div className="bg-white/5 p-3 rounded-xl border border-white/5 space-y-1">
+              <p className="font-bold text-cyan-400">3. Tam Ekran Performans</p>
+              <p className="text-slate-400">Başlat menüsü veya masaüstü kısayolundan tek tıkla başlatın.</p>
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* Main Settings Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -176,3 +249,4 @@ const Settings: React.FC<SettingsProps> = ({ needRefresh, onUpdate }) => {
 };
 
 export default Settings;
+

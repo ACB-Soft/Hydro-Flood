@@ -14,14 +14,23 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'pwa-icon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
+        injectRegister: 'auto',
+        devOptions: {
+          enabled: true,
+        },
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'pwa-icon.svg', 'pwa-192x192.png', 'pwa-512x512.png', 'manifest.json'],
         manifest: {
-          name: 'HydroFlood',
+          id: './',
+          name: 'HydroFlood - Hidrolojik Taşkın Analizi ve CBS',
           short_name: 'HydroFlood',
-          description: 'Hidrolojik Taşkın Analizi Uygulaması',
-          theme_color: '#0a0a0a',
-          background_color: '#0a0a0a',
+          description: 'Gelişmiş hidrolojik taşkın analizi, DGN/DWG harita görüntüleyici ve coğrafi bilgi sistemi',
+          start_url: './',
+          scope: './',
+          theme_color: '#06b6d4',
+          background_color: '#0f172a',
           display: 'standalone',
+          orientation: 'any',
+          categories: ['utilities', 'productivity', 'geography'],
           icons: [
             {
               src: './pwa-192x192.png',
@@ -42,7 +51,34 @@ export default defineConfig(({ mode }) => {
               purpose: 'any maskable'
             }
           ]
-        }
+        },
+        workbox: {
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,json,woff2}'],
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/.*\.tile\.openstreetmap\.org\/.*$/,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'osm-tiles',
+                expiration: {
+                  maxEntries: 500,
+                  maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/.*\.cartocdn\.com\/.*$/,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'carto-tiles',
+                expiration: {
+                  maxEntries: 500,
+                  maxAgeSeconds: 30 * 24 * 60 * 60,
+                },
+              },
+            },
+          ],
+        },
       })
     ],
     define: {

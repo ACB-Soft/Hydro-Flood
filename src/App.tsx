@@ -129,6 +129,59 @@ export default function App() {
     },
   });
 
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstalled, setIsInstalled] = useState<boolean>(false);
+
+  useEffect(() => {
+    // Detect standalone mode
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
+    if (isStandalone) {
+      setIsInstalled(true);
+    }
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    // Register Service Worker fallback
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js', { scope: './' })
+        .then((reg) => console.log('PWA Service Worker registered:', reg.scope))
+        .catch((err) => console.warn('PWA SW register info:', err));
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallPWA = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice && choice.outcome === 'accepted') {
+        setIsInstalled(true);
+        setDeferredPrompt(null);
+      }
+    } else {
+      alert(
+        "Masaüstü Tarayıcınızda HydroFlood Uygulamasını Yüklemek İçin:\n\n" +
+        "1. Chrome veya Edge adres çubuğunun sağındaki 'Uygulamayı Yükle' (monitör/indirme) simgesine tıklayın.\n" +
+        "2. VEYA tarayıcı menüsünden (⋮) 'Kaydet ve Paylaş' -> 'HydroFlood Uygulamasını Yükle' seçeneğini tıklayın."
+      );
+    }
+  };
+
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis' | 'dwg-analysis'>('dashboard');
   const [dgnSubTab, setDgnSubTab] = useState<'viewer' | 'converter'>('viewer');
   const [currentStep, setCurrentStep] = useState(1);
@@ -1527,6 +1580,8 @@ ${floodPolygons.join('\n')}
           setCurrentStep={setCurrentStep}
           isSimulating={isSimulating}
           progress={progress}
+          isInstalled={isInstalled}
+          onInstallPWA={handleInstallPWA}
         />
       )}
 
@@ -1554,6 +1609,8 @@ ${floodPolygons.join('\n')}
               }}
               isSimulating={isSimulating}
               progress={progress}
+              isInstalled={isInstalled}
+              onInstallPWA={handleInstallPWA}
             />
           )}
           {activeTab === 'analysis' && (
@@ -1577,6 +1634,9 @@ ${floodPolygons.join('\n')}
             <Settings
               needRefresh={needRefresh}
               onUpdate={() => updateServiceWorker(true)}
+              deferredPrompt={deferredPrompt}
+              isInstalled={isInstalled}
+              onInstallPWA={handleInstallPWA}
             />
           )}
           {activeTab === 'about' && (

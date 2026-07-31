@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Droplets, Layers, ChevronRight, Settings, HelpCircle, Eye, FileCode, Globe } from 'lucide-react';
+import { Droplets, Layers, ChevronRight, Settings, HelpCircle, Eye, FileCode, Globe, Download, Laptop, MonitorCheck } from 'lucide-react';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
@@ -11,6 +11,8 @@ interface DashboardProps {
   onOpenDWGAnalysis: () => void;
   isSimulating?: boolean;
   progress?: number;
+  isInstalled?: boolean;
+  onInstallPWA?: () => void;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
@@ -22,6 +24,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   onOpenDWGAnalysis,
   isSimulating,
   progress,
+  isInstalled,
+  onInstallPWA,
 }) => {
   return (
     <motion.div
@@ -53,6 +57,22 @@ const Dashboard: React.FC<DashboardProps> = ({
               <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
               <span>%{Math.round(progress || 0)}</span>
             </div>
+          )}
+
+          {onInstallPWA && (
+            <button
+              onClick={onInstallPWA}
+              disabled={isInstalled}
+              className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all shadow-sm ${
+                isInstalled
+                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 cursor-default'
+                  : 'bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/30'
+              }`}
+              title={isInstalled ? 'Masaüstüne Yüklendi' : 'Bilgisayara Yükle (PWA)'}
+            >
+              {isInstalled ? <MonitorCheck size={18} /> : <Download size={18} />}
+              <span>{isInstalled ? 'PWA Yüklü' : 'PWA Yükle'}</span>
+            </button>
           )}
 
           <button
