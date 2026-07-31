@@ -11,12 +11,9 @@ const About: React.FC = () => {
       exit={{ opacity: 0, y: -15 }}
       className="space-y-6 pb-12 max-w-4xl mx-auto"
     >
-      {/* Header section */}
+      {/* Intro section */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-3">
-        <h2 className="text-xl sm:text-2xl font-display font-bold text-white">
-          Teknik Dokümantasyon ve Metodoloji
-        </h2>
-        <p className="text-sm text-slate-400 leading-relaxed">
+        <p className="text-sm text-slate-300 leading-relaxed">
           HydroFlood, yüzey topografyasını ve hidrolojik bağlantıları analiz etmek için statik ve hidrolojik yöntemler kullanan gelişmiş bir mühendislik aracıdır. Uygulama, topografya verilerinden hareketle taşkın risk alanlarını belirleyen yüksek performanslı bir Statik Çanak (Bathtub) modeli sunar.
         </p>
       </div>

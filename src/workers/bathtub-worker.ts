@@ -69,7 +69,7 @@ self.onmessage = function(e) {
     
     // Periodic progress for very large areas
     if (head % 10000 === 0) {
-      self.postMessage({ type: 'progress', step: head, total: width * height, waterDepth: bathtubDepth });
+      self.postMessage({ type: 'progress', step: head, total: width * height });
     }
   }
   

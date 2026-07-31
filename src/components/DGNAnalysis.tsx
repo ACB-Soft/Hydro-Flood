@@ -810,59 +810,43 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       exit={{ opacity: 0, y: -15 }}
       className="space-y-6 pb-12 max-w-6xl mx-auto"
     >
-      {/* 1. Header Banner */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-4 shadow-xl">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-gradient-to-br from-cyan-500/20 to-indigo-500/20 rounded-2xl border border-cyan-500/30 text-cyan-400 shadow-md">
-              <Globe className="animate-spin text-cyan-400 [animation-duration:15s]" size={28} />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-xl sm:text-2xl font-display font-bold text-white tracking-tight">
-                  DGN Dosya Analizleri
-                </h2>
-                {fileInfo ? (
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono flex items-center gap-1">
-                    <FileCheck size={12} /> Özel DGN Aktif
-                  </span>
-                ) : (
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700 font-mono">
-                    Yükleme Bekleniyor
-                  </span>
-                )}
-              </div>
-              <p className="text-xs sm:text-sm text-slate-400 mt-1">
-                DGN vektör çizimlerini 2D/3D interaktif harita üzerinde analiz edin, katmanları yönetin ve Delaunay TIN yöntemiyle DEM yükseklik haritaları üretin.
-              </p>
-            </div>
-          </div>
+      {/* Top Controls Bar with Sub-Tab Switcher */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
+          <FileCode size={16} className="text-cyan-400" />
+          {fileInfo ? (
+            <span className="text-emerald-400 font-bold flex items-center gap-1">
+              <FileCheck size={14} /> {fileInfo.name} ({fileInfo.format})
+            </span>
+          ) : (
+            <span>MicroStation DGN V8 Engine</span>
+          )}
+        </div>
 
-          {/* Unified Tab Switcher */}
-          <div className="flex bg-slate-950 p-1.5 rounded-2xl border border-slate-800 self-start md:self-center shrink-0">
-            <button
-              onClick={() => setActiveTab('viewer')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-                activeTab === 'viewer'
-                  ? 'bg-slate-800 text-cyan-400 shadow-inner border border-slate-700/50'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Eye size={15} />
-              <span>CAD Görüntüleyici</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('converter')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-                activeTab === 'converter'
-                  ? 'bg-slate-800 text-indigo-400 shadow-inner border border-slate-700/50'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <FileCode size={15} />
-              <span>DEM Üretici</span>
-            </button>
-          </div>
+        {/* Unified Tab Switcher */}
+        <div className="flex bg-slate-950 p-1.5 rounded-2xl border border-slate-800 shrink-0">
+          <button
+            onClick={() => setActiveTab('viewer')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'viewer'
+                ? 'bg-slate-800 text-cyan-400 shadow-inner border border-slate-700/50'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Eye size={15} />
+            <span>CAD Görüntüleyici</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('converter')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'converter'
+                ? 'bg-slate-800 text-indigo-400 shadow-inner border border-slate-700/50'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <FileCode size={15} />
+            <span>DEM Üretici</span>
+          </button>
         </div>
       </div>
 

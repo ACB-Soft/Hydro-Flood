@@ -26,26 +26,8 @@ const Settings: React.FC<SettingsProps> = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="max-w-5xl mx-auto space-y-8 pb-16"
+      className="max-w-5xl mx-auto space-y-6 pb-16"
     >
-      {/* Hero Title Section */}
-      <div className="glass rounded-3xl p-8 border border-white/20 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-blue-600/10 blur-[120px] -mr-40 -mt-40 pointer-events-none" />
-        <div className="flex items-center gap-3 relative z-10">
-          <div className="p-3 bg-blue-600/20 rounded-2xl border border-blue-500/30 text-blue-400">
-            <SettingsIcon size={28} />
-          </div>
-          <div>
-            <h2 className="text-2xl sm:text-3xl font-display font-bold text-white">
-              Uygulama Ayarları
-            </h2>
-            <p className="text-slate-400 text-sm">
-              Sürüm yönetimi ve sistem çalışma tercihleri
-            </p>
-          </div>
-        </div>
-      </div>
-
       {/* Main Settings Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* System Updates Card */}

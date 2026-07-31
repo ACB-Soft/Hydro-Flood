@@ -401,6 +401,109 @@ export default function App() {
     setParams(prev => ({ ...prev, sourceX: x, sourceY: y }));
   };
 
+  const parseKmlCoordinates = (xmlText: string): [number, number][] => {
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      const coordNodes = xmlDoc.getElementsByTagName("coordinates");
+      
+      const coords: [number, number][] = [];
+      for (let i = 0; i < coordNodes.length; i++) {
+        const text = coordNodes[i].textContent || '';
+        const pairs = text.trim().split(/\s+/);
+        for (const p of pairs) {
+          if (!p) continue;
+          const parts = p.split(',').map(Number);
+          if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            coords.push([parts[1], parts[0]]); // [lat, lon]
+          }
+        }
+      }
+      return coords;
+    } catch (e) {
+      console.error("KML Parse error:", e);
+      return [];
+    }
+  };
+
+  const computeScanlineAreaMask = (width: number, height: number, polygon: [number, number][]): Uint8Array => {
+    const mask = new Uint8Array(width * height);
+    if (polygon.length < 3) return mask;
+
+    let minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < polygon.length; i++) {
+      const y = polygon[i][1];
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+
+    const startY = Math.max(0, Math.floor(minY));
+    const endY = Math.min(height - 1, Math.ceil(maxY));
+    const numEdges = polygon.length;
+
+    for (let y = startY; y <= endY; y++) {
+      const py = y + 0.5;
+      const intersections: number[] = [];
+
+      for (let i = 0; i < numEdges; i++) {
+        const [x1, y1] = polygon[i];
+        const [x2, y2] = polygon[(i + 1) % numEdges];
+
+        if ((y1 <= py && y2 > py) || (y2 <= py && y1 > py)) {
+          const xIntersect = x1 + (py - y1) * (x2 - x1) / (y2 - y1);
+          intersections.push(xIntersect);
+        }
+      }
+
+      intersections.sort((a, b) => a - b);
+
+      for (let j = 0; j < intersections.length - 1; j += 2) {
+        const xStart = Math.max(0, Math.floor(intersections[j]));
+        const xEnd = Math.min(width - 1, Math.floor(intersections[j + 1]));
+        for (let x = xStart; x <= xEnd; x++) {
+          mask[y * width + x] = 1;
+        }
+      }
+    }
+
+    return mask;
+  };
+
+  useEffect(() => {
+    if (areaKml && dem) {
+      try {
+        const gridPolygon = areaKml.coords.map(([lat, lon]: [number, number]) => {
+          const projected = proj4('EPSG:4326', selectedCRS.def, [lon, lat]);
+          const x = (projected[0] - dem.xll) / dem.cellSize;
+          const y = dem.height - (projected[1] - dem.yll) / dem.cellSize;
+          return [x, y] as [number, number];
+        });
+        const mask = computeScanlineAreaMask(dem.width, dem.height, gridPolygon);
+        setAreaMask(mask);
+      } catch (e) {
+        console.error("Failed to compute scanline mask:", e);
+      }
+    } else {
+      setAreaMask(null);
+    }
+  }, [areaKml, dem, selectedCRS]);
+
+  useEffect(() => {
+    if (sourceWgs && dem) {
+      try {
+        const [lat, lon] = sourceWgs;
+        const projected = proj4('EPSG:4326', selectedCRS.def, [lon, lat]);
+        const x = Math.floor((projected[0] - dem.xll) / dem.cellSize);
+        const y = Math.floor(dem.height - (projected[1] - dem.yll) / dem.cellSize);
+        if (x >= 0 && x < dem.width && y >= 0 && y < dem.height) {
+          setParams(prev => ({ ...prev, sourceX: x, sourceY: y }));
+        }
+      } catch (e) {
+        console.error("Failed to project source point:", e);
+      }
+    }
+  }, [sourceWgs, dem, selectedCRS]);
+
   const handleKmlUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -408,39 +511,17 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(text, "text/xml");
-      const coordsStr = xmlDoc.getElementsByTagName("coordinates")[0]?.textContent;
-      
-      if (coordsStr) {
-        const pairs = coordsStr.trim().split(/\s+/);
-        const kmlCoords = pairs.map(p => {
-          const [lon, lat] = p.split(',').map(Number);
-          return [lat, lon] as [number, number];
-        });
-        setRiverKml({ name: file.name, coords: kmlCoords });
-        setSourceWgs(kmlCoords[0]);
-
-        // Set source point to first point of KML
-        if (kmlCoords.length > 0 && dem) {
-          const [lat, lon] = kmlCoords[0];
-          try {
-            // Convert WGS84 to selected CRS
-            const projected = proj4('EPSG:4326', selectedCRS.def, [lon, lat]);
-            const x = Math.floor((projected[0] - dem.xll) / dem.cellSize);
-            const y = Math.floor(dem.height - (projected[1] - dem.yll) / dem.cellSize);
-            
-            if (x >= 0 && x < dem.width && y >= 0 && y < dem.height) {
-              setParams(prev => ({ ...prev, sourceX: x, sourceY: y }));
-            }
-          } catch (e) {
-            console.error("KML point projection failed", e);
-          }
-        }
+      const coords = parseKmlCoordinates(text);
+      if (coords.length >= 2) {
+        setRiverKml({ name: file.name, coords });
+        setSourceWgs(coords[0]);
+      } else {
+        alert("KML dosyasında geçerli çizgi/koordinat verisi bulunamadı.");
       }
     };
     reader.readAsText(file);
   };
+
   const handleSourceKmlUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -448,41 +529,15 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(text, "text/xml");
-      const coordsStr = xmlDoc.getElementsByTagName("coordinates")[0]?.textContent;
-      
-      if (coordsStr && dem) {
+      const coords = parseKmlCoordinates(text);
+      if (coords.length > 0) {
         setSourceKmlName(file.name);
-        const [lon, lat] = coordsStr.trim().split(',').map(Number);
-        setSourceWgs([lat, lon]);
-        try {
-          const projected = proj4('EPSG:4326', selectedCRS.def, [lon, lat]);
-          const x = Math.floor((projected[0] - dem.xll) / dem.cellSize);
-          const y = Math.floor(dem.height - (projected[1] - dem.yll) / dem.cellSize);
-          
-          if (x >= 0 && x < dem.width && y >= 0 && y < dem.height) {
-            setParams(prev => ({ ...prev, sourceX: x, sourceY: y }));
-          }
-        } catch (e) {
-          console.error("Source KML point projection failed", e);
-        }
+        setSourceWgs(coords[0]);
+      } else {
+        alert("KML dosyasında geçerli kaynak nokta koordinatı bulunamadı.");
       }
     };
     reader.readAsText(file);
-  };
-
-  const isPointInPolygon = (point: [number, number], polygon: [number, number][]) => {
-    const [x, y] = point;
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      const [xi, yi] = polygon[i];
-      const [xj, yj] = polygon[j];
-      const intersect = ((yi > y) !== (yj > y)) &&
-        (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-      if (intersect) inside = !inside;
-    }
-    return inside;
   };
 
   const handleAreaKmlUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -492,46 +547,11 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(text, "text/xml");
-      const coordsStr = xmlDoc.getElementsByTagName("coordinates")[0]?.textContent;
-      
-      if (coordsStr && dem) {
-        const pairs = coordsStr.trim().split(/\s+/);
-        const kmlCoords = pairs.map(p => {
-          const [lon, lat] = p.split(',').map(Number);
-          return [lat, lon] as [number, number];
-        });
-        setAreaKml({ name: file.name, coords: kmlCoords });
-        
-        // Generate mask
-        const mask = new Uint8Array(dem.width * dem.height);
-        const gridPolygon = kmlCoords.map(([lat, lon]) => {
-          const projected = proj4('EPSG:4326', selectedCRS.def, [lon, lat]);
-          const x = (projected[0] - dem.xll) / dem.cellSize;
-          const y = dem.height - (projected[1] - dem.yll) / dem.cellSize;
-          return [x, y] as [number, number];
-        });
-
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        gridPolygon.forEach(([x, y]) => {
-          minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-          minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-        });
-
-        const startX = Math.max(0, Math.floor(minX));
-        const endX = Math.min(dem.width - 1, Math.ceil(maxX));
-        const startY = Math.max(0, Math.floor(minY));
-        const endY = Math.min(dem.height - 1, Math.ceil(maxY));
-
-        for (let y = startY; y <= endY; y++) {
-          for (let x = startX; x <= endX; x++) {
-            if (isPointInPolygon([x, y], gridPolygon)) {
-              mask[y * dem.width + x] = 1;
-            }
-          }
-        }
-        setAreaMask(mask);
+      const coords = parseKmlCoordinates(text);
+      if (coords.length >= 3) {
+        setAreaKml({ name: file.name, coords });
+      } else {
+        alert("İnceleme alanı KML dosyasında en az 3 nokta (poligon) bulunmalıdır.");
       }
     };
     reader.readAsText(file);
@@ -1339,6 +1359,16 @@ ${floodPolygons.join('\n')}
     let areaFloodedCells = 0;
     let areaMaxDepth = 0;
 
+    let effectiveCellSize = coords.cellSize || 10;
+    if (effectiveCellSize < 0.1 && coords.lat !== undefined) {
+      const metersPerDegree = 111320;
+      const latRad = (coords.lat * Math.PI) / 180;
+      const metersPerDegreeLon = metersPerDegree * Math.cos(latRad);
+      effectiveCellSize = effectiveCellSize * (metersPerDegree + metersPerDegreeLon) / 2;
+    }
+
+    const cellAreaM2 = effectiveCellSize * effectiveCellSize;
+
     for (let i = 0; i < waterDepth.length; i++) {
       const d = waterDepth[i];
       if (d > maxDepth) maxDepth = d;
@@ -1346,7 +1376,7 @@ ${floodPolygons.join('\n')}
       const isFlooded = d > 0.01;
       if (isFlooded) {
         floodedCells++;
-        totalVolume += d * coords.cellSize * coords.cellSize;
+        totalVolume += d * cellAreaM2;
       }
 
       // Polygon specific analysis
@@ -1359,11 +1389,11 @@ ${floodPolygons.join('\n')}
       }
     }
     
-    const totalArea = floodedCells * coords.cellSize * coords.cellSize;
+    const totalArea = floodedCells * cellAreaM2;
     const avgDepth = floodedCells > 0 ? totalVolume / totalArea : 0;
     
-    const areaTotalM2 = areaTotalCells * coords.cellSize * coords.cellSize;
-    const areaFloodedM2 = areaFloodedCells * coords.cellSize * coords.cellSize;
+    const areaTotalM2 = areaTotalCells * cellAreaM2;
+    const areaFloodedM2 = areaFloodedCells * cellAreaM2;
     const areaRiskPercent = areaTotalCells > 0 ? (areaFloodedCells / areaTotalCells) * 100 : 0;
 
     return { 
@@ -1373,7 +1403,7 @@ ${floodPolygons.join('\n')}
   };
 
   const [sharedDgnData, setSharedDgnData] = useState<DGNParsedResult | null>(null);
-  const stats = React.useMemo(() => calculateStats(), [waterDepth, coords.cellSize]);
+  const stats = React.useMemo(() => calculateStats(), [waterDepth, coords.cellSize, coords.lat, areaMask]);
 
   const isStandaloneITwin = window.location.search.includes('itwin=true');
   if (isStandaloneITwin) {

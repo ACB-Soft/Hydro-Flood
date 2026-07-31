@@ -119,29 +119,17 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
           animate={{ opacity: 1, y: 0 }}
           className="space-y-6"
         >
-          {/* Result Page Title Bar */}
-          <div className="glass rounded-3xl p-6 sm:p-8 border border-white/20 shadow-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-cyan-500/20 rounded-2xl text-cyan-400 border border-cyan-500/30">
-                  <BarChart3 size={24} />
-                </div>
-                <div>
-                  <h1 className="text-2xl sm:text-3xl font-display font-bold text-white">
-                    Statik Simülasyon Sonucu
-                  </h1>
-                  <p className="text-slate-400 text-xs sm:text-sm mt-0.5">
-                    Harita üzerinde taşkın yayılımını ve alan analizi verilerini inceleyin
-                  </p>
-                </div>
-              </div>
+          {/* Top Bar Action */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <BarChart3 size={16} className="text-cyan-400" />
+              <span>Taşkın yayılımı ve alan analizi sonuçları</span>
             </div>
-
             <button 
               onClick={() => setCurrentStep(1)} 
-              className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs sm:text-sm border border-white/20 transition-all flex items-center gap-2 shadow-sm shrink-0"
+              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/20 transition-all flex items-center gap-2 shadow-sm shrink-0"
             >
-              <ArrowLeft size={16} />
+              <ArrowLeft size={14} />
               Girdi Parametrelerini Düzenle
             </button>
           </div>
@@ -150,6 +138,25 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left: Map Viewer */}
             <div className="lg:col-span-2 glass rounded-3xl p-3 border border-white/20 shadow-xl h-[400px] sm:h-[520px] relative overflow-hidden">
+              {isSimulating && (
+                <div className="absolute inset-0 z-[500] bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-4">
+                  <div className="p-4 bg-cyan-500/20 text-cyan-400 rounded-full">
+                    <RefreshCw size={32} className="animate-spin" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">Simülasyon Hesaplanıyor...</h3>
+                    <p className="text-slate-400 text-xs mt-1">Hidrolojik matris ve KML sınırları üzerinde taşkın çözümleniyor</p>
+                  </div>
+                  <div className="w-64 bg-slate-800 rounded-full h-2.5 overflow-hidden border border-white/10">
+                    <div 
+                      className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full transition-all duration-200"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono font-bold text-cyan-300">%{Math.round(progress)}</span>
+                </div>
+              )}
+
               <MapContainer 
                 center={[coords.lat, coords.lon]} 
                 zoom={13} 
@@ -278,18 +285,8 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
         <motion.div 
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          className="space-y-8"
+          className="space-y-6"
         >
-          {/* Main Header Banner */}
-          <div className="glass rounded-3xl p-6 sm:p-8 border border-white/20 shadow-2xl space-y-2">
-            <h1 className="text-2xl sm:text-3xl font-display font-bold text-white flex items-center gap-3">
-              <Sliders className="text-cyan-400" size={28} />
-              Statik Taşkın Simülasyonu
-            </h1>
-            <p className="text-slate-400 text-xs sm:text-sm">
-              Topografya verisi, koordinat sistemi, vektörler ve su seviyesi parametrelerini girerek analizi başlatın.
-            </p>
-          </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Column 1: Topo & CRS */}
