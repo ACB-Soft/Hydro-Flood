@@ -237,25 +237,31 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     const centerX = width / 2 + pan.x;
     const centerY = height / 2 + pan.y;
 
+    const midX = (bounds.minX + bounds.maxX) / 2;
+    const midY = (bounds.minY + bounds.maxY) / 2;
+    const spanX = Math.abs(bounds.maxX - bounds.minX) || 100;
+    const spanY = Math.abs(bounds.maxY - bounds.minY) || 100;
+    const fitScale = Math.min((width * 0.8) / spanX, (height * 0.8) / spanY) || 1;
+
     if (viewMode === '2d') {
       ctx.translate(centerX, centerY);
       ctx.scale(zoom, zoom);
 
-      // Grid lines
+      // Grid lines centered around CAD bounds
       if (showGrid) {
         ctx.strokeStyle = canvasBg === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(56,189,248,0.12)';
-        ctx.lineWidth = 1 / zoom;
-        const gridSize = 40;
-        for (let x = -800; x <= 800; x += gridSize) {
+        ctx.lineWidth = 1 / (zoom * fitScale);
+        const gridSize = Math.max(20, Math.round(spanX / 10));
+        for (let x = -spanX * 2; x <= spanX * 2; x += gridSize) {
           ctx.beginPath();
-          ctx.moveTo(x, -600);
-          ctx.lineTo(x, 600);
+          ctx.moveTo(x * fitScale, -spanY * 2 * fitScale);
+          ctx.lineTo(x * fitScale, spanY * 2 * fitScale);
           ctx.stroke();
         }
-        for (let y = -600; y <= 600; y += gridSize) {
+        for (let y = -spanY * 2; y <= spanY * 2; y += gridSize) {
           ctx.beginPath();
-          ctx.moveTo(-800, y);
-          ctx.lineTo(800, y);
+          ctx.moveTo(-spanX * 2 * fitScale, y * fitScale);
+          ctx.lineTo(spanX * 2 * fitScale, y * fitScale);
           ctx.stroke();
         }
       }
@@ -275,30 +281,34 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
         else if (layer.type === 'boundary') lineWidth = 2.0;
         else if (layer.type === 'contour_minor') lineWidth = 1.0;
 
-        ctx.lineWidth = lineWidth / zoom;
+        ctx.lineWidth = lineWidth / (zoom * fitScale);
 
         if (layer.type === 'boundary') {
-          ctx.setLineDash([8 / zoom, 4 / zoom]);
+          ctx.setLineDash([8 / (zoom * fitScale), 4 / (zoom * fitScale)]);
         } else {
           ctx.setLineDash([]);
         }
 
         if (elem.type === 'point' || elem.points.length === 1) {
           const pt = elem.points[0];
+          const sx = (pt.x - midX) * fitScale;
+          const sy = -(pt.y - midY) * fitScale;
           ctx.beginPath();
-          ctx.arc(pt.x, pt.y, 3.5 / zoom, 0, Math.PI * 2);
+          ctx.arc(sx, sy, 3.5 / zoom, 0, Math.PI * 2);
           ctx.fill();
 
           if (showLabels) {
             ctx.fillStyle = layer.color;
             ctx.font = `${Math.max(8, 10 / zoom)}px monospace`;
-            ctx.fillText(`+${pt.z?.toFixed(1) || 0}m`, pt.x + 5 / zoom, pt.y - 4 / zoom);
+            ctx.fillText(`+${pt.z?.toFixed(1) || 0}m`, sx + 5 / zoom, sy - 4 / zoom);
           }
         } else {
           ctx.beginPath();
           elem.points.forEach((pt, i) => {
-            if (i === 0) ctx.moveTo(pt.x, pt.y);
-            else ctx.lineTo(pt.x, pt.y);
+            const sx = (pt.x - midX) * fitScale;
+            const sy = -(pt.y - midY) * fitScale;
+            if (i === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
           });
 
           if (elem.type === 'shape' || layer.type === 'buildings') {
@@ -313,19 +323,22 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
           if (showLabels && (layer.type === 'contour_major' || layer.type === 'contour_minor')) {
             const midPt = elem.points[Math.floor(elem.points.length / 2)];
             if (midPt && midPt.z !== undefined) {
+              const sx = (midPt.x - midX) * fitScale;
+              const sy = -(midPt.y - midY) * fitScale;
               ctx.fillStyle = layer.color;
               ctx.font = `${Math.max(8, 10 / zoom)}px monospace`;
-              ctx.fillText(`${midPt.z.toFixed(0)}m`, midPt.x + 4 / zoom, midPt.y - 3 / zoom);
+              ctx.fillText(`${midPt.z.toFixed(0)}m`, sx + 4 / zoom, sy - 3 / zoom);
             }
           }
         }
       });
     } else {
       // 3D Isometric View Mode
+      const zRange = Math.max(1, bounds.maxZ - bounds.minZ);
       const project3D = (pt: { x: number; y: number; z?: number }) => {
-        const xOff = pt.x;
-        const yOff = pt.y;
-        const zOff = ((pt.z || 0) - bounds.minZ) * 0.8;
+        const xOff = (pt.x - midX) * fitScale;
+        const yOff = -(pt.y - midY) * fitScale;
+        const zOff = (((pt.z || 0) - bounds.minZ) / zRange) * (spanX * 0.25) * fitScale;
 
         const rx = xOff * Math.cos(rotY) - yOff * Math.sin(rotY);
         const ry = xOff * Math.sin(rotY) + yOff * Math.cos(rotY);
@@ -342,17 +355,18 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       if (showGrid) {
         ctx.strokeStyle = 'rgba(56, 189, 248, 0.15)';
         ctx.lineWidth = 1;
-        for (let gx = -250; gx <= 250; gx += 50) {
-          const p1 = project3D({ x: gx, y: -250, z: bounds.minZ });
-          const p2 = project3D({ x: gx, y: 250, z: bounds.minZ });
+        const halfS = (spanX / 2);
+        for (let gx = -halfS; gx <= halfS; gx += halfS / 5) {
+          const p1 = project3D({ x: midX + gx, y: midY - halfS, z: bounds.minZ });
+          const p2 = project3D({ x: midX + gx, y: midY + halfS, z: bounds.minZ });
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p2.x, p2.y);
           ctx.stroke();
         }
-        for (let gy = -250; gy <= 250; gy += 50) {
-          const p1 = project3D({ x: -250, y: gy, z: bounds.minZ });
-          const p2 = project3D({ x: 250, y: gy, z: bounds.minZ });
+        for (let gy = -halfS; gy <= halfS; gy += halfS / 5) {
+          const p1 = project3D({ x: midX - halfS, y: midY + gy, z: bounds.minZ });
+          const p2 = project3D({ x: midX + halfS, y: midY + gy, z: bounds.minZ });
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p2.x, p2.y);
@@ -426,16 +440,16 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
 
     // Scale HUD
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    ctx.fillRect(15, height - 35, 180, 22);
+    ctx.fillRect(15, height - 35, 220, 22);
     ctx.strokeStyle = '#94a3b8';
     ctx.lineWidth = 1;
-    ctx.strokeRect(15, height - 35, 180, 22);
+    ctx.strokeRect(15, height - 35, 220, 22);
 
     ctx.fillStyle = '#f8fafc';
     ctx.font = '10px sans-serif';
     ctx.fillText(
       viewMode === '2d'
-        ? `Ölçek: ${(100 / zoom).toFixed(0)} m (2D Plan)`
+        ? `Ölçek Alanı: ${(spanX / zoom).toFixed(1)}m × ${(spanY / zoom).toFixed(1)}m (2D)`
         : `3D Görünüm (Açı: ${Math.round((rotY * 180) / Math.PI)}°)`,
       25,
       height - 20
@@ -462,11 +476,20 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
 
     const width = canvas.width;
     const height = canvas.height;
-    const worldX = Math.round(485000 + (mouseX - width / 2 - pan.x) / zoom * 2);
-    const worldY = Math.round(4421000 + (height / 2 + pan.y - mouseY) / zoom * 2);
 
-    const dist = Math.sqrt(Math.pow(mouseX - width / 2, 2) + Math.pow(mouseY - height / 2, 2));
-    const calculatedZ = Math.round((bounds.minZ + (dist * 0.3) % (bounds.maxZ - bounds.minZ || 100)) * 10) / 10;
+    const midX = (bounds.minX + bounds.maxX) / 2;
+    const midY = (bounds.minY + bounds.maxY) / 2;
+    const spanX = Math.abs(bounds.maxX - bounds.minX) || 100;
+    const spanY = Math.abs(bounds.maxY - bounds.minY) || 100;
+    const fitScale = Math.min((width * 0.8) / spanX, (height * 0.8) / spanY) || 1;
+
+    const cx = mouseX - (width / 2 + pan.x);
+    const cy = mouseY - (height / 2 + pan.y);
+
+    const worldX = Math.round((midX + cx / (zoom * fitScale)) * 10) / 10;
+    const worldY = Math.round((midY - cy / (zoom * fitScale)) * 10) / 10;
+
+    const calculatedZ = Math.round((bounds.minZ + ((bounds.maxZ - bounds.minZ) * 0.5)) * 10) / 10;
 
     setCursorPos({ x: worldX, y: worldY, z: calculatedZ });
 
@@ -512,10 +535,10 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     }, 2000);
 
     setTimeout(() => {
-      const bboxWidth = 1000;
-      const bboxHeight = 700;
-      const ncols = Math.floor(bboxWidth / cellSize);
-      const nrows = Math.floor(bboxHeight / cellSize);
+      const bboxWidth = Math.max(10, bounds.maxX - bounds.minX);
+      const bboxHeight = Math.max(10, bounds.maxY - bounds.minY);
+      const ncols = Math.min(200, Math.max(10, Math.floor(bboxWidth / cellSize)));
+      const nrows = Math.min(200, Math.max(10, Math.floor(bboxHeight / cellSize)));
 
       const matrix: number[][] = [];
       let minZ = Infinity;
@@ -547,8 +570,8 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       setGridMeta({
         ncols,
         nrows,
-        xllcorner: 485000.0,
-        yllcorner: 4421000.0,
+        xllcorner: Math.round(bounds.minX * 100) / 100,
+        yllcorner: Math.round(bounds.minY * 100) / 100,
         cellsize: cellSize,
         minZ,
         maxZ,

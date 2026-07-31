@@ -16,6 +16,7 @@ import Dashboard from './components/Dashboard';
 import Analysis from './components/Analysis';
 import About from './components/About';
 import DGNAnalysis from './components/DGNAnalysis';
+import DWGAnalysis from './components/DWGAnalysis';
 import { DGNParsedResult } from './utils/dgnParser';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
@@ -128,7 +129,7 @@ export default function App() {
     },
   });
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis' | 'dwg-analysis'>('dashboard');
   const [dgnSubTab, setDgnSubTab] = useState<'viewer' | 'converter'>('viewer');
   const [currentStep, setCurrentStep] = useState(1);
   const [dem, setDem] = useState<DEMData | null>(null);
@@ -1512,6 +1513,9 @@ ${floodPolygons.join('\n')}
                 setDgnSubTab('converter');
                 setActiveTab('dgn-analysis');
               }}
+              onOpenDWGAnalysis={() => {
+                setActiveTab('dwg-analysis');
+              }}
               isSimulating={isSimulating}
               progress={progress}
             />
@@ -1548,6 +1552,9 @@ ${floodPolygons.join('\n')}
               onUpdateDGNData={setSharedDgnData}
               initialSubTab={dgnSubTab}
             />
+          )}
+          {activeTab === 'dwg-analysis' && (
+            <DWGAnalysis />
           )}
         </AnimatePresence>
       </main>

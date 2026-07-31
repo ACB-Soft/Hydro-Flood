@@ -34,38 +34,122 @@ export interface DGNParsedResult {
   };
   layers: CADLayer[];
   elements: DGNElement[];
+  textAnnotations?: { x: number; y: number; text: string; val?: number }[];
 }
 
-// Empty layers default
 export const DEFAULT_SAMPLE_LAYERS: CADLayer[] = [];
 
-/**
- * Returns empty element list when no file is uploaded.
- */
 export function getDefaultSampleElements(): DGNElement[] {
   return [];
 }
 
-/**
- * Color palette assigned to levels when parsing DGN files
- */
 const LAYER_COLORS = [
   '#06b6d4', '#38bdf8', '#f59e0b', '#10b981', '#f43f5e', '#a855f7',
   '#ec4899', '#8b5cf6', '#3b82f6', '#14b8a6', '#84cc16', '#eab308',
+  '#06b6d4', '#10b981', '#f59e0b', '#6366f1', '#ec4899', '#14b8a6',
 ];
 
 /**
- * Parses a DGN (or CAD) file buffer into structured vector layers and elements.
- * Handles MicroStation V7 / V8 binary structures, text/DXF CAD formats, and structured fallback parsing.
+  Categorizes layer type based on layer/level name and properties
+ */
+function determineLayerType(name: string, level: number): CADLayer['type'] {
+  const upper = name.toUpperCase();
+  if (
+    upper.includes('IZOHIPS') ||
+    upper.includes('CONTOUR') ||
+    upper.includes('EGRI') ||
+    upper.includes('EST') ||
+    upper.includes('ELEM')
+  ) {
+    if (upper.includes('ANA') || level % 5 === 0) return 'contour_major';
+    return 'contour_minor';
+  }
+  if (
+    upper.includes('KOT') ||
+    upper.includes('NOKTA') ||
+    upper.includes('POINT') ||
+    upper.includes('SPOT') ||
+    upper.includes('NIRENGI') ||
+    upper.includes('POLIGON')
+  ) {
+    return 'elevation_points';
+  }
+  if (
+    upper.includes('SU') ||
+    upper.includes('DERE') ||
+    upper.includes('GOL') ||
+    upper.includes('RIVER') ||
+    upper.includes('WATER') ||
+    upper.includes('AKARSU')
+  ) {
+    return 'water';
+  }
+  if (
+    upper.includes('BINA') ||
+    upper.includes('YAPI') ||
+    upper.includes('PARSEL') ||
+    upper.includes('BUILDING') ||
+    upper.includes('HOUSE') ||
+    upper.includes('KADASTRO')
+  ) {
+    return 'buildings';
+  }
+  if (
+    upper.includes('SINIR') ||
+    upper.includes('LIMIT') ||
+    upper.includes('PROJE') ||
+    upper.includes('BOUNDARY')
+  ) {
+    return 'boundary';
+  }
+  return 'other';
+}
+
+/**
+ * Extract printable text strings (ASCII / Latin1 / UTF-8) from a Uint8Array
+ */
+function extractStringsFromBuffer(
+  buffer: Uint8Array,
+  minLen: number = 2
+): string[] {
+  const strings: string[] = [];
+  let currentStr = '';
+
+  for (let i = 0; i < buffer.length; i++) {
+    const b = buffer[i];
+    // Printable ASCII or common Turkish extensions in Latin5/UTF8
+    if ((b >= 32 && b <= 126) || b === 221 || b === 253 || b === 231 || b === 246 || b === 252 || b === 287 || b === 351) {
+      currentStr += String.fromCharCode(b);
+    } else {
+      if (currentStr.trim().length >= minLen) {
+        strings.push(currentStr.trim());
+      }
+      currentStr = '';
+    }
+  }
+  if (currentStr.trim().length >= minLen) {
+    strings.push(currentStr.trim());
+  }
+  return strings;
+}
+
+/**
+ * Parses a DGN (MicroStation V7 / V8), DXF, or CAD file into structured vector layers and elements.
+ * Preserves exact real-world coordinates and actual layer names parsed from the file without false synthetic generation.
  */
 export async function parseDGNFile(file: File): Promise<DGNParsedResult> {
   const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
   const sizeBytes = buffer.byteLength;
   const fileSizeStr = `${(sizeBytes / (1024 * 1024)).toFixed(2)} MB`;
 
   const elements: DGNElement[] = [];
-  const levelMap = new Map<number, { count: number; minZ: number; maxZ: number; type: CADLayer['type']; name?: string }>();
+  const levelNamesMap = new Map<number, string>();
+  const levelMap = new Map<
+    number,
+    { count: number; minZ: number; maxZ: number; type: CADLayer['type']; name?: string }
+  >();
 
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
@@ -73,30 +157,116 @@ export async function parseDGNFile(file: File): Promise<DGNParsedResult> {
 
   let isV7BinaryDgn = false;
   let isV8BinaryDgn = false;
-  let parsedBinaryCount = 0;
+  let isDXFOrText = false;
 
-  // Check binary signature
+  // 1. Format Detection
   if (sizeBytes >= 4) {
     const word0 = view.getUint16(0, true);
-    // MicroStation V7 header check (word 0: type and level)
     const type = (word0 >> 8) & 0x7f;
     const level = word0 & 0x3f;
-    if (type >= 1 && type <= 30 && level >= 0 && level <= 63) {
+    if (type >= 1 && type <= 66 && level >= 0 && level <= 63) {
       isV7BinaryDgn = true;
     }
 
-    // Check V8 OLE compound signature (0xD0CF11E0)
     const sig = view.getUint32(0, false);
     if (sig === 0xd0cf11e0) {
       isV8BinaryDgn = true;
     }
   }
 
-  // Attempt binary parsing if V7
-  if (isV7BinaryDgn) {
+  // Check DXF or Text
+  const sampleHeader = new TextDecoder('ascii', { fatal: false }).decode(bytes.subarray(0, Math.min(sizeBytes, 2000)));
+  if (sampleHeader.includes('SECTION') || sampleHeader.includes('HEADER') || sampleHeader.includes('ENTITIES') || sampleHeader.includes('DXF')) {
+    isDXFOrText = true;
+  }
+
+  // Extract all text strings from file buffer to search for Level Names & Annotations
+  const allExtractedStrings = extractStringsFromBuffer(bytes, 2);
+  // Match potential layer names from text (e.g., LEVEL_1, IZOHIPS, KOT, etc.)
+  allExtractedStrings.forEach((str) => {
+    // Check if string contains level assignment like "Level 1" or "Katman" or level table
+    const levelMatch = str.match(/Level\s*(\d+)/i) || str.match(/Katman\s*(\d+)/i);
+    if (levelMatch) {
+      const lvl = parseInt(levelMatch[1], 10);
+      if (lvl >= 0 && lvl <= 256) {
+        levelNamesMap.set(lvl, str);
+      }
+    }
+  });
+
+  // 2. Parse DXF / Text CAD Format if detected
+  if (isDXFOrText) {
+    const fullText = new TextDecoder('latin1').decode(bytes);
+    const lines = fullText.split(/\r?\n/);
+    
+    let currentSection = '';
+    let currentEntity = '';
+    let currentLayer = '0';
+    let currentPoints: { x: number; y: number; z: number }[] = [];
+    let currentText = '';
+    let elemIdx = 1;
+
+    for (let i = 0; i < lines.length - 1; i += 2) {
+      const code = parseInt(lines[i].trim(), 10);
+      const val = lines[i + 1] ? lines[i + 1].trim() : '';
+
+      if (code === 0) {
+        // Finalize previous entity
+        if (currentEntity && currentPoints.length > 0) {
+          const levelNum = Math.abs(currentLayer.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0)) % 63 + 1;
+          levelNamesMap.set(levelNum, currentLayer);
+          
+          let lType = determineLayerType(currentLayer, levelNum);
+          const layerId = `layer-${levelNum}`;
+
+          elements.push({
+            id: `cad-elem-${elemIdx++}`,
+            level: levelNum,
+            type: currentEntity === 'TEXT' || currentEntity === 'MTEXT' ? 'text' : currentPoints.length === 1 ? 'point' : 'linestring',
+            layerId,
+            points: currentPoints,
+            text: currentText || undefined,
+          });
+
+          const currL = levelMap.get(levelNum) || { count: 0, minZ: Infinity, maxZ: -Infinity, type: lType, name: currentLayer };
+          currL.count++;
+          currentPoints.forEach((p) => {
+            minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+            minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+            if (p.z < currL.minZ) currL.minZ = p.z;
+            if (p.z > currL.maxZ) currL.maxZ = p.z;
+          });
+          levelMap.set(levelNum, currL);
+        }
+
+        currentEntity = val;
+        currentPoints = [];
+        currentText = '';
+        if (val === 'SECTION') currentSection = '';
+      } else if (code === 2 && currentEntity === 'SECTION') {
+        currentSection = val;
+      } else if (code === 8) {
+        currentLayer = val;
+      } else if (code === 10) {
+        const px = parseFloat(val);
+        const py = parseFloat(lines[i + 3]?.trim() || '0');
+        const pz = parseFloat(lines[i + 5]?.trim() || '0');
+        if (!isNaN(px) && !isNaN(py)) {
+          currentPoints.push({ x: px, y: py, z: isNaN(pz) ? 0 : pz });
+        }
+      } else if (code === 1) {
+        currentText = val;
+      }
+    }
+  }
+
+  // 3. Parse MicroStation V7 (ISFF Binary)
+  if (elements.length === 0 && (isV7BinaryDgn || sizeBytes > 100)) {
     let offset = 0;
     let elemIdx = 1;
-    while (offset + 4 <= sizeBytes && parsedBinaryCount < 5000) {
+
+    while (offset + 4 <= sizeBytes) {
       const w0 = view.getUint16(offset, true);
       const isDeleted = (w0 & 0x8000) !== 0;
       const type = (w0 >> 8) & 0x7f;
@@ -105,61 +275,85 @@ export async function parseDGNFile(file: File): Promise<DGNParsedResult> {
       const elemSizeBytes = (lengthWords + 2) * 2;
 
       if (elemSizeBytes <= 4 || offset + elemSizeBytes > sizeBytes) {
-        break; // Corrupt length or EOF
+        break; // Corrupt record length or end of file
       }
 
       if (!isDeleted && type > 0) {
-        // Read coordinates if available in element body
-        const pts: { x: number; y: number; z: number }[] = [];
-        // Scan words for 32-bit integer or float coordinate pairs
-        if (elemSizeBytes >= 28) {
-          const numCoords = Math.min(Math.floor((elemSizeBytes - 16) / 8), 100);
-          for (let c = 0; c < numCoords; c++) {
-            const pOffset = offset + 16 + c * 8;
-            if (pOffset + 8 <= offset + elemSizeBytes) {
-              const rawX = view.getInt32(pOffset, true);
-              const rawY = view.getInt32(pOffset + 4, true);
-              // Scale UORs to world meters centered around standard coordinate origin
-              const px = (rawX / 1000) % 5000;
-              const py = (rawY / 1000) % 5000;
-              const pz = Math.abs((rawX + rawY) % 300) + 100;
-
-              if (!isNaN(px) && !isNaN(py)) {
-                pts.push({ x: px, y: py, z: pz });
-                minX = Math.min(minX, px);
-                maxX = Math.max(maxX, px);
-                minY = Math.min(minY, py);
-                maxY = Math.max(maxY, py);
-                minZ = Math.min(minZ, pz);
-                maxZ = Math.max(maxZ, pz);
-              }
+        // Type 5 or 66: Named Level / Group Data
+        if (type === 5 || type === 66) {
+          const rawText = extractStringsFromBuffer(bytes.subarray(offset + 4, offset + elemSizeBytes), 2);
+          if (rawText.length > 0) {
+            const layerName = rawText.join(' ');
+            if (layerName.length > 1 && !levelNamesMap.has(level)) {
+              levelNamesMap.set(level, layerName);
             }
           }
         }
 
-        if (pts.length > 0) {
-          let catType: CADLayer['type'] = 'contour_minor';
-          if (type === 3 || type === 4) catType = 'contour_major';
-          else if (type === 6) catType = 'buildings';
-          else if (type === 11 || type === 17) catType = 'elevation_points';
+        // Element Types with Coordinates: Line (3), LineString (4), Shape (6), PointString (11), Complex Chain (12/14), Arc (16), Text (17)
+        if ([3, 4, 6, 11, 12, 14, 15, 16, 17].includes(type)) {
+          const pts: { x: number; y: number; z: number }[] = [];
 
-          const layerId = `layer-${level}`;
-          elements.push({
-            id: `dgn-elem-${elemIdx++}`,
-            level,
-            type: type === 6 ? 'shape' : pts.length === 1 ? 'point' : 'linestring',
-            layerId,
-            points: pts,
-          });
+          // Scan element body for 32-bit integer or 64-bit double coordinates
+          const bodyOffset = offset + 16; // Skip ISFF element header
+          const bodyBytes = elemSizeBytes - 16;
 
-          const currentL = levelMap.get(level) || { count: 0, minZ: Infinity, maxZ: -Infinity, type: catType };
-          currentL.count++;
-          pts.forEach((pt) => {
-            if (pt.z < currentL.minZ) currentL.minZ = pt.z;
-            if (pt.z > currentL.maxZ) currentL.maxZ = pt.z;
-          });
-          levelMap.set(level, currentL);
-          parsedBinaryCount++;
+          if (bodyBytes >= 8) {
+            // Read 32-bit signed integer pairs/triplets (UORs)
+            const numInts = Math.floor(bodyBytes / 4);
+            const intCoords: number[] = [];
+            for (let k = 0; k < numInts; k++) {
+              intCoords.push(view.getInt32(bodyOffset + k * 4, true));
+            }
+
+            // Filter valid int32 coordinates (filter zero headers or huge outliers)
+            for (let k = 0; k < intCoords.length - 1; k += 2) {
+              const ix = intCoords[k];
+              const iy = intCoords[k + 1];
+              let iz = k + 2 < intCoords.length ? intCoords[k + 2] : 0;
+
+              // Check if valid coordinate values
+              if (Math.abs(ix) > 10 && Math.abs(iy) > 10 && Math.abs(ix) < 2e9 && Math.abs(iy) < 2e9) {
+                // Keep raw real coordinates
+                const rx = ix;
+                const ry = iy;
+                const rz = Math.abs(iz) < 1e7 ? iz : 0;
+
+                pts.push({ x: rx, y: ry, z: rz });
+                minX = Math.min(minX, rx); maxX = Math.max(maxX, rx);
+                minY = Math.min(minY, ry); maxY = Math.max(maxY, ry);
+                minZ = Math.min(minZ, rz); maxZ = Math.max(maxZ, rz);
+              }
+            }
+          }
+
+          if (pts.length > 0) {
+            const layerName = levelNamesMap.get(level) || `Katman ${level}`;
+            const catType = determineLayerType(layerName, level);
+            const layerId = `layer-${level}`;
+
+            elements.push({
+              id: `dgn-elem-${elemIdx++}`,
+              level,
+              type: type === 6 ? 'shape' : pts.length === 1 ? 'point' : 'linestring',
+              layerId,
+              points: pts,
+            });
+
+            const currentL = levelMap.get(level) || {
+              count: 0,
+              minZ: Infinity,
+              maxZ: -Infinity,
+              type: catType,
+              name: layerName,
+            };
+            currentL.count++;
+            pts.forEach((pt) => {
+              if (pt.z < currentL.minZ) currentL.minZ = pt.z;
+              if (pt.z > currentL.maxZ) currentL.maxZ = pt.z;
+            });
+            levelMap.set(level, currentL);
+          }
         }
       }
 
@@ -167,185 +361,112 @@ export async function parseDGNFile(file: File): Promise<DGNParsedResult> {
     }
   }
 
-  // If text file or binary parser returned few elements, extract deterministic features based on file content & hash
-  if (elements.length === 0) {
-    const textDecoder = new TextDecoder('utf-8');
-    const sampleText = textDecoder.decode(buffer.slice(0, Math.min(buffer.byteLength, 100000)));
-
-    // Generate hash from file name and size for consistent file reproduction
-    let hash = 0;
-    const strToHash = file.name + file.size + sampleText.slice(0, 1000);
-    for (let i = 0; i < strToHash.length; i++) {
-      hash = (hash << 5) - hash + strToHash.charCodeAt(i);
-      hash |= 0;
-    }
-    const pseudoRandom = (seed: number) => {
-      const x = Math.sin(seed++) * 10000;
-      return x - Math.floor(x);
-    };
-
-    // Synthesize 4 distinct CAD layers derived from uploaded DGN file
-    const numLevels = 4 + (Math.abs(hash) % 4); // 4 to 7 layers
-    const layerNames = [
-      'İzohips Eğrileri (Ana Katman)',
-      'Ara İzohips & Kot Eğrileri',
-      'Nirengi & Poligon Noktaları (Z)',
-      'Su Yolu & Akarsu Yatağı',
-      'Saha Yapı & Parsel Sınırları',
-      'Proje Çalışma Sınırı',
-      'Kadastro & Altyapı Çizgileri',
-    ];
-
-    const layerTypes: CADLayer['type'][] = [
-      'contour_major',
-      'contour_minor',
-      'elevation_points',
-      'water',
-      'buildings',
-      'boundary',
-      'other',
-    ];
-
+  // 4. MicroStation V8 Stream or General Binary Reader Fallback
+  if (elements.length === 0 && (isV8BinaryDgn || sizeBytes > 0)) {
+    // Scan float64 / double arrays or integer coordinates across binary chunks
     let elemIdx = 1;
-    const baseZ = 120 + (Math.abs(hash) % 200);
+    const chunkSize = 8;
+    const numDoubles = Math.floor(sizeBytes / chunkSize);
 
-    for (let l = 0; l < numLevels; l++) {
-      const levelNum = l + 1;
-      const layerId = `layer-${levelNum}`;
-      const lType = layerTypes[l % layerTypes.length];
-      const name = `${layerNames[l % layerNames.length]} (Level ${levelNum})`;
-      let layerElemCount = 0;
-      let lMinZ = Infinity;
-      let lMaxZ = -Infinity;
+    const validPoints: { x: number; y: number; z: number; level: number }[] = [];
 
-      if (lType === 'contour_major' || lType === 'contour_minor') {
-        const numLines = lType === 'contour_major' ? 8 : 16;
-        for (let i = 0; i < numLines; i++) {
-          const zVal = baseZ + i * (lType === 'contour_major' ? 10 : 2);
-          const pts: { x: number; y: number; z: number }[] = [];
-          const centerOffsetX = (pseudoRandom(hash + i + l * 10) - 0.5) * 100;
-          const centerOffsetY = (pseudoRandom(hash + i * 2 + l * 10) - 0.5) * 100;
-          const radius = 80 + i * 22;
+    for (let i = 0; i < numDoubles - 2; i += 2) {
+      try {
+        const d1 = view.getFloat64(i * 8, true);
+        const d2 = view.getFloat64((i + 1) * 8, true);
+        const d3 = view.getFloat64((i + 2) * 8, true);
 
-          for (let angle = 0; angle <= Math.PI * 2 + 0.1; angle += 0.25) {
-            const noise = Math.sin(angle * 3 + i) * 18 + Math.cos(angle * 4) * 10;
-            const r = radius + noise;
-            const x = Math.round(centerOffsetX + Math.cos(angle) * r);
-            const y = Math.round(centerOffsetY + Math.sin(angle) * r * 0.75);
+        // Check if d1, d2 are valid spatial coordinates (not NaN, not Infinity, plausible CAD values)
+        if (!isNaN(d1) && !isNaN(d2) && isFinite(d1) && isFinite(d2) && Math.abs(d1) > 0.1 && Math.abs(d2) > 0.1 && Math.abs(d1) < 1e8 && Math.abs(d2) < 1e8) {
+          const zVal = (!isNaN(d3) && isFinite(d3) && Math.abs(d3) < 1e5) ? d3 : 0;
+          const assignedLevel = (Math.abs(Math.floor(d1)) % 10) + 1;
+          validPoints.push({ x: d1, y: d2, z: zVal, level: assignedLevel });
+        }
+      } catch {
+        // Ignore binary read out-of-bounds
+      }
+    }
 
-            pts.push({ x, y, z: zVal });
-            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-            minZ = Math.min(minZ, zVal); maxZ = Math.max(maxZ, zVal);
+    // Group valid points into linestrings or points
+    if (validPoints.length > 0) {
+      let currentPts: { x: number; y: number; z: number }[] = [];
+      let currentLvl = validPoints[0].level;
+
+      for (let p = 0; p < validPoints.length; p++) {
+        const pt = validPoints[p];
+        if (currentPts.length === 0 || pt.level === currentLvl) {
+          currentPts.push({ x: pt.x, y: pt.y, z: pt.z });
+          minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x);
+          minY = Math.min(minY, pt.y); maxY = Math.max(maxY, pt.y);
+          minZ = Math.min(minZ, pt.z); maxZ = Math.max(maxZ, pt.z);
+        } else {
+          if (currentPts.length > 0) {
+            const layerName = levelNamesMap.get(currentLvl) || `Katman ${currentLvl}`;
+            const catType = determineLayerType(layerName, currentLvl);
+            const layerId = `layer-${currentLvl}`;
+
+            elements.push({
+              id: `dgn-elem-${elemIdx++}`,
+              level: currentLvl,
+              type: currentPts.length === 1 ? 'point' : 'linestring',
+              layerId,
+              points: currentPts,
+            });
+
+            const currentL = levelMap.get(currentLvl) || {
+              count: 0,
+              minZ: Infinity,
+              maxZ: -Infinity,
+              type: catType,
+              name: layerName,
+            };
+            currentL.count++;
+            currentPts.forEach((ptItem) => {
+              if (ptItem.z < currentL.minZ) currentL.minZ = ptItem.z;
+              if (ptItem.z > currentL.maxZ) currentL.maxZ = ptItem.z;
+            });
+            levelMap.set(currentLvl, currentL);
           }
-
-          elements.push({
-            id: `dgn-elem-${elemIdx++}`,
-            level: levelNum,
-            type: 'linestring',
-            layerId,
-            points: pts,
-          });
-          layerElemCount++;
-          lMinZ = Math.min(lMinZ, zVal);
-          lMaxZ = Math.max(lMaxZ, zVal);
-        }
-      } else if (lType === 'elevation_points') {
-        const numPts = 15 + (Math.abs(hash) % 20);
-        for (let p = 0; p < numPts; p++) {
-          const px = Math.round((pseudoRandom(hash + p * 7) - 0.5) * 500);
-          const py = Math.round((pseudoRandom(hash + p * 13) - 0.5) * 350);
-          const pz = Math.round((baseZ + pseudoRandom(hash + p * 19) * 150) * 10) / 10;
-          elements.push({
-            id: `dgn-elem-${elemIdx++}`,
-            level: levelNum,
-            type: 'point',
-            layerId,
-            points: [{ x: px, y: py, z: pz }],
-            text: `${pz}m`,
-          });
-          layerElemCount++;
-          minX = Math.min(minX, px); maxX = Math.max(maxX, px);
-          minY = Math.min(minY, py); maxY = Math.max(maxY, py);
-          minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz);
-          lMinZ = Math.min(lMinZ, pz);
-          lMaxZ = Math.max(lMaxZ, pz);
-        }
-      } else if (lType === 'water') {
-        const pts: { x: number; y: number; z: number }[] = [];
-        const startX = -280;
-        const startY = -200;
-        for (let s = 0; s <= 10; s++) {
-          const t = s / 10;
-          const px = Math.round(startX + t * 520 + Math.sin(t * Math.PI * 3) * 40);
-          const py = Math.round(startY + t * 440 + Math.cos(t * Math.PI * 2) * 30);
-          const pz = Math.round(baseZ - 10 + t * 20);
-          pts.push({ x: px, y: py, z: pz });
-          minX = Math.min(minX, px); maxX = Math.max(maxX, px);
-          minY = Math.min(minY, py); maxY = Math.max(maxY, py);
-          minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz);
-          lMinZ = Math.min(lMinZ, pz);
-          lMaxZ = Math.max(lMaxZ, pz);
-        }
-        elements.push({
-          id: `dgn-elem-${elemIdx++}`,
-          level: levelNum,
-          type: 'linestring',
-          layerId,
-          points: pts,
-        });
-        layerElemCount++;
-      } else {
-        // Buildings / Boundaries
-        const numShapes = 4 + (Math.abs(hash) % 4);
-        for (let sh = 0; sh < numShapes; sh++) {
-          const bx = Math.round((pseudoRandom(hash + sh * 11) - 0.5) * 400);
-          const by = Math.round((pseudoRandom(hash + sh * 17) - 0.5) * 300);
-          const bw = 30 + Math.round(pseudoRandom(hash + sh * 23) * 40);
-          const bh = 20 + Math.round(pseudoRandom(hash + sh * 29) * 30);
-          const bz = Math.round(baseZ + 20 + sh * 5);
-
-          const shapePts = [
-            { x: bx, y: by, z: bz },
-            { x: bx + bw, y: by, z: bz },
-            { x: bx + bw, y: by + bh, z: bz },
-            { x: bx, y: by + bh, z: bz },
-            { x: bx, y: by, z: bz },
-          ];
-          elements.push({
-            id: `dgn-elem-${elemIdx++}`,
-            level: levelNum,
-            type: 'shape',
-            layerId,
-            points: shapePts,
-          });
-          layerElemCount++;
-          minX = Math.min(minX, bx); maxX = Math.max(maxX, bx + bw);
-          minY = Math.min(minY, by); maxY = Math.max(maxY, by + bh);
-          minZ = Math.min(minZ, bz); maxZ = Math.max(maxZ, bz);
-          lMinZ = Math.min(lMinZ, bz);
-          lMaxZ = Math.max(lMaxZ, bz);
+          currentPts = [{ x: pt.x, y: pt.y, z: pt.z }];
+          currentLvl = pt.level;
         }
       }
 
-      levelMap.set(levelNum, {
-        count: layerElemCount,
-        minZ: lMinZ === Infinity ? baseZ : lMinZ,
-        maxZ: lMaxZ === -Infinity ? baseZ + 100 : lMaxZ,
-        type: lType,
-        name,
-      });
+      if (currentPts.length > 0) {
+        const layerName = levelNamesMap.get(currentLvl) || `Katman ${currentLvl}`;
+        const catType = determineLayerType(layerName, currentLvl);
+        const layerId = `layer-${currentLvl}`;
+
+        elements.push({
+          id: `dgn-elem-${elemIdx++}`,
+          level: currentLvl,
+          type: currentPts.length === 1 ? 'point' : 'linestring',
+          layerId,
+          points: currentPts,
+        });
+
+        const currentL = levelMap.get(currentLvl) || {
+          count: 0,
+          minZ: Infinity,
+          maxZ: -Infinity,
+          type: catType,
+          name: layerName,
+        };
+        currentL.count++;
+        levelMap.set(currentLvl, currentL);
+      }
     }
   }
 
-  // Construct final CADLayers
+  // 5. Construct Final CAD Layers
   const layers: CADLayer[] = Array.from(levelMap.entries()).map(([level, info], idx) => {
+    const finalName = info.name || levelNamesMap.get(level) || `Katman ${level}`;
     return {
       id: `layer-${level}`,
       level,
-      name: info.name || `Katman ${level} (Level ${level})`,
+      name: finalName,
       color: LAYER_COLORS[idx % LAYER_COLORS.length],
-      type: info.type,
+      type: info.type || determineLayerType(finalName, level),
       visible: true,
       count: info.count,
       minZ: info.minZ === Infinity ? 0 : info.minZ,
@@ -353,18 +474,21 @@ export async function parseDGNFile(file: File): Promise<DGNParsedResult> {
     };
   });
 
-  // Default bounds fallback
-  if (minX === Infinity) {
-    minX = -300; maxX = 300;
-    minY = -250; maxY = 250;
-    minZ = 100; maxZ = 350;
+  // Default bounds fallback if no coordinates were read at all
+  if (minX === Infinity || isNaN(minX)) {
+    minX = 0; maxX = 100;
+    minY = 0; maxY = 100;
+    minZ = 0; maxZ = 50;
   }
 
-  const formatStr = isV8BinaryDgn
-    ? 'MicroStation V8 DGN (Binary OLE Stream)'
+  // Format String
+  const formatStr = isDXFOrText
+    ? 'AutoCAD / Text CAD Format (.dxf)'
+    : isV8BinaryDgn
+    ? 'MicroStation V8 DGN (OLE Binary Stream)'
     : isV7BinaryDgn
-    ? 'MicroStation V7 DGN (ISFF Vektör)'
-    : 'MicroStation DGN (Vektör CAD Modeli)';
+    ? 'MicroStation V7 DGN (ISFF Binary)'
+    : 'MicroStation DGN CAD File';
 
   return {
     fileName: file.name,

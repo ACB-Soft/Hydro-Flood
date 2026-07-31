@@ -8,6 +8,7 @@ interface DashboardProps {
   onOpenSettings: () => void;
   onOpenDGNViewer: () => void;
   onOpenDGNConverter: () => void;
+  onOpenDWGAnalysis: () => void;
   isSimulating?: boolean;
   progress?: number;
 }
@@ -18,6 +19,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   onOpenSettings,
   onOpenDGNViewer,
   onOpenDGNConverter,
+  onOpenDWGAnalysis,
   isSimulating,
   progress,
 }) => {
@@ -106,32 +108,58 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </motion.button>
 
-        {/* DGN CAD & Map Tools Section */}
-        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider pt-4">DGN Harita & CAD Araçları</h2>
+        {/* CAD & Harita Dosya Analizleri Section */}
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider pt-4">CAD & Harita Dosya Analizleri</h2>
         
-        <motion.button
-          whileHover={{ md: { x: 8, scale: 1.01 } }}
-          whileTap={{ scale: 0.99 }}
-          onClick={onOpenDGNViewer}
-          className="group relative glass rounded-2xl md:rounded-[2rem] p-6 text-left overflow-hidden border border-white/10 hover:border-cyan-500/30 transition-all duration-300 shadow-lg w-full flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6"
-        >
-          <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/5 blur-[80px] -mr-24 -mt-24 group-hover:bg-cyan-500/15 transition-all duration-700" />
-          
-          <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full">
-            <div className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-cyan-500/10 to-indigo-500/10 rounded-xl border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:bg-cyan-500/20 transition-colors shrink-0">
-              <Globe className="text-cyan-400 w-6 h-6 sm:w-7 sm:h-7" />
+        <div className="space-y-4">
+          <motion.button
+            whileHover={{ md: { x: 8, scale: 1.01 } }}
+            whileTap={{ scale: 0.99 }}
+            onClick={onOpenDGNViewer}
+            className="group relative glass rounded-2xl md:rounded-[2rem] p-6 text-left overflow-hidden border border-white/10 hover:border-cyan-500/30 transition-all duration-300 shadow-lg w-full flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6"
+          >
+            <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/5 blur-[80px] -mr-24 -mt-24 group-hover:bg-cyan-500/15 transition-all duration-700" />
+            
+            <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full">
+              <div className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-cyan-500/10 to-indigo-500/10 rounded-xl border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:bg-cyan-500/20 transition-colors shrink-0">
+                <Globe className="text-cyan-400 w-6 h-6 sm:w-7 sm:h-7" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-white text-base sm:text-lg group-hover:text-cyan-400 transition-colors flex items-center gap-1.5">
+                  DGN Dosya Analizleri & DEM Üretici
+                  <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-2xl">
+                  MicroStation (.dgn) CAD haritalarınızı doğrudan görüntüleyin, katmanlarını inceleyin ve eş yükseklik eğrilerinden Sayısal Yükseklik Modeli (DEM) üretin.
+                </p>
+              </div>
             </div>
-            <div className="space-y-1">
-              <h3 className="font-bold text-white text-base sm:text-lg group-hover:text-cyan-400 transition-colors flex items-center gap-1.5">
-                DGN Dosya Analizleri & DEM Üretici
-                <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </h3>
-              <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-2xl">
-                MicroStation (.dgn) CAD haritalarınızı doğrudan görüntüleyin, katmanlarını inceleyin ve eş yükseklik eğrilerinden Sayısal Yükseklik Modeli (DEM) üretin.
-              </p>
+          </motion.button>
+
+          <motion.button
+            whileHover={{ md: { x: 8, scale: 1.01 } }}
+            whileTap={{ scale: 0.99 }}
+            onClick={onOpenDWGAnalysis}
+            className="group relative glass rounded-2xl md:rounded-[2rem] p-6 text-left overflow-hidden border border-white/10 hover:border-amber-500/30 transition-all duration-300 shadow-lg w-full flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6"
+          >
+            <div className="absolute top-0 right-0 w-48 h-48 bg-amber-500/5 blur-[80px] -mr-24 -mt-24 group-hover:bg-amber-500/15 transition-all duration-700" />
+            
+            <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full">
+              <div className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-amber-500/10 to-orange-500/10 rounded-xl border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:bg-amber-500/20 transition-colors shrink-0">
+                <FileCode className="text-amber-400 w-6 h-6 sm:w-7 sm:h-7" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-white text-base sm:text-lg group-hover:text-amber-400 transition-colors flex items-center gap-1.5">
+                  DWG Dosya Analizleri
+                  <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-2xl">
+                  AutoCAD (.dwg) formatındaki çizimlerinizi görüntülemek, katman filtrelemesi yapmak ve yükseklik verilerini analiz etmek için hazırlanan modül.
+                </p>
+              </div>
             </div>
-          </div>
-        </motion.button>
+          </motion.button>
+        </div>
       </div>
     </motion.div>
   );
