@@ -864,17 +864,6 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
                       </button>
                     </div>
 
-                    {/* iTwin Integration Launcher */}
-                    <button
-                      onClick={() => setShowITwinModal(true)}
-                      className="px-3 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-300 hover:text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-sm"
-                    >
-                      <Globe size={14} className="animate-spin text-indigo-400 [animation-duration:8s]" />
-                      <span>iTwin Bağlantısı</span>
-                    </button>
-
-                    <div className="h-6 w-px bg-slate-800 hidden sm:block" />
-
                     <button
                       onClick={() => setZoom((z) => Math.min(z + 0.25, 4))}
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
