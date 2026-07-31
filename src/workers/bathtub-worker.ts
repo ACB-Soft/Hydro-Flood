@@ -71,15 +71,6 @@ self.onmessage = function(e) {
   }
 }
 
-// If areaMask is provided, clip bathtubDepth to the study area mask
-if (areaMask && areaMask.length === bathtubDepth.length) {
-  for (let i = 0; i < bathtubDepth.length; i++) {
-    if (areaMask[i] === 0) {
-      bathtubDepth[i] = 0;
-    }
-  }
-}
-
 self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
 };
 
