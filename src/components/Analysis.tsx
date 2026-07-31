@@ -17,7 +17,8 @@ import {
   Sliders,
   Check,
   Compass,
-  Layers
+  Layers,
+  ChevronDown
 } from 'lucide-react';
 import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon } from 'react-leaflet';
 import { MapAutoCenter, MapClickHandler } from './MapHelpers';
@@ -370,42 +371,78 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     </div>
                     <div>
                       <h2 className="font-bold text-white text-base">2. Koordinat Sistemi (CRS)</h2>
-                      <p className="text-xs text-slate-400">Proje referans sistemi</p>
+                      <p className="text-xs text-slate-400">Proje referans coğrafi / projeksiyon sistemi</p>
                     </div>
                   </div>
-                  <span className="px-2.5 py-1 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-full text-[11px] font-bold truncate max-w-[120px]">
+                  <span className="px-2.5 py-1 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-full text-[11px] font-bold shrink-0">
                     {selectedCRS.code}
                   </span>
                 </div>
 
-                <div className="space-y-2.5">
-                  <input
-                    type="text"
-                    placeholder="Kod veya isim ara... Örn: WGS, TUREF, UTM, 5254"
-                    value={crsSearch}
-                    onChange={(e) => setCrsSearch(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
-                  />
-
-                  <div className="grid grid-cols-1 gap-1.5 max-h-[140px] overflow-y-auto pr-1 custom-scrollbar">
-                    {filteredCRSList.map((crs) => (
-                      <button
-                        key={crs.name}
-                        onClick={() => setSelectedCRS(crs)}
-                        className={`p-2 rounded-xl border text-left transition-all flex items-center justify-between ${
-                          selectedCRS.name === crs.name
-                            ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300 font-bold'
-                            : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'
-                        }`}
-                      >
-                        <div className="overflow-hidden">
-                          <p className="text-xs truncate">{crs.name}</p>
-                          <p className="text-[10px] text-slate-500 font-mono truncate">{crs.code}</p>
-                        </div>
-                        {selectedCRS.name === crs.name && <Check size={14} className="text-cyan-400 shrink-0 ml-1" />}
-                      </button>
-                    ))}
+                <div className="space-y-2">
+                  <div className="relative">
+                    <select
+                      value={selectedCRS.code}
+                      onChange={(e) => {
+                        const found = CRS_LIST.find(c => c.code === e.target.value);
+                        if (found) setSelectedCRS(found);
+                      }}
+                      className="w-full bg-slate-900/90 border border-white/20 rounded-xl px-3.5 py-3 text-xs font-semibold text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 appearance-none cursor-pointer transition-all pr-10 shadow-lg"
+                    >
+                      <optgroup label="TUREF / TM (3° - Türkiye)">
+                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="ED50 / TM (3° - Türkiye)">
+                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
+                        {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
+                        {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Global & Standartlar">
+                        {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Diğer Uluslararası Sistemler">
+                        {CRS_LIST.filter(c => 
+                          !c.code.startsWith('EPSG:525') &&
+                          !c.code.startsWith('EPSG:522') &&
+                          !['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638', 'EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038', 'EPSG:4326', 'EPSG:3857'].includes(c.code)
+                        ).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400">
+                      <ChevronDown size={16} />
+                    </div>
                   </div>
+                  <p className="text-[11px] text-slate-400 leading-tight">
+                    Seçili Sistem: <span className="text-cyan-300 font-medium">{selectedCRS.name}</span>
+                  </p>
                 </div>
               </section>
 
