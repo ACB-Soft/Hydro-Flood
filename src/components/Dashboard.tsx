@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Droplets, Layers, ChevronRight, Settings, HelpCircle, Eye, FileCode } from 'lucide-react';
+import { Droplets, Layers, ChevronRight, Settings, HelpCircle, Eye, FileCode, Globe } from 'lucide-react';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
@@ -109,47 +109,29 @@ const Dashboard: React.FC<DashboardProps> = ({
         {/* DGN CAD & Map Tools Section */}
         <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider pt-4">DGN Harita & CAD Araçları</h2>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            onClick={onOpenDGNViewer}
-            className="group glass rounded-2xl p-5 text-left border border-white/10 hover:border-cyan-500/30 transition-all shadow-lg flex items-start gap-4"
-          >
-            <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl text-cyan-400 group-hover:bg-cyan-500/20 transition-colors">
-              <Eye size={24} />
+        <motion.button
+          whileHover={{ md: { x: 8, scale: 1.01 } }}
+          whileTap={{ scale: 0.99 }}
+          onClick={onOpenDGNViewer}
+          className="group relative glass rounded-2xl md:rounded-[2rem] p-6 text-left overflow-hidden border border-white/10 hover:border-cyan-500/30 transition-all duration-300 shadow-lg w-full flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6"
+        >
+          <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/5 blur-[80px] -mr-24 -mt-24 group-hover:bg-cyan-500/15 transition-all duration-700" />
+          
+          <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full">
+            <div className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-cyan-500/10 to-indigo-500/10 rounded-xl border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:bg-cyan-500/20 transition-colors shrink-0">
+              <Globe className="text-cyan-400 w-6 h-6 sm:w-7 sm:h-7" />
             </div>
             <div className="space-y-1">
-              <h3 className="font-bold text-white text-base group-hover:text-cyan-400 transition-colors flex items-center gap-1.5">
-                DGN Dosya Görüntüleyici
-                <ChevronRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+              <h3 className="font-bold text-white text-base sm:text-lg group-hover:text-cyan-400 transition-colors flex items-center gap-1.5">
+                DGN Dosya Analizleri & DEM Üretici
+                <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity" />
               </h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                MicroStation (.dgn) formatındaki CAD haritalarınızı doğrudan görüntüleyin ve katmanlarını inceleyin.
+              <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-2xl">
+                MicroStation (.dgn) CAD haritalarınızı doğrudan görüntüleyin, katmanlarını inceleyin ve eş yükseklik eğrilerinden Sayısal Yükseklik Modeli (DEM) üretin.
               </p>
             </div>
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            onClick={onOpenDGNConverter}
-            className="group glass rounded-2xl p-5 text-left border border-white/10 hover:border-indigo-500/30 transition-all shadow-lg flex items-start gap-4"
-          >
-            <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400 group-hover:bg-indigo-500/20 transition-colors">
-              <FileCode size={24} />
-            </div>
-            <div className="space-y-1">
-              <h3 className="font-bold text-white text-base group-hover:text-indigo-400 transition-colors flex items-center gap-1.5">
-                DGN → DEM Dönüştürücü
-                <ChevronRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                DGN haritalarındaki eş yükseklik eğrileri ve kot noktalarından Sayısal Yükseklik Modeli (DEM) üretin.
-              </p>
-            </div>
-          </motion.button>
-        </div>
+          </div>
+        </motion.button>
       </div>
     </motion.div>
   );

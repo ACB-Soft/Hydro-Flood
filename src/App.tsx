@@ -15,12 +15,13 @@ import 'leaflet/dist/leaflet.css';
 import Dashboard from './components/Dashboard';
 import Analysis from './components/Analysis';
 import About from './components/About';
-import DGNViewer from './components/DGNViewer';
-import DGNConverter from './components/DGNConverter';
+import DGNAnalysis from './components/DGNAnalysis';
+import { DGNParsedResult } from './utils/dgnParser';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
 import Header from './components/Header';
 import Settings from './components/Settings';
+import ITwinWorkspace from './components/ITwinWorkspace';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -127,7 +128,8 @@ export default function App() {
     },
   });
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-viewer' | 'dgn-converter'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis'>('dashboard');
+  const [dgnSubTab, setDgnSubTab] = useState<'viewer' | 'converter'>('viewer');
   const [currentStep, setCurrentStep] = useState(1);
   const [dem, setDem] = useState<DEMData | null>(null);
   const [params, setParams] = useState({
@@ -1347,7 +1349,13 @@ ${floodPolygons.join('\n')}
     };
   };
 
+  const [sharedDgnData, setSharedDgnData] = useState<DGNParsedResult | null>(null);
   const stats = React.useMemo(() => calculateStats(), [waterDepth, coords.cellSize]);
+
+  const isStandaloneITwin = window.location.search.includes('itwin=true');
+  if (isStandaloneITwin) {
+    return <ITwinWorkspace />;
+  }
 
   return (
     <div className="h-screen h-[100dvh] w-screen overflow-hidden flex flex-col bg-slate-950 text-slate-100 selection:bg-blue-500/30 selection:text-white">
@@ -1496,8 +1504,14 @@ ${floodPolygons.join('\n')}
               }}
               onOpenAbout={() => setActiveTab('about')}
               onOpenSettings={() => setActiveTab('settings')}
-              onOpenDGNViewer={() => setActiveTab('dgn-viewer')}
-              onOpenDGNConverter={() => setActiveTab('dgn-converter')}
+              onOpenDGNViewer={() => {
+                setDgnSubTab('viewer');
+                setActiveTab('dgn-analysis');
+              }}
+              onOpenDGNConverter={() => {
+                setDgnSubTab('converter');
+                setActiveTab('dgn-analysis');
+              }}
               isSimulating={isSimulating}
               progress={progress}
             />
@@ -1528,11 +1542,12 @@ ${floodPolygons.join('\n')}
           {activeTab === 'about' && (
             <About />
           )}
-          {activeTab === 'dgn-viewer' && (
-            <DGNViewer onNavigateToConverter={() => setActiveTab('dgn-converter')} />
-          )}
-          {activeTab === 'dgn-converter' && (
-            <DGNConverter />
+          {activeTab === 'dgn-analysis' && (
+            <DGNAnalysis
+              dgnData={sharedDgnData}
+              onUpdateDGNData={setSharedDgnData}
+              initialSubTab={dgnSubTab}
+            />
           )}
         </AnimatePresence>
       </main>
