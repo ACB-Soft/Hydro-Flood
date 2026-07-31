@@ -1,17 +1,28 @@
 /**
  * Bathtub Flood Simulation Web Worker
- * Handles static water level calculations
+ * Handles static water level calculations strictly within valid DEM data boundaries.
  */
 
 self.onmessage = function(e) {
-  const { dem, width, height, params } = e.data;
+  const { dem, width, height, areaMask, params } = e.data;
   const { sourceX, sourceY, waterLevel } = params;
   
   const bathtubDepth = new Float32Array(width * height).fill(0);
   const visited = new Uint8Array(width * height);
   
   const startIdx = sourceY * width + sourceX;
-  const targetElevation = dem[startIdx] + waterLevel;
+  if (startIdx < 0 || startIdx >= width * height) {
+    self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
+    return;
+  }
+
+  const sourceElev = dem[startIdx];
+  if (isNaN(sourceElev) || sourceElev <= -9000) {
+    self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
+    return;
+  }
+
+  const targetElevation = sourceElev + waterLevel;
   
   const queue = [startIdx];
   visited[startIdx] = 1;
@@ -21,8 +32,12 @@ self.onmessage = function(e) {
     const idx = queue[head++];
     const x = idx % width;
     const y = Math.floor(idx / width);
+
+    const cellElev = dem[idx];
+    if (isNaN(cellElev) || cellElev <= -9000) continue;
     
-    bathtubDepth[idx] = Math.max(0, targetElevation - dem[idx]);
+    // Calculate water depth for current cell
+    bathtubDepth[idx] = Math.max(0, targetElevation - cellElev);
     
     // Check 4 neighbors
     const neighbors = [
@@ -35,7 +50,17 @@ self.onmessage = function(e) {
     for (const { nx, ny } of neighbors) {
       if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
         const nIdx = ny * width + nx;
-        if (!visited[nIdx] && dem[nIdx] <= targetElevation) {
+
+        // Strict boundary validation:
+        // 1. Must not be visited
+        // 2. Must be a valid DEM cell (not NoData, NaN, or <= -9000)
+        // 3. Must be within areaMask if areaMask is provided
+        // 4. Terrain elevation must be <= targetElevation
+        const nElev = dem[nIdx];
+        const isValidCell = !isNaN(nElev) && nElev > -9000;
+        const isAllowedByMask = !areaMask || areaMask[nIdx] !== 0;
+
+        if (!visited[nIdx] && isValidCell && isAllowedByMask && nElev <= targetElevation) {
           visited[nIdx] = 1;
           queue.push(nIdx);
         }
@@ -50,3 +75,4 @@ self.onmessage = function(e) {
   
   self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
 };
+

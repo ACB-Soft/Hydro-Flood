@@ -205,17 +205,30 @@ export default function App() {
             const i = y * width + x;
             const idx = i * 4;
             
+            const cellVal = data[i];
+            if (isNaN(cellVal) || cellVal <= -9000) {
+              d[idx] = 0;
+              d[idx + 1] = 0;
+              d[idx + 2] = 0;
+              d[idx + 3] = 0;
+              continue;
+            }
+
             // 1. Calculate Hillshade using Horn's method (3x3)
             let hillshade = 1.0;
             if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
-              const a = data[(y - 1) * width + (x - 1)];
-              const b = data[(y - 1) * width + x];
-              const c = data[(y - 1) * width + (x + 1)];
-              const d_val = data[y * width + (x - 1)];
-              const f = data[y * width + (x + 1)];
-              const g = data[(y + 1) * width + (x - 1)];
-              const h = data[(y + 1) * width + x];
-              const k = data[(y + 1) * width + (x + 1)];
+              const getSafe = (index: number) => {
+                const v = data[index];
+                return (!isNaN(v) && v > -9000) ? v : cellVal;
+              };
+              const a = getSafe((y - 1) * width + (x - 1));
+              const b = getSafe((y - 1) * width + x);
+              const c = getSafe((y - 1) * width + (x + 1));
+              const d_val = getSafe(y * width + (x - 1));
+              const f = getSafe(y * width + (x + 1));
+              const g = getSafe((y + 1) * width + (x - 1));
+              const h = getSafe((y + 1) * width + x);
+              const k = getSafe((y + 1) * width + (x + 1));
 
               const dz_dx = ((c + 2 * f + k) - (a + 2 * d_val + g)) / (8 * cellSize);
               const dz_dy = ((g + 2 * h + k) - (a + 2 * b + c)) / (8 * cellSize);
@@ -236,16 +249,17 @@ export default function App() {
             }
 
             // 2. Calculate Color (Terrain / Hypsometric Tinting)
-            const val = Math.max(0, Math.min(1, (data[i] - dem.min) / (dem.max - dem.min)));
+            const range = Math.max(0.001, dem.max - dem.min);
+            const val = Math.max(0, Math.min(1, (cellVal - dem.min) / range));
             
-            // Terrain Color Stops (R, G, B) - More Vibrant
+            // Terrain Color Stops (R, G, B)
             const stops = [
-              { pos: 0.0, color: [20, 120, 20] },   // Canlı Koyu Yeşil
-              { pos: 0.2, color: [80, 180, 80] },   // Canlı Yeşil
-              { pos: 0.4, color: [230, 230, 120] }, // Parlak Sarı/Yeşil
-              { pos: 0.6, color: [200, 150, 80] },  // Parlak Turuncu/Kahve
-              { pos: 0.8, color: [140, 70, 30] },   // Canlı Koyu Kahve
-              { pos: 1.0, color: [255, 255, 255] }  // Saf Beyaz
+              { pos: 0.0, color: [20, 120, 20] },
+              { pos: 0.2, color: [80, 180, 80] },
+              { pos: 0.4, color: [230, 230, 120] },
+              { pos: 0.6, color: [200, 150, 80] },
+              { pos: 0.8, color: [140, 70, 30] },
+              { pos: 1.0, color: [255, 255, 255] }
             ];
 
             let r = 255, g_col = 255, b_col = 255;
@@ -262,7 +276,6 @@ export default function App() {
             }
 
             // 3. Blend Color with Hillshade
-            // Optimized factor for more vibrancy: 0.6 (min) to 1.1 (max)
             const factor = 0.6 + (hillshade * 0.5); 
             d[idx] = Math.min(255, r * factor);
             d[idx + 1] = Math.min(255, g_col * factor);
@@ -375,10 +388,12 @@ export default function App() {
         const d = imageData.data;
         for (let i = 0; i < waterDepth.length; i++) {
           const idx = i * 4;
-          if (waterDepth[i] > 0.01) {
+          const isDemValid = !isNaN(dem.data[i]) && dem.data[i] > -9000;
+          const isMaskValid = !areaMask || areaMask[i] !== 0;
+          if (waterDepth[i] > 0.01 && isDemValid && isMaskValid) {
             const wVal = Math.min(1, waterDepth[i] / 2);
             d[idx] = 0;
-            d[idx + 1] = 100 * (1 - wVal);
+            d[idx + 1] = Math.round(100 * (1 - wVal));
             d[idx + 2] = 255;
             d[idx + 3] = 180;
           } else {
@@ -730,13 +745,26 @@ export default function App() {
       const res = image.getResolution();
       const cellSize = res ? Math.abs(res[0]) : 10;
       
+      const noDataVal = image.getGDALNoData() ?? -9999;
       let min = Infinity, max = -Infinity;
+      let validSum = 0, validCount = 0;
       const floatData = new Float32Array(width * height);
       for (let i = 0; i < data.length; i++) {
         const val = data[i];
-        floatData[i] = val;
-        if (val < min && val > -999) min = val;
-        if (val > max) max = val;
+        if (isNaN(val) || val <= -9000 || val === noDataVal) {
+          floatData[i] = NaN;
+        } else {
+          floatData[i] = val;
+          if (val < min) min = val;
+          if (val > max) max = val;
+          validSum += val;
+          validCount++;
+        }
+      }
+
+      if (validCount === 0) {
+        min = 0;
+        max = 1;
       }
 
       // Calculate lower-left corner for consistency
@@ -775,7 +803,7 @@ export default function App() {
       setValidationReport({
         minHeight: min,
         maxHeight: max,
-        avgHeight: floatData.reduce((a, b) => a + b, 0) / floatData.length,
+        avgHeight: validCount > 0 ? validSum / validCount : 0,
         maxSlope: slopeInfo.maxSlope,
         avgSlope: slopeInfo.avgSlope,
         isValid: max > min && cellSize > 0
@@ -820,7 +848,7 @@ export default function App() {
 
     const data = new Float32Array(width * height);
     let min = Infinity, max = -Infinity;
-    let currentIdx = 0;
+    let validSum = 0, validCount = 0;
 
     // First pass: find min/max and identify NoData
     for (let i = dataStartLine; i < lines.length; i++) {
@@ -828,24 +856,31 @@ export default function App() {
       for (const valStr of rowValues) {
         if (valStr === '') continue;
         const val = parseFloat(valStr);
-        if (val !== nodata && !isNaN(val)) {
+        if (val !== nodata && !isNaN(val) && val > -9000) {
           if (val < min) min = val;
           if (val > max) max = val;
         }
       }
     }
 
-    // Second pass: fill data, replacing NoData with min elevation
-    currentIdx = 0;
+    if (min === Infinity) {
+      min = 0;
+      max = 1;
+    }
+
+    // Second pass: fill data, marking NoData as NaN
+    let currentIdx = 0;
     for (let i = dataStartLine; i < lines.length; i++) {
       const rowValues = lines[i].trim().split(/\s+/);
       for (const valStr of rowValues) {
         if (valStr === '') continue;
         const val = parseFloat(valStr);
-        if (val !== nodata && !isNaN(val)) {
+        if (val !== nodata && !isNaN(val) && val > -9000) {
           data[currentIdx] = val;
+          validSum += val;
+          validCount++;
         } else {
-          data[currentIdx] = min; // Set NoData to minimum elevation instead of 0
+          data[currentIdx] = NaN;
         }
         currentIdx++;
         if (currentIdx >= width * height) break;
@@ -885,7 +920,7 @@ export default function App() {
     setValidationReport({
       minHeight: min,
       maxHeight: max,
-      avgHeight: data.reduce((a, b) => a + b, 0) / data.length,
+      avgHeight: validCount > 0 ? validSum / validCount : 0,
       maxSlope: slopeInfo.maxSlope,
       avgSlope: slopeInfo.avgSlope,
       isValid: max > min && cellSize > 0
@@ -984,6 +1019,7 @@ export default function App() {
       dem: dem.data,
       width: dem.width,
       height: dem.height,
+      areaMask: areaMask,
       params: { 
         ...params, 
         sourceX: finalSourceX,
