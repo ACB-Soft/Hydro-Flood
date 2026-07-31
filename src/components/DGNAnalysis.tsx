@@ -37,6 +37,7 @@ import {
   DGNElement,
   DGNParsedResult,
   parseDGNFile,
+  generateSampleDgnData,
 } from '../utils/dgnParser';
 
 interface DGNAnalysisProps {
@@ -205,6 +206,36 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     }
   };
 
+  // Load realistic reference CAD sample
+  const handleLoadSample = () => {
+    setIsLoadingFile(true);
+    setUploadMessage('Örnek MicroStation DGN harita projesi hazırlanıyor...');
+    setTimeout(() => {
+      const sample = generateSampleDgnData();
+      setFileInfo({
+        name: sample.fileName,
+        size: sample.fileSize,
+        format: sample.format,
+      });
+      setLayers(sample.layers);
+      setElements(sample.elements);
+      setBounds(sample.bounds);
+
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      setDemGenerated(false);
+      setElevationMatrix(null);
+
+      if (onUpdateDGNData) {
+        onUpdateDGNData(sample);
+      }
+
+      setIsLoadingFile(false);
+      setUploadMessage('Örnek DGN projesi yüklendi! (6 Katman, İzohipsler, Kot Noktaları, Dere ve Yapılar)');
+      setTimeout(() => setUploadMessage(null), 4000);
+    }, 250);
+  };
+
   // Toggle single layer visibility
   const toggleLayerVisibility = (id: string) => {
     setLayers((prev) =>
@@ -249,8 +280,8 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
 
       // Grid lines centered around CAD bounds
       if (showGrid) {
-        ctx.strokeStyle = canvasBg === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(56,189,248,0.12)';
-        ctx.lineWidth = 1 / (zoom * fitScale);
+        ctx.strokeStyle = canvasBg === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(56,189,248,0.15)';
+        ctx.lineWidth = 1 / zoom;
         const gridSize = Math.max(20, Math.round(spanX / 10));
         for (let x = -spanX * 2; x <= spanX * 2; x += gridSize) {
           ctx.beginPath();
@@ -275,16 +306,16 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
         ctx.strokeStyle = layer.color;
         ctx.fillStyle = layer.color;
 
-        let lineWidth = 1.5;
-        if (layer.type === 'contour_major') lineWidth = 2.2;
-        else if (layer.type === 'water') lineWidth = 3.0;
-        else if (layer.type === 'boundary') lineWidth = 2.0;
-        else if (layer.type === 'contour_minor') lineWidth = 1.0;
+        let baseLineWidth = 1.5;
+        if (layer.type === 'contour_major') baseLineWidth = 2.2;
+        else if (layer.type === 'water') baseLineWidth = 3.0;
+        else if (layer.type === 'boundary') baseLineWidth = 2.0;
+        else if (layer.type === 'contour_minor') baseLineWidth = 1.0;
 
-        ctx.lineWidth = lineWidth / (zoom * fitScale);
+        ctx.lineWidth = baseLineWidth / zoom;
 
         if (layer.type === 'boundary') {
-          ctx.setLineDash([8 / (zoom * fitScale), 4 / (zoom * fitScale)]);
+          ctx.setLineDash([8 / zoom, 4 / zoom]);
         } else {
           ctx.setLineDash([]);
         }
@@ -300,7 +331,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
           if (showLabels) {
             ctx.fillStyle = layer.color;
             ctx.font = `${Math.max(8, 10 / zoom)}px monospace`;
-            ctx.fillText(`+${pt.z?.toFixed(1) || 0}m`, sx + 5 / zoom, sy - 4 / zoom);
+            ctx.fillText(elem.text || `+${pt.z?.toFixed(1) || 0}m`, sx + 5 / zoom, sy - 4 / zoom);
           }
         } else {
           ctx.beginPath();
@@ -763,6 +794,14 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
               MicroStation V7 / V8 formatları
             </p>
           </label>
+
+          <button
+            onClick={handleLoadSample}
+            className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-750 text-cyan-400 hover:text-cyan-300 border border-slate-700 hover:border-cyan-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
+          >
+            <Layers size={14} />
+            <span>Örnek DGN Haritasi Yükle</span>
+          </button>
         </div>
 
         {/* CAD Properties & Spatial metadata */}
