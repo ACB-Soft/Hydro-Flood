@@ -2,8 +2,8 @@ import React from 'react';
 import { ChevronLeft } from 'lucide-react';
 
 interface HeaderProps {
-  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis' | 'dwg-analysis';
-  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis' | 'dwg-analysis') => void;
+  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis';
+  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis') => void;
   currentStep: number;
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   isSimulating: boolean;
@@ -35,10 +35,8 @@ const Header: React.FC<HeaderProps> = ({
         return 'Uygulama Ayarları';
       case 'about':
         return 'Yardım & Hakkında';
-      case 'dgn-analysis':
-        return 'DGN Dosya Analizleri';
-      case 'dwg-analysis':
-        return 'DWG Dosya Analizleri';
+      case 'dxf-analysis':
+        return 'DXF Dosya Analizleri';
       case 'analysis':
         if (currentStep === 5) {
           return 'Statik Simülasyon Sonucu';

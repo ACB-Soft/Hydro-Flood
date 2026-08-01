@@ -14,9 +14,7 @@ import 'leaflet/dist/leaflet.css';
 import Dashboard from './components/Dashboard';
 import Analysis from './components/Analysis';
 import About from './components/About';
-import DGNAnalysis from './components/DGNAnalysis';
-import DWGAnalysis from './components/DWGAnalysis';
-import { DGNParsedResult } from './utils/dgnParser';
+import DXFAnalysis from './components/DXFAnalysis';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
 import Header from './components/Header';
@@ -115,8 +113,8 @@ const MANNING_PRESETS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dgn-analysis' | 'dwg-analysis'>('dashboard');
-  const [dgnSubTab, setDgnSubTab] = useState<'viewer' | 'converter'>('viewer');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis'>('dashboard');
+  const [dxfSubTab, setDxfSubTab] = useState<'viewer' | 'converter'>('viewer');
   const [currentStep, setCurrentStep] = useState(1);
   const [dem, setDem] = useState<DEMData | null>(null);
   const [params, setParams] = useState({
@@ -1422,7 +1420,6 @@ ${floodPolygons.join('\n')}
     };
   };
 
-  const [sharedDgnData, setSharedDgnData] = useState<DGNParsedResult | null>(null);
   const stats = React.useMemo(() => calculateStats(), [waterDepth, coords.cellSize, coords.lat, areaMask]);
 
   const isStandaloneITwin = window.location.search.includes('itwin=true');
@@ -1546,16 +1543,8 @@ ${floodPolygons.join('\n')}
               }}
               onOpenAbout={() => setActiveTab('about')}
               onOpenSettings={() => setActiveTab('settings')}
-              onOpenDGNViewer={() => {
-                setDgnSubTab('viewer');
-                setActiveTab('dgn-analysis');
-              }}
-              onOpenDGNConverter={() => {
-                setDgnSubTab('converter');
-                setActiveTab('dgn-analysis');
-              }}
-              onOpenDWGAnalysis={() => {
-                setActiveTab('dwg-analysis');
+              onOpenDXFAnalysis={() => {
+                setActiveTab('dxf-analysis');
               }}
               isSimulating={isSimulating}
               progress={progress}
@@ -1584,15 +1573,8 @@ ${floodPolygons.join('\n')}
           {activeTab === 'about' && (
             <About />
           )}
-          {activeTab === 'dgn-analysis' && (
-            <DGNAnalysis
-              dgnData={sharedDgnData}
-              onUpdateDGNData={setSharedDgnData}
-              initialSubTab={dgnSubTab}
-            />
-          )}
-          {activeTab === 'dwg-analysis' && (
-            <DWGAnalysis />
+          {activeTab === 'dxf-analysis' && (
+            <DXFAnalysis />
           )}
         </AnimatePresence>
       </main>
