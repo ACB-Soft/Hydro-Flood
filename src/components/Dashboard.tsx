@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Droplets, Layers, ChevronRight, Settings, HelpCircle, FileCode, Globe } from 'lucide-react';
+import { Droplets, Layers, ChevronRight, Settings, HelpCircle, Globe, Activity, Construction } from 'lucide-react';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
@@ -28,22 +28,17 @@ const Dashboard: React.FC<DashboardProps> = ({
       className="max-w-4xl mx-auto space-y-6 py-2"
     >
       {/* Dashboard Top Branding & Action Bar (Replaces Global Header on Dashboard) */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-white/10">
-        <div className="flex items-center gap-3.5">
-          <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30">
-            <Droplets className="text-white" size={26} />
+      <div className="relative flex flex-col sm:flex-row items-center justify-between gap-4 pb-6 border-b border-white/10">
+        <div className="sm:absolute sm:left-1/2 sm:-translate-x-1/2 flex items-center justify-center gap-3.5 w-full sm:w-auto">
+          <div className="h-12 sm:h-14 w-12 sm:w-14 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30 shrink-0">
+            <Droplets className="text-white w-6 h-6 sm:w-7 sm:h-7" />
           </div>
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
-              HydroFlood
-            </h1>
-            <p className="text-[11px] text-slate-400 font-semibold tracking-wider uppercase">
-              ACB MAPS GIS Systems
-            </p>
-          </div>
+          <h1 className="h-12 sm:h-14 flex items-center text-3xl sm:text-4xl md:text-5xl font-display font-extrabold tracking-tight leading-none bg-gradient-to-r from-blue-400 via-cyan-300 to-cyan-200 bg-clip-text text-transparent text-center">
+            HydroFlood
+          </h1>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end flex-wrap">
+        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end ml-auto">
           {isSimulating && (
             <div className="flex items-center gap-2 bg-blue-500/10 px-3 py-2 rounded-xl border border-blue-500/20 text-xs font-bold text-blue-400">
               <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
@@ -71,67 +66,71 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* Main Feature Cards */}
-      <div className="space-y-4">
-        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Simülasyon Modülleri</h2>
-        
+      {/* 3 Analysis Buttons */}
+      <div className="space-y-3.5 pt-2">
+        {/* 1. Statik Taşkın Simülasyonu */}
         <motion.button 
-          whileHover={{ x: 4, scale: 1.01 }}
-          whileTap={{ scale: 0.99 }}
+          whileHover={{ x: 4, scale: 1.005 }}
+          whileTap={{ scale: 0.995 }}
           onClick={() => onSelectMethod('bathtub')}
-          className="group relative glass rounded-2xl md:rounded-[2.5rem] p-6 md:p-8 text-left overflow-hidden border border-white/20 hover:border-cyan-500/40 transition-all duration-300 shadow-2xl w-full"
+          className="group relative glass rounded-2xl p-5 text-left overflow-hidden border border-white/15 hover:border-cyan-500/40 transition-all duration-300 shadow-xl w-full flex flex-col justify-center min-h-[96px]"
         >
-          <div className="absolute top-0 right-0 w-64 h-64 bg-cyan-600/10 blur-[100px] -mr-32 -mt-32 group-hover:bg-cyan-600/25 transition-all duration-700" />
+          <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-600/10 blur-[80px] -mr-24 -mt-24 group-hover:bg-cyan-600/25 transition-all duration-700" />
           
-          <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
-            <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl sm:rounded-2xl border border-cyan-400/30 flex items-center justify-center shadow-lg shadow-cyan-500/30 shrink-0">
-              <Layers className="text-white w-6 h-6 sm:w-8 sm:h-8" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <h3 className="text-lg sm:text-2xl font-display font-bold text-white group-hover:text-cyan-400 transition-colors flex flex-col items-start gap-1">
-                <span className="flex items-center gap-2">
-                  Statik Simülasyon
-                  <ChevronRight size={20} className="hidden sm:inline opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
-                </span>
-                <span className="text-xs sm:text-base text-slate-400 font-normal font-sans group-hover:text-cyan-400/80 transition-colors">
+          <div className="relative z-10 space-y-1 w-full">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-base sm:text-lg font-display font-bold text-white group-hover:text-cyan-400 transition-colors flex items-center gap-2">
+                Statik Taşkın Simülasyonu
+                <span className="text-xs text-slate-400 font-normal font-sans">
                   (Bathtub Model)
                 </span>
               </h3>
-              <p className="text-slate-400 text-xs sm:text-sm leading-relaxed max-w-2xl">
-                Karar destek süreçleri ve hızlı ön değerlendirme için, belirlenen su seviyesi artışına göre hidrolojik bağlantılı çukur alanların dolmasını hesaplar.
-              </p>
+              <ChevronRight size={18} className="text-slate-400 opacity-60 group-hover:opacity-100 group-hover:text-cyan-400 transition-all group-hover:translate-x-1 shrink-0" />
             </div>
+            <p className="text-slate-400 text-xs sm:text-sm leading-relaxed">
+              Su seviyesi artışına göre çukur alan dolumunu ve taşkın yayılımını hesaplar.
+            </p>
           </div>
         </motion.button>
 
-        {/* CAD & Harita Dosya Analizleri Section */}
-        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider pt-4">CAD & Harita Dosya Analizleri</h2>
-        
-        <div className="space-y-4">
-          <motion.button
-            whileHover={{ x: 4, scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            onClick={onOpenDXFAnalysis}
-            className="group relative glass rounded-2xl md:rounded-[2rem] p-6 text-left overflow-hidden border border-white/10 hover:border-cyan-500/30 transition-all duration-300 shadow-lg w-full flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6"
-          >
-            <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/5 blur-[80px] -mr-24 -mt-24 group-hover:bg-cyan-500/15 transition-all duration-700" />
-            
-            <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full">
-              <div className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-cyan-500/10 to-indigo-500/10 rounded-xl border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:bg-cyan-500/20 transition-colors shrink-0">
-                <Globe className="text-cyan-400 w-6 h-6 sm:w-7 sm:h-7" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="font-bold text-white text-base sm:text-lg group-hover:text-cyan-400 transition-colors flex items-center gap-1.5">
-                  DXF Dosya Analizleri
-                  <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-2xl">
-                  DXF formatındaki CAD haritalarınızı yükleyin, koordinat sistemini tanımlayın, görüntüleyin ve eş yükseklik verilerinden Sayısal Yükseklik Modeli (DEM) üretin.
-                </p>
-              </div>
+        {/* 2. Dinamik Taşkın Simülasyonu (Yapım Aşamasında) */}
+        <motion.div 
+          whileHover={{ scale: 1.002 }}
+          className="group relative glass rounded-2xl p-5 text-left overflow-hidden border border-white/10 opacity-85 transition-all duration-300 shadow-md w-full flex flex-col justify-center min-h-[96px] bg-slate-900/40 cursor-not-allowed"
+        >
+          <div className="relative z-10 space-y-1 w-full">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h3 className="text-base sm:text-lg font-display font-bold text-slate-300 flex items-center gap-2">
+                Dinamik Taşkın Simülasyonu
+              </h3>
             </div>
-          </motion.button>
-        </div>
+            <p className="text-amber-400/90 text-xs sm:text-sm font-medium leading-relaxed">
+              Yapım Aşamasında
+            </p>
+          </div>
+        </motion.div>
+
+        {/* 3. DXF Dosya Analizleri */}
+        <motion.button
+          whileHover={{ x: 4, scale: 1.005 }}
+          whileTap={{ scale: 0.995 }}
+          onClick={onOpenDXFAnalysis}
+          className="group relative glass rounded-2xl p-5 text-left overflow-hidden border border-white/15 hover:border-cyan-500/40 transition-all duration-300 shadow-xl w-full flex flex-col justify-center min-h-[96px]"
+        >
+          <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/10 blur-[80px] -mr-24 -mt-24 group-hover:bg-cyan-500/20 transition-all duration-700" />
+          
+          <div className="relative z-10 space-y-1 w-full">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-base sm:text-lg font-display font-bold text-white group-hover:text-cyan-400 transition-colors flex items-center gap-2">
+                DXF Dosya Analizleri
+              </h3>
+              <ChevronRight size={18} className="text-slate-400 opacity-60 group-hover:opacity-100 group-hover:text-cyan-400 transition-all group-hover:translate-x-1 shrink-0" />
+            </div>
+            <p className="text-slate-400 text-xs sm:text-sm leading-relaxed">
+              CAD haritalarını görüntüleyin, koordinatlandırın ve DEM üretin.
+            </p>
+          </div>
+        </motion.button>
       </div>
     </motion.div>
   );
