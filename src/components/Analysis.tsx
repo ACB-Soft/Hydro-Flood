@@ -393,142 +393,119 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 h-full min-h-0 flex-1">
             
             {/* LEFT PANEL: OPTIONS (Visible on Desktop OR when MobileTab === 'controls') */}
-            <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto lg:overflow-hidden ${
+            <div className={`lg:col-span-3 flex flex-col gap-2 h-full min-h-0 overflow-y-auto lg:overflow-hidden ${
               mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
             }`}>
               
               {/* 1. DEM UPLOAD */}
-              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0">
-                <div className="flex items-center gap-2.5 pb-2 border-b border-white/10">
-                  <div className="p-1 bg-blue-500/20 text-blue-400 rounded-lg shrink-0">
-                    <LayersIcon size={15} />
-                  </div>
-                  <div>
-                    <h2 className="font-bold text-white text-xs">1. Topografya Verisi (DEM)</h2>
-                    <p className="text-[10px] text-slate-400">Dijital Yükseklik Modeli (.tif, .asc)</p>
-                  </div>
+              <section className="glass rounded-xl p-2.5 border border-white/20 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
+                <div className="pb-1 border-b border-white/10 shrink-0">
+                  <h2 className="font-bold text-white text-xs">1. Topografya Verisi (DEM)</h2>
                 </div>
 
-                {dem ? (
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl flex items-center justify-between gap-2">
-                    <div className="space-y-0.5 overflow-hidden">
-                      <div className="flex items-center gap-1.5">
-                        <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
-                        <span className="font-bold text-white text-xs">DEM Yüklendi</span>
+                <div className="my-auto">
+                  {dem ? (
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 p-2 rounded-lg flex items-center justify-between gap-2">
+                      <div className="space-y-0.5 overflow-hidden">
+                        <div className="flex items-center gap-1.5">
+                          <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+                          <span className="font-bold text-white text-xs">DEM Yüklendi</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 truncate">
+                          {dem.width}x{dem.height} px • Çöz: {dem.cellSize.toFixed(2)}m
+                        </p>
                       </div>
-                      <p className="text-[10px] text-slate-400 truncate">
-                        {dem.width}x{dem.height} px • Çözünürlük: {dem.cellSize.toFixed(2)}m
-                      </p>
-                    </div>
 
-                    <label className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white rounded-lg text-[10px] font-bold cursor-pointer border border-white/10 shrink-0 transition-all">
-                      Değiştir
+                      <label className="px-2 py-0.5 bg-white/10 hover:bg-white/20 text-white rounded text-[10px] font-bold cursor-pointer border border-white/10 shrink-0 transition-all">
+                        Değiştir
+                        <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
+                      </label>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-white/15 rounded-lg hover:bg-white/5 transition-all cursor-pointer bg-white/5 group">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <div className="p-1 bg-cyan-500/10 text-cyan-400 rounded group-hover:scale-105 transition-transform shrink-0">
+                          <Download size={14} />
+                        </div>
+                        <span className="font-bold text-xs text-slate-200 truncate">DEM Dosyası Seçin</span>
+                      </div>
+                      <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded text-[10px] font-bold shrink-0">
+                        Gözat
+                      </span>
                       <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
                     </label>
-                  </div>
-                ) : (
-                  <label className="flex items-center justify-between gap-2 p-2.5 border border-dashed border-white/15 rounded-xl hover:bg-white/5 transition-all cursor-pointer bg-white/5 group">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <div className="p-1.5 bg-cyan-500/10 text-cyan-400 rounded-lg group-hover:scale-105 transition-transform shrink-0">
-                        <Download size={16} />
-                      </div>
-                      <div className="overflow-hidden">
-                        <span className="font-bold text-xs text-slate-200 block truncate">DEM Dosyası Seçin</span>
-                        <span className="text-[10px] text-slate-400 font-normal block truncate">.tif veya .asc formatı</span>
-                      </div>
-                    </div>
-                    <span className="px-2.5 py-1 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-lg text-[10px] font-bold shrink-0">
-                      Gözat
-                    </span>
-                    <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
-                  </label>
-                )}
+                  )}
+                </div>
               </section>
 
               {/* 2. CRS SELECTOR (İsteğe Bağlı) */}
-              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0">
-                <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                  <div className="flex items-center gap-2.5">
-                    <div className="p-1 bg-cyan-500/20 text-cyan-400 rounded-lg shrink-0">
-                      <Globe size={15} />
-                    </div>
-                    <div>
-                      <h2 className="font-bold text-white text-xs">2. Koordinat Sistemi (CRS)</h2>
-                      <p className="text-[10px] text-slate-400">Proje referans sistemi</p>
-                    </div>
-                  </div>
-                  <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">İsteğe Bağlı</span>
+              <section className="glass rounded-xl p-2.5 border border-white/20 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
+                <div className="flex items-center justify-between pb-1 border-b border-white/10 shrink-0">
+                  <h2 className="font-bold text-white text-xs">2. Koordinat Sistemi (CRS)</h2>
+                  <span className="text-[9px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">İsteğe Bağlı</span>
                 </div>
 
-                <div className="space-y-1">
-                  <div className="relative">
-                    <select
-                      value={selectedCRS.code}
-                      onChange={(e) => {
-                        const found = CRS_LIST.find(c => c.code === e.target.value);
-                        if (found) setSelectedCRS(found);
-                      }}
-                      className="w-full bg-slate-900/90 border border-white/20 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none focus:ring-1 focus:ring-cyan-500/50 appearance-none cursor-pointer transition-all pr-8 shadow-sm"
-                    >
-                      <optgroup label="TUREF / TM (3° - Türkiye)">
-                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(crs => (
-                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
-                            {crs.code} - {crs.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="ED50 / TM (3° - Türkiye)">
-                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(crs => (
-                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
-                            {crs.code} - {crs.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
-                        {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(crs => (
-                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
-                            {crs.code} - {crs.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
-                        {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(crs => (
-                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
-                            {crs.code} - {crs.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="Global & Standartlar">
-                        {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(crs => (
-                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
-                            {crs.code} - {crs.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    </select>
-                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400">
-                      <ChevronDown size={14} />
-                    </div>
+                <div className="relative my-auto">
+                  <select
+                    value={selectedCRS.code}
+                    onChange={(e) => {
+                      const found = CRS_LIST.find(c => c.code === e.target.value);
+                      if (found) setSelectedCRS(found);
+                    }}
+                    className="w-full bg-slate-900/90 border border-white/20 rounded-lg px-2.5 py-1 text-xs font-semibold text-white focus:outline-none focus:ring-1 focus:ring-cyan-500/50 appearance-none cursor-pointer transition-all pr-7 shadow-sm"
+                  >
+                    <optgroup label="TUREF / TM (3° - Türkiye)">
+                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(crs => (
+                        <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                          {crs.code} - {crs.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="ED50 / TM (3° - Türkiye)">
+                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(crs => (
+                        <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                          {crs.code} - {crs.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
+                      {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(crs => (
+                        <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                          {crs.code} - {crs.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
+                      {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(crs => (
+                        <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                          {crs.code} - {crs.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Global & Standartlar">
+                      {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(crs => (
+                        <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
+                          {crs.code} - {crs.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400">
+                    <ChevronDown size={13} />
                   </div>
                 </div>
               </section>
 
               {/* 3. WATER LEVEL PARAMETER */}
-              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0">
-                <div className="flex items-center gap-2.5 pb-2 border-b border-white/10">
-                  <div className="p-1 bg-blue-500/20 text-blue-400 rounded-lg shrink-0">
-                    <Droplets size={15} />
-                  </div>
-                  <div>
-                    <h2 className="font-bold text-white text-xs">3. Su Seviyesi Parametresi</h2>
-                    <p className="text-[10px] text-slate-400">Bathtub su artış miktarı</p>
-                  </div>
+              <section className="glass rounded-xl p-2.5 border border-white/20 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
+                <div className="pb-1 border-b border-white/10 shrink-0">
+                  <h2 className="font-bold text-white text-xs">3. Su Seviyesi Parametresi</h2>
                 </div>
 
-                <div className="space-y-2 bg-white/5 p-2.5 rounded-xl border border-white/10">
+                <div className="space-y-1.5 bg-white/5 p-2 rounded-lg border border-white/10 my-auto">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Su Seviyesi Artışı</label>
-                    <span className="text-sm font-display font-bold text-cyan-400">+{bathtubLevel.toFixed(1)} m</span>
+                    <span className="text-xs font-display font-bold text-cyan-400">+{bathtubLevel.toFixed(1)} m</span>
                   </div>
                   <input 
                     type="range" 
@@ -537,14 +514,14 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     step="0.1"
                     value={bathtubLevel} 
                     onChange={(e) => setBathtubLevel(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-400"
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-400"
                   />
-                  <div className="flex gap-1 pt-0.5">
-                    {[1.0, 2.0, 3.0, 5.0, 10.0].map((val) => (
+                  <div className="grid grid-cols-6 gap-1 pt-0.5">
+                    {[1.0, 2.0, 3.0, 4.0, 5.0, 10.0].map((val) => (
                       <button
                         key={val}
                         onClick={() => setBathtubLevel(val)}
-                        className={`flex-1 py-0.5 rounded text-[10px] font-bold border transition-all ${
+                        className={`py-0.5 rounded text-[10px] font-bold border transition-all text-center ${
                           bathtubLevel === val 
                             ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300' 
                             : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
@@ -558,35 +535,29 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
               </section>
 
               {/* 4. KML UPLOADS */}
-              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0 flex-1 min-h-0 flex flex-col justify-between">
-                <div className="flex items-center gap-2.5 pb-2 border-b border-white/10 shrink-0">
-                  <div className="p-1 bg-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
-                    <MapPin size={15} />
-                  </div>
-                  <div>
-                    <h2 className="font-bold text-white text-xs">4. Konum ve Vektör Verileri</h2>
-                    <p className="text-[10px] text-slate-400">Kaynak ve İnceleme Alanı KML'si</p>
-                  </div>
+              <section className="glass rounded-xl p-2.5 border border-white/20 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
+                <div className="pb-1 border-b border-white/10 shrink-0">
+                  <h2 className="font-bold text-white text-xs">4. Konum ve Vektör Verileri</h2>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 my-auto">
-                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center text-center ${
+                <div className="grid grid-cols-2 gap-1.5 my-auto">
+                  <label className={`p-2 border rounded-lg cursor-pointer transition-all flex flex-col items-center justify-center text-center ${
                     sourceKmlName ? 'bg-blue-500/10 border-blue-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}>
-                    <MapPin className={sourceKmlName ? "text-blue-400 mb-0.5" : "text-slate-400 mb-0.5"} size={16} />
+                    <MapPin className={sourceKmlName ? "text-blue-400 mb-0.5" : "text-slate-400 mb-0.5"} size={14} />
                     <span className="text-[10px] font-bold text-slate-200 truncate w-full">
-                      {sourceKmlName ? sourceKmlName : 'Kaynak KML Yükle'}
+                      {sourceKmlName ? sourceKmlName : 'Kaynak KML'}
                     </span>
                     <span className="text-[9px] text-slate-500">Nokta Vektörü</span>
                     <input type="file" accept=".kml" onChange={handleSourceKmlUpload} className="hidden" />
                   </label>
 
-                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center text-center ${
+                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center justify-center text-center ${
                     areaKml ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}>
-                    <FileText className={areaKml ? "text-emerald-400 mb-0.5" : "text-slate-400 mb-0.5"} size={16} />
+                    <FileText className={areaKml ? "text-emerald-400 mb-0.5" : "text-slate-400 mb-0.5"} size={14} />
                     <span className="text-[10px] font-bold text-slate-200 truncate w-full">
-                      {areaKml ? areaKml.name : 'İnceleme Alanı KML'}
+                      {areaKml ? areaKml.name : 'İnceleme Alanı'}
                     </span>
                     <span className="text-[9px] text-slate-500">Poligon Vektörü</span>
                     <input type="file" accept=".kml" onChange={handleAreaKmlUpload} className="hidden" />
