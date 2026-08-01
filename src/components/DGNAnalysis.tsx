@@ -103,8 +103,16 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       : null
   );
 
+  // File selection pending state (before clicking "Dosyayı Aç / Ayrıştır")
+  const [pendingFile, setPendingFile] = useState<File | 'sample' | null>(
+    dgnData ? null : 'sample'
+  );
+  const [pendingMeta, setPendingMeta] = useState<{ name: string; size: string; format: string } | null>(
+    dgnData ? { name: dgnData.fileName, size: dgnData.fileSize, format: dgnData.format } : { name: 'Ornek_Harita_Projesi.dgn', size: '2.40 MB', format: 'MicroStation DGN V8' }
+  );
+  const [isParsed, setIsParsed] = useState<boolean>(Boolean(dgnData));
+
   const [crs, setCrs] = useState<string>('EPSG:5254');
-  const [unit, setUnit] = useState<string>('Meter');
   const [layers, setLayers] = useState<CADLayer[]>(
     dgnData ? dgnData.layers : []
   );
@@ -127,12 +135,14 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
   );
 
   const [isLoadingFile, setIsLoadingFile] = useState<boolean>(false);
-  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(
+    dgnData ? null : "DGN dosyası yüklendi. Lütfen Koordinat Sistemini seçin ve 'Dosyayı Aç / Ayrıştır' butonuna tıklayın."
+  );
 
   const [geoJSONData, setGeoJSONData] = useState<any>(
-    dgnData?.geoJSON || generateSampleDgnData('EPSG:5254').geoJSON
+    dgnData?.geoJSON || null
   );
-  const [viewerMode, setViewerMode] = useState<'gis_map' | '2d' | '3d'>('gis_map');
+  const [viewerMode, setViewerMode] = useState<'gis_map' | '2d'>('gis_map');
 
   // Sync with prop changes
   useEffect(() => {
@@ -144,6 +154,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       if (dgnData.geoJSON) {
         setGeoJSONData(dgnData.geoJSON);
       }
+      setIsParsed(true);
     }
   }, [dgnData]);
 
@@ -156,21 +167,6 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     x: 485230,
     y: 4421500,
     z: 142.5,
-  });
-
-  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
-  const [rotX, setRotX] = useState<number>(0.55);
-  const [rotY, setRotY] = useState<number>(0.65);
-  const [isOrbiting, setIsOrbiting] = useState<boolean>(false);
-  const [showITwinModal, setShowITwinModal] = useState<boolean>(false);
-
-  const [iTwinConfig, setITwinConfig] = useState({
-    projectId: 'proj_turef_5254_dgn_88192',
-    imodelId: 'imodel_cad_terrain_v8',
-    changesetId: 'cs_v8_rev_004',
-    authToken: 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImlUd2luQ2xvdWRLZXki...',
-    status: 'connected',
-    lastSyncTime: 'Canlı Bulut Senkronize',
   });
 
   const [showGrid, setShowGrid] = useState<boolean>(true);
@@ -204,16 +200,61 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
   const [elevationMatrix, setElevationMatrix] = useState<number[][] | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Shared file uploader
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [showITwinModal, setShowITwinModal] = useState<boolean>(false);
+  const [iTwinConfig, setITwinConfig] = useState({
+    projectId: 'proj_turef_5254_dgn_88192',
+    imodelId: 'imodel_cad_terrain_v8',
+    changesetId: 'cs_v8_rev_004',
+    authToken: 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImlUd2luQ2xvdWRLZXki...',
+    status: 'connected',
+    lastSyncTime: 'Canlı Bulut Senkronize',
+  });
+
+  // File Selection Handler (No Immediate Parsing)
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
 
+    const meta = {
+      name: uploadedFile.name,
+      size: `${(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB`,
+      format: 'MicroStation DGN',
+    };
+
+    setPendingFile(uploadedFile);
+    setPendingMeta(meta);
+    setIsParsed(false);
+    setUploadMessage(`Dosya seçildi: ${uploadedFile.name}. Lütfen Koordinat Sistemini seçin ve 'Dosyayı Aç / Ayrıştır' butonuna tıklayın.`);
+  };
+
+  // Select Sample File (No Immediate Parsing)
+  const handleLoadSample = () => {
+    const meta = {
+      name: 'Ornek_Harita_Projesi.dgn',
+      size: '2.40 MB',
+      format: 'MicroStation DGN V8',
+    };
+
+    setPendingFile('sample');
+    setPendingMeta(meta);
+    setIsParsed(false);
+    setUploadMessage("Örnek DGN haritası seçildi. 'Dosyayı Aç / Ayrıştır' butonuna basarak ayrıştırma işlemini başlatabilirsiniz.");
+  };
+
+  // Execution: Open & Parse DGN File
+  const handleExecuteOpenAndParse = async () => {
+    if (!pendingFile) return;
+
     setIsLoadingFile(true);
-    setUploadMessage(`${uploadedFile.name} MicroStation DGN vektör ayrıştırıcı ile işleniyor...`);
+    setUploadMessage('DGN harita verisi ayrıştırılıyor ve koordinat dönüşümü yapılıyor...');
 
     try {
-      const parsedResult = await parseDGNFile(uploadedFile, crs);
+      let parsedResult: DGNParsedResult;
+      if (pendingFile === 'sample') {
+        parsedResult = generateSampleDgnData(crs);
+      } else {
+        parsedResult = await parseDGNFile(pendingFile, crs);
+      }
 
       setFileInfo({
         name: parsedResult.fileName,
@@ -223,23 +264,20 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       setLayers(parsedResult.layers);
       setElements(parsedResult.elements);
       setBounds(parsedResult.bounds);
-      if (parsedResult.geoJSON) {
-        setGeoJSONData(parsedResult.geoJSON);
-      } else {
-        setGeoJSONData(dgnToGeoJSON(parsedResult, crs));
-      }
+      setGeoJSONData(parsedResult.geoJSON || dgnToGeoJSON(parsedResult, crs));
 
       setZoom(1);
       setPan({ x: 0, y: 0 });
       setDemGenerated(false);
       setElevationMatrix(null);
+      setIsParsed(true);
 
       if (onUpdateDGNData) {
         onUpdateDGNData(parsedResult);
       }
 
       setUploadMessage(
-        `DGN Başarıyla Yüklendi! ${parsedResult.layers.length} Katman ve ${parsedResult.elements.length} Vektör Elemanı Ayrıştırıldı.`
+        `DGN Başarıyla Açıldı! ${parsedResult.layers.length} Katman ve ${parsedResult.elements.length} Vektör Elemanı Ayrıştırıldı.`
       );
     } catch (error) {
       console.error('DGN Parsing Error:', error);
@@ -248,37 +286,6 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
       setIsLoadingFile(false);
       setTimeout(() => setUploadMessage(null), 5000);
     }
-  };
-
-  // Load realistic reference CAD sample
-  const handleLoadSample = () => {
-    setIsLoadingFile(true);
-    setUploadMessage('Örnek MicroStation DGN harita projesi GDAL.js / Leaflet ortamında hazırlanıyor...');
-    setTimeout(() => {
-      const sample = generateSampleDgnData(crs);
-      setFileInfo({
-        name: sample.fileName,
-        size: sample.fileSize,
-        format: sample.format,
-      });
-      setLayers(sample.layers);
-      setElements(sample.elements);
-      setBounds(sample.bounds);
-      setGeoJSONData(sample.geoJSON || dgnToGeoJSON(sample, crs));
-
-      setZoom(1);
-      setPan({ x: 0, y: 0 });
-      setDemGenerated(false);
-      setElevationMatrix(null);
-
-      if (onUpdateDGNData) {
-        onUpdateDGNData(sample);
-      }
-
-      setIsLoadingFile(false);
-      setUploadMessage('Örnek DGN projesi yüklendi! (Leaflet Vektör Katmanları, İzohipsler, Kot Noktaları, Su Yolları)');
-      setTimeout(() => setUploadMessage(null), 4000);
-    }, 250);
   };
 
   // Toggle single layer visibility
@@ -374,201 +381,93 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     const spanY = Math.abs(bounds.maxY - bounds.minY) || 100;
     const fitScale = Math.min((width * 0.8) / spanX, (height * 0.8) / spanY) || 1;
 
-    if (viewMode === '2d') {
-      ctx.translate(centerX, centerY);
-      ctx.scale(zoom, zoom);
+    if (showGrid) {
+      ctx.strokeStyle = canvasBg === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(56,189,248,0.15)';
+      ctx.lineWidth = 1 / Math.max(0.01, zoom);
+      const safeSpanX = Math.max(10, isFinite(spanX) && spanX > 0 ? spanX : 100);
+      const safeSpanY = Math.max(10, isFinite(spanY) && spanY > 0 ? spanY : 100);
+      const gridSize = Math.max(20, Math.round(safeSpanX / 10)) || 50;
 
-      // Grid lines centered around CAD bounds
-      if (showGrid) {
-        ctx.strokeStyle = canvasBg === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(56,189,248,0.15)';
-        ctx.lineWidth = 1 / Math.max(0.01, zoom);
-        const safeSpanX = Math.max(10, isFinite(spanX) && spanX > 0 ? spanX : 100);
-        const safeSpanY = Math.max(10, isFinite(spanY) && spanY > 0 ? spanY : 100);
-        const gridSize = Math.max(20, Math.round(safeSpanX / 10)) || 50;
+      for (let x = -safeSpanX * 2; x <= safeSpanX * 2; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x * fitScale, -safeSpanY * 2 * fitScale);
+        ctx.lineTo(x * fitScale, safeSpanY * 2 * fitScale);
+        ctx.stroke();
+      }
+      for (let y = -safeSpanY * 2; y <= safeSpanY * 2; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(-safeSpanX * 2 * fitScale, y * fitScale);
+        ctx.lineTo(safeSpanX * 2 * fitScale, y * fitScale);
+        ctx.stroke();
+      }
+    }
 
-        for (let x = -safeSpanX * 2; x <= safeSpanX * 2; x += gridSize) {
-          ctx.beginPath();
-          ctx.moveTo(x * fitScale, -safeSpanY * 2 * fitScale);
-          ctx.lineTo(x * fitScale, safeSpanY * 2 * fitScale);
-          ctx.stroke();
-        }
-        for (let y = -safeSpanY * 2; y <= safeSpanY * 2; y += gridSize) {
-          ctx.beginPath();
-          ctx.moveTo(-safeSpanX * 2 * fitScale, y * fitScale);
-          ctx.lineTo(safeSpanX * 2 * fitScale, y * fitScale);
-          ctx.stroke();
-        }
+    const layerMap = new Map<string, CADLayer>(layers.map((l) => [l.id, l]));
+
+    elements.forEach((elem) => {
+      const layer = layerMap.get(elem.layerId) || layers.find((l) => l.level === elem.level);
+      if (!layer || !layer.visible || elem.points.length === 0) return;
+
+      ctx.strokeStyle = layer.color;
+      ctx.fillStyle = layer.color;
+
+      let baseLineWidth = 1.5;
+      if (layer.type === 'contour_major') baseLineWidth = 2.2;
+      else if (layer.type === 'water') baseLineWidth = 3.0;
+      else if (layer.type === 'boundary') baseLineWidth = 2.0;
+      else if (layer.type === 'contour_minor') baseLineWidth = 1.0;
+
+      ctx.lineWidth = baseLineWidth / zoom;
+
+      if (layer.type === 'boundary') {
+        ctx.setLineDash([8 / zoom, 4 / zoom]);
+      } else {
+        ctx.setLineDash([]);
       }
 
-      const layerMap = new Map<string, CADLayer>(layers.map((l) => [l.id, l]));
+      if (elem.type === 'point' || elem.points.length === 1) {
+        const pt = elem.points[0];
+        const sx = (pt.x - midX) * fitScale;
+        const sy = -(pt.y - midY) * fitScale;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.5 / zoom, 0, Math.PI * 2);
+        ctx.fill();
 
-      elements.forEach((elem) => {
-        const layer = layerMap.get(elem.layerId) || layers.find((l) => l.level === elem.level);
-        if (!layer || !layer.visible || elem.points.length === 0) return;
-
-        ctx.strokeStyle = layer.color;
-        ctx.fillStyle = layer.color;
-
-        let baseLineWidth = 1.5;
-        if (layer.type === 'contour_major') baseLineWidth = 2.2;
-        else if (layer.type === 'water') baseLineWidth = 3.0;
-        else if (layer.type === 'boundary') baseLineWidth = 2.0;
-        else if (layer.type === 'contour_minor') baseLineWidth = 1.0;
-
-        ctx.lineWidth = baseLineWidth / zoom;
-
-        if (layer.type === 'boundary') {
-          ctx.setLineDash([8 / zoom, 4 / zoom]);
-        } else {
-          ctx.setLineDash([]);
+        if (showLabels) {
+          ctx.fillStyle = layer.color;
+          ctx.font = `${Math.max(8, 10 / zoom)}px monospace`;
+          ctx.fillText(elem.text || `+${pt.z?.toFixed(1) || 0}m`, sx + 5 / zoom, sy - 4 / zoom);
         }
-
-        if (elem.type === 'point' || elem.points.length === 1) {
-          const pt = elem.points[0];
+      } else {
+        ctx.beginPath();
+        elem.points.forEach((pt, i) => {
           const sx = (pt.x - midX) * fitScale;
           const sy = -(pt.y - midY) * fitScale;
-          ctx.beginPath();
-          ctx.arc(sx, sy, 3.5 / zoom, 0, Math.PI * 2);
-          ctx.fill();
+          if (i === 0) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        });
 
-          if (showLabels) {
+        if (elem.type === 'shape' || layer.type === 'buildings') {
+          ctx.closePath();
+          ctx.fillStyle = layer.color + '25';
+          ctx.fill();
+        }
+
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (showLabels && (layer.type === 'contour_major' || layer.type === 'contour_minor')) {
+          const midPt = elem.points[Math.floor(elem.points.length / 2)];
+          if (midPt && midPt.z !== undefined) {
+            const sx = (midPt.x - midX) * fitScale;
+            const sy = -(midPt.y - midY) * fitScale;
             ctx.fillStyle = layer.color;
             ctx.font = `${Math.max(8, 10 / zoom)}px monospace`;
-            ctx.fillText(elem.text || `+${pt.z?.toFixed(1) || 0}m`, sx + 5 / zoom, sy - 4 / zoom);
+            ctx.fillText(`${midPt.z.toFixed(0)}m`, sx + 4 / zoom, sy - 3 / zoom);
           }
-        } else {
-          ctx.beginPath();
-          elem.points.forEach((pt, i) => {
-            const sx = (pt.x - midX) * fitScale;
-            const sy = -(pt.y - midY) * fitScale;
-            if (i === 0) ctx.moveTo(sx, sy);
-            else ctx.lineTo(sx, sy);
-          });
-
-          if (elem.type === 'shape' || layer.type === 'buildings') {
-            ctx.closePath();
-            ctx.fillStyle = layer.color + '25';
-            ctx.fill();
-          }
-
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          if (showLabels && (layer.type === 'contour_major' || layer.type === 'contour_minor')) {
-            const midPt = elem.points[Math.floor(elem.points.length / 2)];
-            if (midPt && midPt.z !== undefined) {
-              const sx = (midPt.x - midX) * fitScale;
-              const sy = -(midPt.y - midY) * fitScale;
-              ctx.fillStyle = layer.color;
-              ctx.font = `${Math.max(8, 10 / zoom)}px monospace`;
-              ctx.fillText(`${midPt.z.toFixed(0)}m`, sx + 4 / zoom, sy - 3 / zoom);
-            }
-          }
-        }
-      });
-    } else {
-      // 3D Isometric View Mode
-      const zRange = Math.max(1, bounds.maxZ - bounds.minZ);
-      const project3D = (pt: { x: number; y: number; z?: number }) => {
-        const xOff = (pt.x - midX) * fitScale;
-        const yOff = -(pt.y - midY) * fitScale;
-        const zOff = (((pt.z || 0) - bounds.minZ) / zRange) * (spanX * 0.25) * fitScale;
-
-        const rx = xOff * Math.cos(rotY) - yOff * Math.sin(rotY);
-        const ry = xOff * Math.sin(rotY) + yOff * Math.cos(rotY);
-
-        const px = rx;
-        const py = ry * Math.sin(rotX) - zOff * Math.cos(rotX);
-
-        return {
-          x: centerX + px * zoom,
-          y: centerY + py * zoom,
-        };
-      };
-
-      if (showGrid) {
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.15)';
-        ctx.lineWidth = 1;
-        const halfS = (spanX / 2);
-        for (let gx = -halfS; gx <= halfS; gx += halfS / 5) {
-          const p1 = project3D({ x: midX + gx, y: midY - halfS, z: bounds.minZ });
-          const p2 = project3D({ x: midX + gx, y: midY + halfS, z: bounds.minZ });
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.stroke();
-        }
-        for (let gy = -halfS; gy <= halfS; gy += halfS / 5) {
-          const p1 = project3D({ x: midX - halfS, y: midY + gy, z: bounds.minZ });
-          const p2 = project3D({ x: midX + halfS, y: midY + gy, z: bounds.minZ });
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.stroke();
         }
       }
-
-      const layerMap = new Map<string, CADLayer>(layers.map((l) => [l.id, l]));
-
-      elements.forEach((elem) => {
-        const layer = layerMap.get(elem.layerId) || layers.find((l) => l.level === elem.level);
-        if (!layer || !layer.visible || elem.points.length === 0) return;
-
-        ctx.strokeStyle = layer.color;
-        ctx.fillStyle = layer.color;
-        ctx.lineWidth = 1.8 * zoom;
-
-        if (elem.type === 'point' || elem.points.length === 1) {
-          const pt = elem.points[0];
-          const proj = project3D(pt);
-          const baseProj = project3D({ x: pt.x, y: pt.y, z: bounds.minZ });
-
-          ctx.beginPath();
-          ctx.strokeStyle = layer.color + '80';
-          ctx.moveTo(baseProj.x, baseProj.y);
-          ctx.lineTo(proj.x, proj.y);
-          ctx.stroke();
-
-          ctx.beginPath();
-          ctx.arc(proj.x, proj.y, 4, 0, Math.PI * 2);
-          ctx.fill();
-
-          if (showLabels) {
-            ctx.fillStyle = '#f8fafc';
-            ctx.font = '9px monospace';
-            ctx.fillText(`+${pt.z?.toFixed(1) || 0}m`, proj.x + 6, proj.y - 4);
-          }
-        } else {
-          ctx.beginPath();
-          elem.points.forEach((pt, i) => {
-            const proj = project3D(pt);
-            if (i === 0) ctx.moveTo(proj.x, proj.y);
-            else ctx.lineTo(proj.x, proj.y);
-          });
-
-          if (elem.type === 'shape' || layer.type === 'buildings') {
-            ctx.closePath();
-            ctx.fillStyle = layer.color + '40';
-            ctx.fill();
-          }
-
-          ctx.stroke();
-
-          if (layer.type === 'buildings') {
-            elem.points.forEach((pt) => {
-              const topP = project3D(pt);
-              const botP = project3D({ x: pt.x, y: pt.y, z: bounds.minZ });
-              ctx.beginPath();
-              ctx.strokeStyle = layer.color + '60';
-              ctx.lineWidth = 1;
-              ctx.moveTo(topP.x, topP.y);
-              ctx.lineTo(botP.x, botP.y);
-              ctx.stroke();
-            });
-          }
-        }
-      });
-    }
+    });
 
     ctx.restore();
 
@@ -582,23 +481,16 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
     ctx.fillStyle = '#f8fafc';
     ctx.font = '10px sans-serif';
     ctx.fillText(
-      viewMode === '2d'
-        ? `Ölçek Alanı: ${(spanX / zoom).toFixed(1)}m × ${(spanY / zoom).toFixed(1)}m (2D)`
-        : `3D Görünüm (Açı: ${Math.round((rotY * 180) / Math.PI)}°)`,
+      `Ölçek Alanı: ${(spanX / zoom).toFixed(1)}m × ${(spanY / zoom).toFixed(1)}m (2D CAD)`,
       25,
       height - 20
     );
-  }, [zoom, pan, layers, elements, showGrid, showLabels, canvasBg, viewMode, rotX, rotY, bounds, activeTab]);
+  }, [zoom, pan, layers, elements, showGrid, showLabels, canvasBg, bounds, activeTab]);
 
-  // Mouse drag & Orbit
+  // Mouse drag & Pan
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (viewMode === '3d') {
-      setIsOrbiting(true);
-      setStartPan({ x: e.clientX, y: e.clientY });
-    } else {
-      setIsPanning(true);
-      setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    }
+    setIsPanning(true);
+    setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -627,13 +519,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
 
     setCursorPos({ x: worldX, y: worldY, z: calculatedZ });
 
-    if (viewMode === '3d' && isOrbiting) {
-      const dx = e.clientX - startPan.x;
-      const dy = e.clientY - startPan.y;
-      setRotY((prev) => prev + dx * 0.015);
-      setRotX((prev) => Math.max(0.1, Math.min(Math.PI / 2 - 0.05, prev + dy * 0.012)));
-      setStartPan({ x: e.clientX, y: e.clientY });
-    } else if (isPanning) {
+    if (isPanning) {
       setPan({
         x: e.clientX - startPan.x,
         y: e.clientY - startPan.y,
@@ -643,7 +529,6 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
 
   const handleMouseUp = () => {
     setIsPanning(false);
-    setIsOrbiting(false);
   };
 
   // --- INTERPOLATION PIPELINE ---
@@ -862,9 +747,9 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
               <Upload size={16} className="text-cyan-400" />
               1. DGN Harita Yükle
             </h3>
-            {fileInfo && (
+            {pendingMeta && (
               <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20 flex items-center gap-1">
-                <CheckCircle size={12} /> Yüklendi
+                <CheckCircle size={12} /> Seçildi
               </span>
             )}
           </div>
@@ -875,7 +760,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
               <Upload size={20} />
             </div>
             <p className="text-xs font-semibold text-slate-200">
-              {fileInfo ? 'Farklı bir DGN seçin' : 'DGN dosyası seçin veya sürükleyin'}
+              {pendingMeta ? pendingMeta.name : 'DGN dosyası seçin veya sürükleyin'}
             </p>
             <p className="text-[10px] text-slate-400 mt-1">
               MicroStation V7 / V8 formatları
@@ -887,7 +772,7 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
             className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-750 text-cyan-400 hover:text-cyan-300 border border-slate-700 hover:border-cyan-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
           >
             <Layers size={14} />
-            <span>Örnek DGN Haritasi Yükle</span>
+            <span>Örnek DGN Haritası Yükle</span>
           </button>
         </div>
 
@@ -896,15 +781,15 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <Compass size={16} className="text-indigo-400" />
-              2. Koordinat Sistemi (CRS) & Projeksiyon Bilgileri
+              2. Koordinat Sistemi (CRS) & Ayrıştırma
             </h3>
             <span className="text-[11px] text-indigo-300 font-mono bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
               {crs}
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+            <div className="sm:col-span-2 space-y-1.5">
               <label className="text-xs font-semibold text-slate-300">Harita Projeksiyonu (CRS)</label>
               <select
                 value={crs}
@@ -919,17 +804,28 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
               </select>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300">Metrik Birim</label>
-              <select
-                value={unit}
-                onChange={(e) => setUnit(e.target.value)}
-                className="w-full bg-slate-950/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+            <div>
+              <button
+                onClick={handleExecuteOpenAndParse}
+                disabled={!pendingFile || isLoadingFile}
+                className={`w-full py-2 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-lg ${
+                  !pendingFile || isLoadingFile
+                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-750'
+                    : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/25 border border-cyan-400'
+                }`}
               >
-                <option value="Meter">Metre (m)</option>
-                <option value="Centimeter">Santimetre (cm)</option>
-                <option value="Foot">Foot (ft)</option>
-              </select>
+                {isLoadingFile ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>Ayrıştırılıyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <Eye size={14} />
+                    <span>Dosyayı Aç / Ayrıştır</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
 
@@ -995,13 +891,10 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
                         }`}
                       >
                         <MapIcon size={14} />
-                        <span>Leaflet Harita (GDAL)</span>
+                        <span>GIS Vektör Haritası</span>
                       </button>
                       <button
-                        onClick={() => {
-                          setViewerMode('2d');
-                          setViewMode('2d');
-                        }}
+                        onClick={() => setViewerMode('2d')}
                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
                           viewerMode === '2d'
                             ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-inner'
@@ -1009,22 +902,6 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
                         }`}
                       >
                         <span>2D CAD Tuvali</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setViewerMode('3d');
-                          setViewMode('3d');
-                          setRotX(0.55);
-                          setRotY(0.65);
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                          viewerMode === '3d'
-                            ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-inner'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        <Box size={14} className={viewerMode === '3d' ? 'animate-pulse' : ''} />
-                        <span>3D İzometrik</span>
                       </button>
                     </div>
 
@@ -1088,8 +965,8 @@ const DGNAnalysis: React.FC<DGNAnalysisProps> = ({
                     </div>
                   ) : (
                     <div className="text-[11px] text-cyan-300 font-mono flex items-center gap-1.5 bg-cyan-950/60 px-2.5 py-1 rounded-lg border border-cyan-500/20">
-                      <Globe size={13} className="text-cyan-400 animate-spin [animation-duration:12s]" />
-                      <span>GDAL.js + Leaflet Vektör CBS Motoru</span>
+                      <Globe size={13} className="text-cyan-400" />
+                      <span>Vektör Harita Motoru</span>
                     </div>
                   )}
                 </div>
