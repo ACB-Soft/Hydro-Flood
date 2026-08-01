@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { 
   BarChart3, 
   Droplets, 
@@ -18,7 +18,8 @@ import {
   Check,
   Compass,
   Layers,
-  ChevronDown
+  ChevronDown,
+  Eye
 } from 'lucide-react';
 import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon } from 'react-leaflet';
 import { MapAutoCenter, MapClickHandler } from './MapHelpers';
@@ -97,22 +98,17 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
   const {
     currentStep, setCurrentStep, dem, params, coords, selectedCRS, setSelectedCRS,
     isSimulating, progress, bathtubLevel, setBathtubLevel, floodImage,
-    elevationImage, reliefImage, viewMode, setViewMode, riverKml, sourceKmlName,
+    elevationImage, reliefImage, riverKml, sourceKmlName,
     sourceWgs, areaKml, stats, wgs84Bounds, startSimulation, handleSourceKmlUpload,
     handleAreaKmlUpload, handleMapClick, exportToKml, handleDemUpload, CRS_LIST,
     setShowStats
   } = props;
 
-  const [crsSearch, setCrsSearch] = useState('');
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
+  const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
 
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
-
-  const filteredCRSList = CRS_LIST.filter(crs => 
-    crs.code.toLowerCase().includes(crsSearch.toLowerCase()) ||
-    crs.name.toLowerCase().includes(crsSearch.toLowerCase())
-  );
 
   const handleStartAnalysis = () => {
     if (!dem) {
@@ -121,71 +117,100 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
     }
     startSimulation();
     setCurrentStep(5);
+    setMobileTab('map');
   };
 
   const isResultPage = currentStep === 5;
 
   return (
-    <div className="w-full max-w-[1920px] mx-auto space-y-6 px-1 sm:px-2">
+    <div className="w-full h-full flex flex-col min-h-0 overflow-hidden">
       {/* ----------------- RESULT PAGE ----------------- */}
       {isResultPage ? (
         <motion.div 
-          initial={{ opacity: 0, y: 15 }}
+          initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="space-y-6"
+          className="w-full h-full flex flex-col min-h-0 space-y-2 overflow-hidden"
         >
           {/* Top Bar Action */}
-          <div className="flex items-center justify-between gap-4 glass p-4 rounded-2xl border border-white/10">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-cyan-500/20 text-cyan-400 rounded-xl">
-                <BarChart3 size={20} />
+          <div className="flex items-center justify-between gap-3 glass p-2.5 sm:p-3 rounded-2xl border border-white/10 shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 bg-cyan-500/20 text-cyan-400 rounded-xl">
+                <BarChart3 size={18} />
               </div>
               <div>
-                <h2 className="text-base font-bold text-white">Taşkın Simülasyonu ve Etki Alanı Analiz Sonuçları</h2>
-                <p className="text-xs text-slate-400">Hidrolojik yükseklik modeli ve vektör sınırları üzerinde elde edilen veriler</p>
+                <h2 className="text-xs sm:text-sm font-bold text-white">Taşkın Simülasyonu Sonuçları</h2>
+                <p className="text-[10px] text-slate-400 hidden sm:block">Hidrolojik yükseklik modeli ve vektör sınırları üzerinde elde edilen veriler</p>
               </div>
             </div>
             <button 
-              onClick={() => setCurrentStep(1)} 
-              className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/20 transition-all flex items-center gap-2 shadow-sm shrink-0"
+              onClick={() => {
+                setCurrentStep(1);
+                setMobileTab('controls');
+              }} 
+              className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/20 transition-all flex items-center gap-1.5 shadow-sm shrink-0"
             >
-              <ArrowLeft size={16} />
-              Girdi Parametrelerini Düzenle
+              <ArrowLeft size={14} />
+              <span>Düzenle</span>
+            </button>
+          </div>
+
+          {/* Mobile Tab Navigation for Results (< lg screen width) */}
+          <div className="flex lg:hidden bg-slate-900 border border-slate-800 rounded-xl p-1 shrink-0">
+            <button
+              onClick={() => setMobileTab('controls')}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                mobileTab === 'controls' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <BarChart3 size={13} />
+              <span>Analiz Özeti & İndir</span>
+            </button>
+            <button
+              onClick={() => setMobileTab('map')}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                mobileTab === 'map' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <MapIcon size={13} />
+              <span>Taşkın Haritası</span>
             </button>
           </div>
 
           {/* Results Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 h-full min-h-0 flex-1">
+            
             {/* Map Viewer */}
-            <div className="lg:col-span-8 xl:col-span-9 glass rounded-3xl p-3 border border-white/20 shadow-xl h-[580px] lg:h-[680px] relative overflow-hidden flex flex-col">
+            <div className={`lg:col-span-9 glass rounded-2xl p-2 sm:p-2.5 border border-white/20 shadow-xl relative overflow-hidden flex flex-col h-full min-h-0 ${
+              mobileTab === 'map' ? 'flex' : 'hidden lg:flex'
+            }`}>
               {isSimulating && (
                 <div className="absolute inset-0 z-[500] bg-slate-950/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-4">
                   <div className="p-4 bg-cyan-500/20 text-cyan-400 rounded-full">
                     <RefreshCw size={36} className="animate-spin" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-bold text-white">Simülasyon Hesaplanıyor...</h3>
-                    <p className="text-slate-400 text-xs mt-1">Hidrolojik matris ve KML alan sınırları üzerinde taşkın çözümleniyor</p>
+                    <h3 className="text-lg font-bold text-white">Simülasyon Hesaplanıyor...</h3>
+                    <p className="text-slate-400 text-xs mt-1">Hidrolojik matris üzerinde taşkın çözümleniyor</p>
                   </div>
-                  <div className="w-72 bg-slate-800 rounded-full h-3 overflow-hidden border border-white/10">
+                  <div className="w-64 bg-slate-800 rounded-full h-2.5 overflow-hidden border border-white/10">
                     <div 
                       className="bg-gradient-to-r from-cyan-500 via-blue-500 to-emerald-400 h-full transition-all duration-200"
                       style={{ width: `${progress}%` }}
                     />
                   </div>
-                  <span className="text-sm font-mono font-bold text-cyan-300">%{Math.round(progress)}</span>
+                  <span className="text-xs font-mono font-bold text-cyan-300">%{Math.round(progress)}</span>
                 </div>
               )}
 
               {/* Basemap Picker Overlay */}
-              <div className="absolute top-5 right-5 z-[400]">
+              <div className="absolute top-4 right-4 z-[400]">
                 <div className="relative">
                   <button
                     onClick={() => setShowBasemapMenu(!showBasemapMenu)}
-                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-900/90 hover:bg-slate-900 text-white border border-white/20 shadow-xl backdrop-blur-md transition-all"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900/90 hover:bg-slate-900 text-white border border-white/20 shadow-xl backdrop-blur-md transition-all"
                   >
-                    <Layers size={15} className="text-cyan-400" />
-                    <span>Harita Katmanı: {currentBasemap.label}</span>
+                    <Layers size={14} className="text-cyan-400" />
+                    <span>{currentBasemap.label}</span>
                   </button>
 
                   {showBasemapMenu && (
@@ -198,7 +223,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                             setActiveBasemap(bm.id);
                             setShowBasemapMenu(false);
                           }}
-                          className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
+                          className={`w-full text-left px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
                             activeBasemap === bm.id
                               ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
                               : 'text-slate-300 hover:bg-white/10'
@@ -213,53 +238,55 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                 </div>
               </div>
 
-              <MapContainer 
-                center={[coords.lat, coords.lon]} 
-                zoom={13} 
-                maxZoom={24}
-                className="w-full h-full rounded-2xl"
-              >
-                <TileLayer
-                  key={currentBasemap.id}
-                  url={currentBasemap.url}
-                  attribution={currentBasemap.attribution}
+              <div className="flex-1 w-full h-full min-h-0 rounded-xl overflow-hidden relative">
+                <MapContainer 
+                  center={[coords.lat, coords.lon]} 
+                  zoom={13} 
                   maxZoom={24}
-                  maxNativeZoom={20}
-                />
-                {reliefImage && wgs84Bounds && (
-                  <ImageOverlay
-                    url={reliefImage}
-                    bounds={wgs84Bounds}
-                    opacity={0.6}
+                  className="w-full h-full"
+                >
+                  <TileLayer
+                    key={currentBasemap.id}
+                    url={currentBasemap.url}
+                    attribution={currentBasemap.attribution}
+                    maxZoom={24}
+                    maxNativeZoom={20}
                   />
-                )}
-                {floodImage && wgs84Bounds && (
-                  <ImageOverlay
-                    url={floodImage}
-                    bounds={wgs84Bounds}
-                    opacity={0.85}
-                  />
-                )}
-                {riverKml && <Polyline positions={riverKml.coords} color="#3b82f6" weight={4} opacity={0.8} />}
-                {areaKml && <Polygon positions={areaKml.coords} color="#10b981" weight={2.5} fillOpacity={0.25} />}
-                {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
-              </MapContainer>
+                  {reliefImage && wgs84Bounds && (
+                    <ImageOverlay
+                      url={reliefImage}
+                      bounds={wgs84Bounds}
+                      opacity={0.6}
+                    />
+                  )}
+                  {floodImage && wgs84Bounds && (
+                    <ImageOverlay
+                      url={floodImage}
+                      bounds={wgs84Bounds}
+                      opacity={0.85}
+                    />
+                  )}
+                  {riverKml && <Polyline positions={riverKml.coords} color="#3b82f6" weight={4} opacity={0.8} />}
+                  {areaKml && <Polygon positions={areaKml.coords} color="#10b981" weight={2.5} fillOpacity={0.25} />}
+                  {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
+                </MapContainer>
+              </div>
 
               {/* Map Legend Overlay */}
-              <div className="absolute bottom-4 left-4 z-[400] bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-[11px] text-slate-200 border border-white/15 shadow-xl flex flex-wrap items-center gap-3">
+              <div className="absolute bottom-4 left-4 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-white/15 shadow-xl flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-full bg-blue-500 border border-blue-300 inline-block"></span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-500 border border-blue-300 inline-block"></span>
                   <span className="text-slate-200 font-medium">Taşkın Alanı</span>
                 </div>
                 {areaKml && (
-                  <div className="flex items-center gap-1.5 border-l border-white/15 pl-3">
-                    <span className="w-3 h-3 rounded-full bg-red-500 border border-red-300 inline-block animate-pulse"></span>
-                    <span className="text-red-300 font-bold">Kesişim / Riskli Alan</span>
+                  <div className="flex items-center gap-1.5 border-l border-white/15 pl-2.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 border border-red-300 inline-block animate-pulse"></span>
+                    <span className="text-red-300 font-bold">Riskli Alan</span>
                   </div>
                 )}
                 {areaKml && (
-                  <div className="flex items-center gap-1.5 border-l border-white/15 pl-3">
-                    <span className="w-3 h-3 rounded-sm border-2 border-emerald-400 bg-emerald-500/30 inline-block"></span>
+                  <div className="flex items-center gap-1.5 border-l border-white/15 pl-2.5">
+                    <span className="w-2.5 h-2.5 rounded-sm border-2 border-emerald-400 bg-emerald-500/30 inline-block"></span>
                     <span className="text-emerald-300 font-medium">İnceleme Sınırı</span>
                   </div>
                 )}
@@ -267,123 +294,150 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
             </div>
 
             {/* Summary & Export */}
-            <div className="lg:col-span-4 xl:col-span-3 space-y-6">
-              <div className="glass rounded-3xl p-6 border border-white/20 shadow-xl space-y-6">
+            <div className={`lg:col-span-3 space-y-3 overflow-y-auto h-full min-h-0 custom-scrollbar ${
+              mobileTab === 'controls' ? 'flex flex-col' : 'hidden lg:flex lg:flex-col'
+            }`}>
+              <div className="glass rounded-2xl p-4 border border-white/20 shadow-xl space-y-4">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                  <Info size={16} className="text-cyan-400" />
+                  <Info size={15} className="text-cyan-400" />
                   Analiz Özeti
                 </h3>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white/5 border border-white/10 p-4 rounded-2xl">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="bg-white/5 border border-white/10 p-3 rounded-xl">
                     <p className="text-[10px] font-bold text-cyan-400 uppercase">Toplam Taşkın Alanı</p>
-                    <p className="text-lg sm:text-xl font-display font-bold text-white mt-1">
+                    <p className="text-base font-display font-bold text-white mt-1">
                       {stats?.totalArea ? stats.totalArea.toLocaleString() : '0'} m²
                     </p>
                   </div>
 
-                  <div className="bg-white/5 border border-white/10 p-4 rounded-2xl">
+                  <div className="bg-white/5 border border-white/10 p-3 rounded-xl">
                     <p className="text-[10px] font-bold text-blue-400 uppercase">Su Seviyesi Artışı</p>
-                    <p className="text-lg sm:text-xl font-display font-bold text-white mt-1">
+                    <p className="text-base font-display font-bold text-white mt-1">
                       +{bathtubLevel.toFixed(1)} m
                     </p>
                   </div>
                 </div>
 
                 {areaKml && (
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-2xl space-y-3">
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl space-y-2">
                     <p className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
-                      <CheckCircle2 size={16} />
+                      <CheckCircle2 size={15} />
                       İnceleme Alanı ({areaKml.name})
                     </p>
                     <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="bg-white/5 p-2.5 rounded-xl border border-white/5">
+                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
                         <span className="text-slate-400 block text-[10px]">Riskli Alan:</span>
-                        <span className="font-bold text-emerald-300 text-sm">{stats?.areaFloodedM2?.toLocaleString() || 0} m²</span>
+                        <span className="font-bold text-emerald-300 text-xs">{stats?.areaFloodedM2?.toLocaleString() || 0} m²</span>
                       </div>
-                      <div className="bg-white/5 p-2.5 rounded-xl border border-white/5">
+                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
                         <span className="text-slate-400 block text-[10px]">Risk Oranı:</span>
-                        <span className="font-bold text-emerald-300 text-sm">%{stats?.areaRiskPercent?.toFixed(1) || 0}</span>
+                        <span className="font-bold text-emerald-300 text-xs">%{stats?.areaRiskPercent?.toFixed(1) || 0}</span>
                       </div>
                     </div>
                   </div>
                 )}
 
-                <div className="pt-2 space-y-3">
+                <div className="pt-1 space-y-2">
                   <button 
                     onClick={exportToKml}
-                    className="w-full py-3.5 px-4 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 hover:from-cyan-500/30 hover:to-blue-500/30 text-cyan-300 border border-cyan-500/40 rounded-2xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/10"
+                    className="w-full py-2.5 px-3 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 hover:from-cyan-500/30 hover:to-blue-500/30 text-cyan-300 border border-cyan-500/40 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md"
                   >
-                    <MapIcon size={18} />
+                    <MapIcon size={16} />
                     Taşkın Sınırlarını KML İndir
                   </button>
 
                   <button 
                     onClick={() => setShowStats(true)}
-                    className="w-full py-3 px-4 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-2xl font-bold text-xs transition-all flex items-center justify-center gap-2"
+                    className="w-full py-2 px-3 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2"
                   >
-                    <Info size={16} />
+                    <Info size={15} />
                     Tüm Detaylı İstatistikler
                   </button>
                 </div>
               </div>
             </div>
+
           </div>
         </motion.div>
       ) : (
         /* ----------------- SINGLE PAGE SETUP ----------------- */
-        <motion.div 
-          initial={{ opacity: 0, y: 15 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="space-y-6"
-        >
-          {/* Main 2-Column Split: Left Options, Right Map & Action */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+        <div className="w-full h-full flex flex-col min-h-0 space-y-2 overflow-hidden">
+          
+          {/* Mobile Tab Navigation (< lg screen width) */}
+          <div className="flex lg:hidden bg-slate-900 border border-slate-800 rounded-xl p-1 shrink-0">
+            <button
+              onClick={() => setMobileTab('controls')}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all relative ${
+                mobileTab === 'controls' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Sliders size={13} />
+              <span>Dosya & Parametre Paneli</span>
+              {dem && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse absolute top-1 right-2" />
+              )}
+            </button>
+            <button
+              onClick={() => setMobileTab('map')}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                mobileTab === 'map' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Eye size={13} />
+              <span>Harita & Simülasyon</span>
+            </button>
+          </div>
+
+          {/* Main Grid Container */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 h-full min-h-0 flex-1">
             
-            {/* LEFT PANEL: OPTIONS (5 Cols on LG, 4 Cols on XL) */}
-            <div className="lg:col-span-5 xl:col-span-4 flex flex-col justify-between space-y-3.5">
+            {/* LEFT PANEL: OPTIONS (Visible on Desktop OR when MobileTab === 'controls') */}
+            <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto lg:overflow-hidden ${
+              mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
+            }`}>
               
               {/* 1. DEM UPLOAD */}
-              <section className="glass rounded-3xl p-4 border border-white/20 shadow-xl space-y-3">
-                <div className="flex items-center gap-3 pb-2.5 border-b border-white/10">
-                  <div className="p-1.5 bg-blue-500/20 text-blue-400 rounded-xl shrink-0">
-                    <LayersIcon size={18} />
+              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0">
+                <div className="flex items-center gap-2.5 pb-2 border-b border-white/10">
+                  <div className="p-1 bg-blue-500/20 text-blue-400 rounded-lg shrink-0">
+                    <LayersIcon size={15} />
                   </div>
                   <div>
-                    <h2 className="font-bold text-white text-sm">1. Topografya Verisi (DEM)</h2>
-                    <p className="text-[11px] text-slate-400">Dijital Yükseklik Modelini yükleyin (.tif, .asc)</p>
+                    <h2 className="font-bold text-white text-xs">1. Topografya Verisi (DEM)</h2>
+                    <p className="text-[10px] text-slate-400">Dijital Yükseklik Modeli (.tif, .asc)</p>
                   </div>
                 </div>
 
                 {dem ? (
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-2xl flex items-center justify-between gap-3">
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl flex items-center justify-between gap-2">
                     <div className="space-y-0.5 overflow-hidden">
                       <div className="flex items-center gap-1.5">
-                        <CheckCircle2 size={15} className="text-emerald-400 shrink-0" />
+                        <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
                         <span className="font-bold text-white text-xs">DEM Yüklendi</span>
                       </div>
                       <p className="text-[10px] text-slate-400 truncate">
-                        {dem.width}x{dem.height} px • Çözünürlük: {dem.cellSize.toFixed(2)}m • {dem.min.toFixed(1)}m - {dem.max.toFixed(1)}m
+                        {dem.width}x{dem.height} px • Çözünürlük: {dem.cellSize.toFixed(2)}m
                       </p>
                     </div>
 
-                    <label className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-[11px] font-bold cursor-pointer border border-white/10 shrink-0 transition-all">
+                    <label className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white rounded-lg text-[10px] font-bold cursor-pointer border border-white/10 shrink-0 transition-all">
                       Değiştir
                       <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
                     </label>
                   </div>
                 ) : (
-                  <label className="flex items-center justify-between gap-3 p-3 border-2 border-dashed border-white/10 rounded-2xl hover:bg-white/5 transition-all cursor-pointer bg-white/5 group">
-                    <div className="flex items-center gap-2.5 overflow-hidden">
-                      <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-xl group-hover:scale-105 transition-transform shrink-0">
-                        <Download size={20} />
+                  <label className="flex items-center justify-between gap-2 p-2.5 border border-dashed border-white/15 rounded-xl hover:bg-white/5 transition-all cursor-pointer bg-white/5 group">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <div className="p-1.5 bg-cyan-500/10 text-cyan-400 rounded-lg group-hover:scale-105 transition-transform shrink-0">
+                        <Download size={16} />
                       </div>
                       <div className="overflow-hidden">
                         <span className="font-bold text-xs text-slate-200 block truncate">DEM Dosyası Seçin</span>
                         <span className="text-[10px] text-slate-400 font-normal block truncate">.tif veya .asc formatı</span>
                       </div>
                     </div>
-                    <span className="px-3 py-1.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-xl text-[11px] font-bold shrink-0">
+                    <span className="px-2.5 py-1 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-lg text-[10px] font-bold shrink-0">
                       Gözat
                     </span>
                     <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
@@ -391,24 +445,22 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                 )}
               </section>
 
-              {/* 2. CRS SELECTOR */}
-              <section className="glass rounded-3xl p-4 border border-white/20 shadow-xl space-y-3">
-                <div className="flex items-center justify-between pb-2.5 border-b border-white/10">
-                  <div className="flex items-center gap-3">
-                    <div className="p-1.5 bg-cyan-500/20 text-cyan-400 rounded-xl shrink-0">
-                      <Globe size={18} />
+              {/* 2. CRS SELECTOR (İsteğe Bağlı) */}
+              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0">
+                <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1 bg-cyan-500/20 text-cyan-400 rounded-lg shrink-0">
+                      <Globe size={15} />
                     </div>
                     <div>
-                      <h2 className="font-bold text-white text-sm">2. Koordinat Sistemi (CRS)</h2>
-                      <p className="text-[11px] text-slate-400">Proje referans coğrafi / projeksiyon sistemi</p>
+                      <h2 className="font-bold text-white text-xs">2. Koordinat Sistemi (CRS)</h2>
+                      <p className="text-[10px] text-slate-400">Proje referans sistemi</p>
                     </div>
                   </div>
-                  <span className="px-2.5 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-full text-[10px] font-bold shrink-0">
-                    {selectedCRS.code}
-                  </span>
+                  <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">İsteğe Bağlı</span>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   <div className="relative">
                     <select
                       value={selectedCRS.code}
@@ -416,7 +468,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                         const found = CRS_LIST.find(c => c.code === e.target.value);
                         if (found) setSelectedCRS(found);
                       }}
-                      className="w-full bg-slate-900/90 border border-white/20 rounded-xl px-3 py-2.5 text-xs font-semibold text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 appearance-none cursor-pointer transition-all pr-9 shadow-lg"
+                      className="w-full bg-slate-900/90 border border-white/20 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none focus:ring-1 focus:ring-cyan-500/50 appearance-none cursor-pointer transition-all pr-8 shadow-sm"
                     >
                       <optgroup label="TUREF / TM (3° - Türkiye)">
                         {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(crs => (
@@ -453,44 +505,30 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                           </option>
                         ))}
                       </optgroup>
-                      <optgroup label="Diğer Uluslararası Sistemler">
-                        {CRS_LIST.filter(c => 
-                          !c.code.startsWith('EPSG:525') &&
-                          !c.code.startsWith('EPSG:522') &&
-                          !['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638', 'EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038', 'EPSG:4326', 'EPSG:3857'].includes(c.code)
-                        ).map(crs => (
-                          <option key={crs.code} value={crs.code} className="bg-slate-900 text-white py-1">
-                            {crs.code} - {crs.name}
-                          </option>
-                        ))}
-                      </optgroup>
                     </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400">
-                      <ChevronDown size={15} />
+                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400">
+                      <ChevronDown size={14} />
                     </div>
                   </div>
-                  <p className="text-[10px] text-slate-400 leading-tight">
-                    Seçili: <span className="text-cyan-300 font-medium">{selectedCRS.name}</span>
-                  </p>
                 </div>
               </section>
 
               {/* 3. WATER LEVEL PARAMETER */}
-              <section className="glass rounded-3xl p-4 border border-white/20 shadow-xl space-y-3">
-                <div className="flex items-center gap-3 pb-2.5 border-b border-white/10">
-                  <div className="p-1.5 bg-blue-500/20 text-blue-400 rounded-xl shrink-0">
-                    <Droplets size={18} />
+              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0">
+                <div className="flex items-center gap-2.5 pb-2 border-b border-white/10">
+                  <div className="p-1 bg-blue-500/20 text-blue-400 rounded-lg shrink-0">
+                    <Droplets size={15} />
                   </div>
                   <div>
-                    <h2 className="font-bold text-white text-sm">3. Su Seviyesi Parametresi</h2>
-                    <p className="text-[11px] text-slate-400">Bathtub simülasyonu su artış miktarı</p>
+                    <h2 className="font-bold text-white text-xs">3. Su Seviyesi Parametresi</h2>
+                    <p className="text-[10px] text-slate-400">Bathtub su artış miktarı</p>
                   </div>
                 </div>
 
-                <div className="space-y-2.5 bg-white/5 p-3 rounded-2xl border border-white/10">
+                <div className="space-y-2 bg-white/5 p-2.5 rounded-xl border border-white/10">
                   <div className="flex justify-between items-center">
-                    <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Su Seviyesi Artışı</label>
-                    <span className="text-lg font-display font-bold text-cyan-400">+{bathtubLevel.toFixed(1)} m</span>
+                    <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Su Seviyesi Artışı</label>
+                    <span className="text-sm font-display font-bold text-cyan-400">+{bathtubLevel.toFixed(1)} m</span>
                   </div>
                   <input 
                     type="range" 
@@ -499,14 +537,14 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     step="0.1"
                     value={bathtubLevel} 
                     onChange={(e) => setBathtubLevel(parseFloat(e.target.value))}
-                    className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-400"
+                    className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-400"
                   />
-                  <div className="flex gap-1.5 pt-0.5">
+                  <div className="flex gap-1 pt-0.5">
                     {[1.0, 2.0, 3.0, 5.0, 10.0].map((val) => (
                       <button
                         key={val}
                         onClick={() => setBathtubLevel(val)}
-                        className={`flex-1 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+                        className={`flex-1 py-0.5 rounded text-[10px] font-bold border transition-all ${
                           bathtubLevel === val 
                             ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300' 
                             : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
@@ -520,34 +558,34 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
               </section>
 
               {/* 4. KML UPLOADS */}
-              <section className="glass rounded-3xl p-4 border border-white/20 shadow-xl space-y-3">
-                <div className="flex items-center gap-3 pb-2.5 border-b border-white/10">
-                  <div className="p-1.5 bg-emerald-500/20 text-emerald-400 rounded-xl shrink-0">
-                    <MapPin size={18} />
+              <section className="glass rounded-2xl p-3 border border-white/20 shadow-sm space-y-2 shrink-0 flex-1 min-h-0 flex flex-col justify-between">
+                <div className="flex items-center gap-2.5 pb-2 border-b border-white/10 shrink-0">
+                  <div className="p-1 bg-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
+                    <MapPin size={15} />
                   </div>
                   <div>
-                    <h2 className="font-bold text-white text-sm">4. Konum ve Vektör Verileri</h2>
-                    <p className="text-[11px] text-slate-400">Kaynak ve İnceleme Alanı KML'si yükleyin</p>
+                    <h2 className="font-bold text-white text-xs">4. Konum ve Vektör Verileri</h2>
+                    <p className="text-[10px] text-slate-400">Kaynak ve İnceleme Alanı KML'si</p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  <label className={`p-2.5 border rounded-2xl cursor-pointer transition-all flex flex-col items-center text-center ${
+                <div className="grid grid-cols-2 gap-2 my-auto">
+                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center text-center ${
                     sourceKmlName ? 'bg-blue-500/10 border-blue-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}>
-                    <MapPin className={sourceKmlName ? "text-blue-400 mb-0.5" : "text-slate-400 mb-0.5"} size={18} />
-                    <span className="text-[11px] font-bold text-slate-200 truncate w-full">
+                    <MapPin className={sourceKmlName ? "text-blue-400 mb-0.5" : "text-slate-400 mb-0.5"} size={16} />
+                    <span className="text-[10px] font-bold text-slate-200 truncate w-full">
                       {sourceKmlName ? sourceKmlName : 'Kaynak KML Yükle'}
                     </span>
                     <span className="text-[9px] text-slate-500">Nokta Vektörü</span>
                     <input type="file" accept=".kml" onChange={handleSourceKmlUpload} className="hidden" />
                   </label>
 
-                  <label className={`p-2.5 border rounded-2xl cursor-pointer transition-all flex flex-col items-center text-center ${
+                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center text-center ${
                     areaKml ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}>
-                    <FileText className={areaKml ? "text-emerald-400 mb-0.5" : "text-slate-400 mb-0.5"} size={18} />
-                    <span className="text-[11px] font-bold text-slate-200 truncate w-full">
+                    <FileText className={areaKml ? "text-emerald-400 mb-0.5" : "text-slate-400 mb-0.5"} size={16} />
+                    <span className="text-[10px] font-bold text-slate-200 truncate w-full">
                       {areaKml ? areaKml.name : 'İnceleme Alanı KML'}
                     </span>
                     <span className="text-[9px] text-slate-500">Poligon Vektörü</span>
@@ -558,54 +596,67 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
 
             </div>
 
-            {/* RIGHT PANEL: FULL-SIZE INTERACTIVE MAP & ACTION BUTTON (7 Cols on LG, 8 Cols on XL) */}
-            <div className="lg:col-span-7 xl:col-span-8 flex flex-col justify-between space-y-3.5 h-full">
+            {/* RIGHT PANEL: FULL-SIZE INTERACTIVE MAP & ACTION BUTTON (Visible on Desktop OR when MobileTab === 'map') */}
+            <div className={`lg:col-span-9 flex flex-col justify-between gap-2.5 h-full min-h-0 ${
+              mobileTab === 'map' ? 'flex' : 'hidden lg:flex'
+            }`}>
               
               {/* Interactive Map Header Card */}
-              <div className="glass rounded-3xl p-3.5 border border-white/20 shadow-2xl relative overflow-hidden flex-1 flex flex-col space-y-2.5 min-h-[480px]">
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className="glass rounded-2xl p-2.5 sm:p-3 border border-white/20 shadow-2xl relative overflow-hidden flex-1 flex flex-col gap-2 min-h-0">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1 shrink-0">
                   <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
-                    <Compass className="text-cyan-400" size={16} />
+                    <Compass className="text-cyan-400" size={15} />
                     <span>Harita Üzerinden Kaynak Noktası Seçimi ve Önizleme</span>
                   </div>
                   
-                  {/* Basemap Switcher Dropdown */}
-                  <div className="relative">
+                  <div className="flex items-center gap-2">
+                    {/* Quick Mobile Panel Open Button */}
                     <button
-                      onClick={() => setShowBasemapMenu(!showBasemapMenu)}
-                      className="flex items-center gap-2 px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-900/90 hover:bg-slate-900 text-cyan-300 border border-cyan-500/30 shadow-lg backdrop-blur-md transition-all"
+                      onClick={() => setMobileTab('controls')}
+                      className="lg:hidden px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
                     >
-                      <Layers size={14} />
-                      <span>{currentBasemap.label}</span>
+                      <Sliders size={12} />
+                      <span>Paneli Aç</span>
                     </button>
 
-                    {showBasemapMenu && (
-                      <div className="absolute right-0 mt-2 w-56 bg-slate-900/95 border border-white/20 rounded-2xl p-2 shadow-2xl backdrop-blur-xl z-[500] space-y-1">
-                        <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Harita Katmanı</div>
-                        {BASEMAP_OPTIONS.map((bm) => (
-                          <button
-                            key={bm.id}
-                            onClick={() => {
-                              setActiveBasemap(bm.id);
-                              setShowBasemapMenu(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
-                              activeBasemap === bm.id
-                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
-                                : 'text-slate-300 hover:bg-white/10'
-                            }`}
-                          >
-                            <span>{bm.label}</span>
-                            {activeBasemap === bm.id && <Check size={14} className="text-cyan-400" />}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    {/* Basemap Switcher Dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowBasemapMenu(!showBasemapMenu)}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-900/90 hover:bg-slate-900 text-cyan-300 border border-cyan-500/30 shadow-md backdrop-blur-md transition-all"
+                      >
+                        <Layers size={13} />
+                        <span>{currentBasemap.label}</span>
+                      </button>
+
+                      {showBasemapMenu && (
+                        <div className="absolute right-0 mt-2 w-52 bg-slate-900/95 border border-white/20 rounded-xl p-1.5 shadow-2xl backdrop-blur-xl z-[500] space-y-1">
+                          <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Harita Katmanı</div>
+                          {BASEMAP_OPTIONS.map((bm) => (
+                            <button
+                              key={bm.id}
+                              onClick={() => {
+                                setActiveBasemap(bm.id);
+                                setShowBasemapMenu(false);
+                              }}
+                              className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between transition-all ${
+                                activeBasemap === bm.id
+                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
+                                  : 'text-slate-300 hover:bg-white/10'
+                              }`}
+                            >
+                              <span>{bm.label}</span>
+                              {activeBasemap === bm.id && <Check size={13} className="text-cyan-400" />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 {/* Map View */}
-                <div className="flex-1 w-full min-h-[380px] rounded-2xl overflow-hidden border border-white/10 relative shadow-inner">
+                <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-white/10 relative shadow-inner">
                   <MapContainer 
                     center={[sourceWgs ? sourceWgs[0] : coords.lat, sourceWgs ? sourceWgs[1] : coords.lon]} 
                     zoom={13} 
@@ -628,10 +679,10 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     {sourceWgs && (
                       <CircleMarker 
                         center={sourceWgs} 
-                        radius={9} 
+                        radius={8} 
                         fillColor="#06b6d4" 
                         color="white" 
-                        weight={2.5} 
+                        weight={2} 
                         fillOpacity={1} 
                       />
                     )}
@@ -639,22 +690,22 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                   </MapContainer>
 
                   {/* Top Notification Banner inside Map */}
-                  <div className="absolute top-3 left-3 z-[400] bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-white/15 flex items-center gap-2 shadow-lg">
-                    <MapPin className="text-cyan-400 shrink-0" size={14} />
-                    <span>Haritaya tıklayarak su kaynak noktasını doğrudan değiştirebilirsiniz</span>
+                  <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/85 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-200 border border-white/15 flex items-center gap-1.5 shadow-md">
+                    <MapPin className="text-cyan-400 shrink-0" size={13} />
+                    <span>Haritaya tıklayarak su kaynak noktasını değiştirebilirsiniz</span>
                   </div>
 
                   {/* Bottom Status Bar inside Map */}
-                  <div className="absolute bottom-3 left-3 right-3 z-[400] flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-xs text-slate-300 border border-white/15 shadow-xl">
-                    <div className="flex items-center gap-4 text-[11px]">
+                  <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-300 border border-white/15 shadow-xl">
+                    <div className="flex items-center gap-3 text-[10px]">
                       <span><strong className="text-cyan-400">Grid:</strong> X: {params.sourceX}, Y: {params.sourceY}</span>
                       {sourceWgs && (
-                        <span><strong className="text-emerald-400">Coğrafi:</strong> {sourceWgs[0].toFixed(5)}°, {sourceWgs[1].toFixed(5)}°</span>
+                        <span><strong className="text-emerald-400">Coğrafi:</strong> {sourceWgs[0].toFixed(4)}°, {sourceWgs[1].toFixed(4)}°</span>
                       )}
                     </div>
                     {areaKml && (
-                      <span className="bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full text-[10px] font-bold border border-emerald-500/30">
-                        İnceleme Alanı Sınırı Aktif ({areaKml.name})
+                      <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.2 rounded-full text-[9px] font-bold border border-emerald-500/30">
+                        İnceleme Alanı Aktif ({areaKml.name})
                       </span>
                     )}
                   </div>
@@ -664,16 +715,16 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
               {/* ACTION BUTTON RIGHT ON THE MAIN PANEL */}
               <button
                 onClick={handleStartAnalysis}
-                className="w-full py-3.5 px-6 bg-gradient-to-r from-cyan-500 via-blue-600 to-cyan-500 hover:from-cyan-400 hover:to-blue-500 text-white rounded-2xl font-display font-bold text-sm sm:text-base transition-all shadow-xl shadow-cyan-500/25 flex items-center justify-center gap-2.5 shrink-0 hover:scale-[1.002] active:scale-[0.998]"
+                className="w-full py-3 px-4 bg-gradient-to-r from-cyan-500 via-blue-600 to-cyan-500 hover:from-cyan-400 hover:to-blue-500 text-white rounded-xl font-display font-bold text-xs sm:text-sm transition-all shadow-lg shadow-cyan-500/25 flex items-center justify-center gap-2 shrink-0"
               >
-                <Play size={20} className="fill-white" />
+                <Play size={16} className="fill-white" />
                 <span>Analizi Başlat (Bathtub Taşkın Simülasyonu)</span>
               </button>
 
             </div>
 
           </div>
-        </motion.div>
+        </div>
       )}
     </div>
   );
