@@ -8,6 +8,89 @@ interface CADLayer {
   visible: boolean;
 }
 
+const getAciColor = (colorNum?: any, defaultColor = '#38bdf8'): string => {
+  if (colorNum === undefined || colorNum === null) return defaultColor;
+  
+  // Direct hex strings (e.g. "#FF0000" or "FF0000")
+  if (typeof colorNum === 'string') {
+    if (colorNum.startsWith('#')) return colorNum;
+    const parsed = parseInt(colorNum, 16);
+    if (!isNaN(parsed)) return '#' + parsed.toString(16).padStart(6, '0');
+    return defaultColor;
+  }
+  
+  // True color integer (> 255 e.g. 0x00FF0000)
+  if (typeof colorNum === 'number' && colorNum > 255) {
+    const hex = (colorNum & 0xFFFFFF).toString(16).padStart(6, '0');
+    return `#${hex}`;
+  }
+  
+  let aci = Math.abs(Math.round(Number(colorNum)));
+  if (isNaN(aci) || aci === 0 || aci === 256) return defaultColor;
+  
+  // Standard AutoCAD Color Index (ACI 1-9)
+  const baseAci: Record<number, string> = {
+    1: '#ff0000', // Red
+    2: '#ffff00', // Yellow
+    3: '#00ff00', // Green
+    4: '#00ffff', // Cyan
+    5: '#0000ff', // Blue
+    6: '#ff00ff', // Magenta
+    7: '#ffffff', // White
+    8: '#7f7f7f', // Dark Gray
+    9: '#c0c0c0', // Light Gray
+  };
+  
+  if (baseAci[aci]) return baseAci[aci];
+  
+  // Algorithmic ACI (10..249)
+  if (aci >= 10 && aci <= 249) {
+    const hueIndex = Math.floor((aci - 10) / 10);
+    const hue = (hueIndex * 15) % 360;
+    
+    const shade = (aci - 10) % 10;
+    let s = 1.0;
+    let l = 0.5;
+    
+    if (shade === 0 || shade === 1) { s = 1.0; l = 0.5; }
+    else if (shade === 2 || shade === 3) { s = 1.0; l = 0.65; }
+    else if (shade === 4 || shade === 5) { s = 1.0; l = 0.8; }
+    else if (shade === 6 || shade === 7) { s = 0.7; l = 0.5; }
+    else if (shade === 8 || shade === 9) { s = 0.4; l = 0.3; }
+
+    return hslToHex(hue, s, l);
+  }
+  
+  // Gray scale range 250..255
+  if (aci >= 250 && aci <= 255) {
+    const grayVal = Math.round(50 + (aci - 250) * 40);
+    const hex = grayVal.toString(16).padStart(2, '0');
+    return `#${hex}${hex}${hex}`;
+  }
+
+  return defaultColor;
+};
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+
+  if (0 <= h && h < 60) { r = c; g = x; b = 0; }
+  else if (60 <= h && h < 120) { r = x; g = c; b = 0; }
+  else if (120 <= h && h < 180) { r = 0; g = c; b = x; }
+  else if (180 <= h && h < 240) { r = 0; g = x; b = c; }
+  else if (240 <= h && h < 300) { r = x; g = 0; b = c; }
+  else if (300 <= h && h < 360) { r = c; g = 0; b = x; }
+
+  const rHex = Math.round((r + m) * 255).toString(16).padStart(2, '0');
+  const gHex = Math.round((g + m) * 255).toString(16).padStart(2, '0');
+  const bHex = Math.round((b + m) * 255).toString(16).padStart(2, '0');
+
+  return `#${rHex}${gHex}${bHex}`;
+}
+
 const CRS_LIST = [
   { code: 'NONE', name: 'Seçilmedi (Varsayılan Yerel Koordinat)' },
   { code: 'EPSG:5253', name: 'TUREF / TM27 (3°)' },
@@ -122,6 +205,9 @@ const DXFAnalysis: React.FC = () => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     if (dxfData.entities && dxfData.entities.length > 0) {
        dxfData.entities.forEach((entity: any) => {
+          const layer = layers.find(l => l.name === entity.layer);
+          if (layer && !layer.visible) return;
+
           if (entity.vertices) {
              entity.vertices.forEach((v: any) => {
                 if (v.x < minX) minX = v.x;
@@ -129,6 +215,25 @@ const DXFAnalysis: React.FC = () => {
                 if (v.x > maxX) maxX = v.x;
                 if (v.y > maxY) maxY = v.y;
              });
+          } else if (entity.center && entity.radius) {
+             if (entity.center.x - entity.radius < minX) minX = entity.center.x - entity.radius;
+             if (entity.center.y - entity.radius < minY) minY = entity.center.y - entity.radius;
+             if (entity.center.x + entity.radius > maxX) maxX = entity.center.x + entity.radius;
+             if (entity.center.y + entity.radius > maxY) maxY = entity.center.y + entity.radius;
+          } else if (entity.position) {
+             if (entity.position.x < minX) minX = entity.position.x;
+             if (entity.position.y < minY) minY = entity.position.y;
+             if (entity.position.x > maxX) maxX = entity.position.x;
+             if (entity.position.y > maxY) maxY = entity.position.y;
+          } else if (entity.startPoint && entity.endPoint) {
+             if (entity.startPoint.x < minX) minX = entity.startPoint.x;
+             if (entity.startPoint.y < minY) minY = entity.startPoint.y;
+             if (entity.startPoint.x > maxX) maxX = entity.startPoint.x;
+             if (entity.startPoint.y > maxY) maxY = entity.startPoint.y;
+             if (entity.endPoint.x < minX) minX = entity.endPoint.x;
+             if (entity.endPoint.y < minY) minY = entity.endPoint.y;
+             if (entity.endPoint.x > maxX) maxX = entity.endPoint.x;
+             if (entity.endPoint.y > maxY) maxY = entity.endPoint.y;
           }
        });
     }
@@ -167,21 +272,33 @@ const DXFAnalysis: React.FC = () => {
       ctx.stroke();
     }
 
-    // Draw entities
+    // Draw entities with their original layer/entity colors
     if (dxfData.entities) {
       dxfData.entities.forEach((entity: any) => {
         const layer = layers.find(l => l.name === entity.layer);
         if (layer && !layer.visible) return;
 
-        ctx.strokeStyle = '#38bdf8'; // Default cyan
+        // Determine entity color (entity color override vs layer color)
+        const layerColorHex = getAciColor(layer?.color, '#38bdf8');
+        const entityRawColor = entity.color ?? entity.colorNumber ?? entity.trueColor;
+        const strokeColor = (entityRawColor !== undefined && entityRawColor !== 256) 
+          ? getAciColor(entityRawColor, layerColorHex) 
+          : layerColorHex;
+
+        ctx.strokeStyle = strokeColor;
+        ctx.fillStyle = strokeColor;
         ctx.lineWidth = 1.5 / zoom;
 
         if (entity.type === 'LINE') {
-          ctx.beginPath();
-          ctx.moveTo((entity.vertices[0].x - midX) * fitScale, -(entity.vertices[0].y - midY) * fitScale);
-          ctx.lineTo((entity.vertices[1].x - midX) * fitScale, -(entity.vertices[1].y - midY) * fitScale);
-          ctx.stroke();
-        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') {
+          const v0 = entity.vertices ? entity.vertices[0] : entity.startPoint;
+          const v1 = entity.vertices ? entity.vertices[1] : entity.endPoint;
+          if (v0 && v1) {
+            ctx.beginPath();
+            ctx.moveTo((v0.x - midX) * fitScale, -(v0.y - midY) * fitScale);
+            ctx.lineTo((v1.x - midX) * fitScale, -(v1.y - midY) * fitScale);
+            ctx.stroke();
+          }
+        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
           if (entity.vertices && entity.vertices.length > 0) {
             ctx.beginPath();
             entity.vertices.forEach((v: any, i: number) => {
@@ -190,8 +307,46 @@ const DXFAnalysis: React.FC = () => {
               if (i === 0) ctx.moveTo(sx, sy);
               else ctx.lineTo(sx, sy);
             });
-            if (entity.shape) ctx.closePath();
+            if (entity.shape || entity.closed) ctx.closePath();
             ctx.stroke();
+          }
+        } else if (entity.type === 'CIRCLE') {
+          if (entity.center) {
+            const cx = (entity.center.x - midX) * fitScale;
+            const cy = -(entity.center.y - midY) * fitScale;
+            const r = (entity.radius || 1) * fitScale;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+            ctx.stroke();
+          }
+        } else if (entity.type === 'ARC') {
+          if (entity.center) {
+            const cx = (entity.center.x - midX) * fitScale;
+            const cy = -(entity.center.y - midY) * fitScale;
+            const r = (entity.radius || 1) * fitScale;
+            const startAngle = -(entity.endAngle || 0);
+            const endAngle = -(entity.startAngle || 0);
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, startAngle, endAngle);
+            ctx.stroke();
+          }
+        } else if (entity.type === 'POINT') {
+          const pt = entity.position || (entity.vertices && entity.vertices[0]);
+          if (pt) {
+            const px = (pt.x - midX) * fitScale;
+            const py = -(pt.y - midY) * fitScale;
+            ctx.beginPath();
+            ctx.arc(px, py, 2.5 / zoom, 0, 2 * Math.PI);
+            ctx.fill();
+          }
+        } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+          const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
+          if (pt && entity.text) {
+            const tx = (pt.x - midX) * fitScale;
+            const ty = -(pt.y - midY) * fitScale;
+            const fontSize = Math.max(10, Math.min(24, (entity.textHeight || 10) * fitScale));
+            ctx.font = `${fontSize}px sans-serif`;
+            ctx.fillText(entity.text, tx, ty);
           }
         }
       });
@@ -407,7 +562,14 @@ const DXFAnalysis: React.FC = () => {
               ) : (
                 layers.map((l, idx) => (
                   <div key={idx} className="flex items-center justify-between p-1.5 rounded-xl bg-slate-800/50 border border-slate-750">
-                    <span className="text-xs text-slate-200 truncate pr-2 max-w-[130px]">{l.name}</span>
+                    <div className="flex items-center gap-2 min-w-0 pr-2">
+                      <span 
+                        className="w-2.5 h-2.5 rounded-full shrink-0 border border-white/20 shadow-sm" 
+                        style={{ backgroundColor: getAciColor(l.color) }}
+                        title={`Renk Kodu: ${l.color}`}
+                      />
+                      <span className="text-xs text-slate-200 truncate">{l.name}</span>
+                    </div>
                     <button
                       onClick={() => toggleLayer(l.name)}
                       className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${l.visible ? 'bg-cyan-500' : 'bg-slate-600'}`}
