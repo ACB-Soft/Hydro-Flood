@@ -1532,7 +1532,9 @@ ${floodPolygons.join('\n')}
         />
       )}
 
-      <main className="flex-1 overflow-y-auto w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className={`flex-1 w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col min-h-0 ${
+        activeTab === 'dxf-analysis' ? 'py-2 overflow-hidden' : 'py-6 overflow-y-auto'
+      }`}>
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
             <Dashboard 

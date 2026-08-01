@@ -1,10 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass } from 'lucide-react';
+import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw } from 'lucide-react';
 import DxfParser from 'dxf-parser';
-
-interface DXFAnalysisProps {
-  // We can add props later if needed
-}
 
 interface CADLayer {
   name: string;
@@ -19,7 +15,7 @@ const CRS_LIST = [
   { code: 'EPSG:5256', name: 'TUREF / TM36 (3°)' },
 ];
 
-const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
+const DXFAnalysis: React.FC = () => {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [crs, setCrs] = useState<string>('EPSG:5254');
   const [isParsing, setIsParsing] = useState(false);
@@ -40,7 +36,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
     setPendingFile(file);
     setIsParsed(false);
     setDxfData(null);
-    setUploadMessage(`Dosya seçildi: ${file.name}. Lütfen Koordinat Sistemini seçin ve 'Dosyayı Aç / Ayrıştır' butonuna tıklayın.`);
+    setUploadMessage(`Dosya seçildi: ${file.name}`);
   };
 
   const handleParse = async () => {
@@ -65,7 +61,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
              for (const layerName in layerDict) {
                 extractedLayers.push({
                    name: layerName,
-                   color: layerDict[layerName].color || 7, // default color
+                   color: layerDict[layerName].color || 7,
                    visible: true
                 });
              }
@@ -75,10 +71,10 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
           setZoom(1);
           setPan({ x: 0, y: 0 });
           setIsParsed(true);
-          setUploadMessage(`DXF Başarıyla Açıldı! ${extractedLayers.length} katman bulundu.`);
+          setUploadMessage(`DXF Açıldı: ${extractedLayers.length} katman bulundu.`);
         } catch (err) {
           console.error("DXF Parse Error:", err);
-          setUploadMessage("DXF dosyası ayrıştırılamadı. Format desteklenmiyor veya dosya bozuk.");
+          setUploadMessage("DXF dosyası ayrıştırılamadı. Geçerli bir DXF seçtiğinizden emin olun.");
         } finally {
           setIsParsing(false);
         }
@@ -87,7 +83,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
     } catch (err) {
       console.error(err);
       setIsParsing(false);
-      setUploadMessage("Dosya okunurken bir hata oluştu.");
+      setUploadMessage("Dosya okunurken hata oluştu.");
     }
   };
 
@@ -112,7 +108,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
     ctx.clearRect(0, 0, width, height);
 
     // Dark theme background
-    ctx.fillStyle = '#0f172a'; // slate-900
+    ctx.fillStyle = '#0b1329';
     ctx.fillRect(0, 0, width, height);
 
     // Calculate extents
@@ -141,11 +137,28 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
     const centerX = width / 2 + pan.x;
     const centerY = height / 2 + pan.y;
 
-    const fitScale = Math.min((width * 0.8) / spanX, (height * 0.8) / spanY) || 1;
+    const fitScale = Math.min((width * 0.85) / spanX, (height * 0.85) / spanY) || 1;
 
     ctx.save();
     ctx.translate(centerX, centerY);
     ctx.scale(zoom, zoom);
+
+    // Grid background
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1 / zoom;
+    const gridSize = Math.max(10, Math.round(spanX / 10));
+    for (let x = minX - spanX; x <= maxX + spanX; x += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo((x - midX) * fitScale, -(minY - spanY - midY) * fitScale);
+      ctx.lineTo((x - midX) * fitScale, -(maxY + spanY - midY) * fitScale);
+      ctx.stroke();
+    }
+    for (let y = minY - spanY; y <= maxY + spanY; y += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo((minX - spanX - midX) * fitScale, -(y - midY) * fitScale);
+      ctx.lineTo((maxX + spanX - midX) * fitScale, -(y - midY) * fitScale);
+      ctx.stroke();
+    }
 
     // Draw entities
     if (dxfData.entities) {
@@ -154,7 +167,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
         if (layer && !layer.visible) return;
 
         ctx.strokeStyle = '#38bdf8'; // Default cyan
-        ctx.lineWidth = 1 / zoom;
+        ctx.lineWidth = 1.5 / zoom;
 
         if (entity.type === 'LINE') {
           ctx.beginPath();
@@ -170,7 +183,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
               if (i === 0) ctx.moveTo(sx, sy);
               else ctx.lineTo(sx, sy);
             });
-            if (entity.shape) ctx.closePath(); // closed polyline
+            if (entity.shape) ctx.closePath();
             ctx.stroke();
           }
         }
@@ -209,167 +222,208 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = () => {
     }
   };
 
+  const resetView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
   const toggleLayer = (name: string) => {
     setLayers(prev => prev.map(l => l.name === name ? { ...l, visible: !l.visible } : l));
   };
 
   return (
-    <div className="flex flex-col h-full gap-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-display font-bold text-white flex items-center gap-2">
-          <FileCode className="text-cyan-400" />
-          DXF Dosya Analizleri
-        </h2>
-        <button
-          disabled={!isParsed}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-lg ${
-            isParsed
-              ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/25'
-              : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-750'
-          }`}
-        >
-          <Layers size={14} />
-          <span>Katmanları DEM Üreticiye Aktar</span>
-        </button>
-      </div>
+    <div className="w-full h-full flex flex-col min-h-0 overflow-hidden">
+      {/* Main 4-Part Grid: Left (1/4 - 3 cols) and Right (3/4 - 9 cols) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-full min-h-0">
+        
+        {/* LEFT COLUMN: 1/4 Width (3 cols out of 12) */}
+        <div className="lg:col-span-3 flex flex-col gap-3 h-full min-h-0 overflow-hidden">
+          
+          {/* 1. Ultra Compact Dosya Seçici */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Upload size={13} className="text-cyan-400" />
+                1. DXF Dosyası Seç
+              </h3>
+              {pendingFile && (
+                <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-md border border-emerald-500/20 flex items-center gap-1">
+                  <CheckCircle size={10} /> Seçildi
+                </span>
+              )}
+            </div>
+            
+            <label className="border border-dashed border-slate-700 hover:border-cyan-500/50 rounded-xl px-3 py-2 flex items-center gap-2 cursor-pointer transition-all bg-slate-800/40 hover:bg-slate-800">
+              <input type="file" accept=".dxf" className="hidden" onChange={handleFileUpload} />
+              <div className="w-6 h-6 bg-cyan-500/10 rounded-lg flex items-center justify-center text-cyan-400 shrink-0">
+                <Upload size={13} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-slate-200 truncate">
+                  {pendingFile ? pendingFile.name : 'DXF Seç veya Sürükle'}
+                </p>
+              </div>
+            </label>
+          </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-md">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Upload size={16} className="text-cyan-400" />
-              1. DXF Dosyası Seç
+          {/* 2. Projeksiyon Tanımlayıcı */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-1.5">
+            <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+              <Compass size={13} className="text-indigo-400" />
+              2. Projeksiyon / CRS
             </h3>
-            {pendingFile && (
-              <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20 flex items-center gap-1">
-                <CheckCircle size={12} /> Seçildi
-              </span>
+            <select
+              value={crs}
+              onChange={(e) => setCrs(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+            >
+              {CRS_LIST.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.code} - {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. Dosyayı Aç / Ayrıştır Butonu */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+            <button
+              onClick={handleParse}
+              disabled={!pendingFile || isParsing}
+              className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-md ${
+                !pendingFile || isParsing
+                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-750'
+                  : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/25 border border-cyan-400'
+              }`}
+            >
+              {isParsing ? (
+                <>
+                  <RefreshCw size={13} className="animate-spin" />
+                  <span>Ayrıştırılıyor...</span>
+                </>
+              ) : (
+                <>
+                  <Eye size={13} />
+                  <span>Dosyayı Aç / Ayrıştır</span>
+                </>
+              )}
+            </button>
+
+            {uploadMessage && (
+              <div className={`text-[10px] p-2 rounded-xl border leading-tight ${
+                isParsed 
+                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                  : 'bg-slate-800/50 border-slate-700 text-slate-300'
+              }`}>
+                {uploadMessage}
+              </div>
             )}
           </div>
-          
-          <label className="border-2 border-dashed border-slate-700 hover:border-cyan-500/50 rounded-2xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all bg-slate-800/50 hover:bg-slate-800">
-            <input type="file" accept=".dxf" className="hidden" onChange={handleFileUpload} />
-            <div className="w-10 h-10 bg-cyan-500/10 rounded-full flex items-center justify-center text-cyan-400 mb-2">
-              <Upload size={20} />
-            </div>
-            <p className="text-xs font-semibold text-slate-200 text-center">
-              {pendingFile ? pendingFile.name : 'DXF dosyası seçin veya sürükleyin'}
-            </p>
-          </label>
-        </div>
 
-        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-5 space-y-4 lg:col-span-2 shadow-md">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Compass size={16} className="text-indigo-400" />
-              2. Koordinat Sistemi & Ayrıştırma
-            </h3>
+          {/* 4. Katman Yöneticisi - MAX HEIGHT */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 flex flex-col flex-1 min-h-0 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between mb-2 shrink-0">
+              <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Layers size={13} className="text-cyan-400" />
+                4. Katman Yöneticisi
+              </h3>
+              {layers.length > 0 && (
+                <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full">
+                  {layers.length} Katman
+                </span>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0 custom-scrollbar">
+              {layers.length === 0 ? (
+                <div className="text-center py-8 text-slate-500 text-xs">
+                  Ayrıştırılmış katman verisi yok.
+                </div>
+              ) : (
+                layers.map((l, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-slate-800/50 border border-slate-750">
+                    <span className="text-xs text-slate-200 truncate pr-2 max-w-[130px]">{l.name}</span>
+                    <button
+                      onClick={() => toggleLayer(l.name)}
+                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${l.visible ? 'bg-cyan-500' : 'bg-slate-600'}`}
+                    >
+                      <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all ${l.visible ? 'left-[18px]' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              disabled={!isParsed}
+              className={`w-full mt-2.5 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border shadow-sm shrink-0 ${
+                isParsed
+                  ? 'bg-blue-600 hover:bg-blue-500 border-blue-400 text-white shadow-blue-500/20'
+                  : 'bg-slate-800/80 border-slate-700 text-slate-500 cursor-not-allowed'
+              }`}
+            >
+              <Layers size={13} />
+              <span>Katmanları DEM Üreticiye Aktar</span>
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-            <div className="sm:col-span-2 space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300">Harita Projeksiyonu (CRS)</label>
-              <select
-                value={crs}
-                onChange={(e) => setCrs(e.target.value)}
-                className="w-full bg-slate-950/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-              >
-                {CRS_LIST.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.code} - {c.name}
-                  </option>
-                ))}
-              </select>
+        </div>
+
+        {/* RIGHT COLUMN: 3/4 Width (9 cols out of 12) - 2D CAD Görüntüleme Ekranı */}
+        <div className="lg:col-span-9 bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden flex flex-col relative shadow-inner h-full min-h-0">
+          
+          {/* Canvas Toolbar Header */}
+          <div className="px-3.5 py-2.5 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between z-10 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+              <h3 className="text-xs font-bold text-white">2D CAD Görüntüleme Ekranı</h3>
             </div>
 
-            <div>
+            <div className="flex items-center gap-3">
+              <div className="bg-slate-900/90 px-2.5 py-1 rounded-lg border border-slate-700 text-[11px] font-mono text-cyan-400 flex items-center gap-1.5">
+                <ZoomIn size={13} />
+                <span>Ölçek: {Math.round(zoom * 100)}%</span>
+              </div>
               <button
-                onClick={handleParse}
-                disabled={!pendingFile || isParsing}
-                className={`w-full py-2 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-lg ${
-                  !pendingFile || isParsing
-                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-750'
-                    : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/25 border border-cyan-400'
-                }`}
+                onClick={resetView}
+                disabled={!isParsed}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors"
+                title="Sıfırla"
               >
-                {isParsing ? (
-                  <>
-                    <RefreshCw size={14} className="animate-spin" />
-                    <span>Ayrıştırılıyor...</span>
-                  </>
-                ) : (
-                  <>
-                    <Eye size={14} />
-                    <span>Dosyayı Aç / Ayrıştır</span>
-                  </>
-                )}
+                <RotateCcw size={13} />
               </button>
             </div>
           </div>
 
-          {uploadMessage && (
-            <div className={`text-[11px] p-2.5 rounded-xl border ${
-              isParsed 
-                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                : 'bg-slate-800/50 border-slate-700 text-slate-300'
-            }`}>
-              {uploadMessage}
-            </div>
-          )}
-        </div>
-      </div>
+          {/* Canvas Container */}
+          <div className="flex-1 relative w-full h-full min-h-0">
+            <canvas
+              ref={canvasRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onWheel={handleWheel}
+              className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing"
+              style={{ display: isParsed ? 'block' : 'none' }}
+            />
 
-      <div className="flex-1 min-h-[400px] grid grid-cols-1 lg:grid-cols-4 gap-4 pb-4">
-        <div className="lg:col-span-3 bg-slate-900/60 border border-slate-800 rounded-3xl overflow-hidden relative shadow-inner">
-          <div className="absolute top-4 left-4 z-10 flex gap-2">
-            <div className="bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 text-xs font-bold text-white flex items-center gap-2">
-              <ZoomIn size={14} className="text-cyan-400" />
-              <span>{Math.round(zoom * 100)}%</span>
-            </div>
-          </div>
-          
-          <canvas
-            ref={canvasRef}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onWheel={handleWheel}
-            className="w-full h-full cursor-grab active:cursor-grabbing"
-            style={{ display: isParsed ? 'block' : 'none' }}
-          />
-
-          {!isParsed && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-3">
-              <FileCode size={48} className="opacity-20" />
-              <p className="text-sm font-medium">Görüntüleme için DXF dosyası ayrıştırın</p>
-            </div>
-          )}
-        </div>
-
-        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-4 flex flex-col shadow-md">
-          <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-            <Layers size={16} className="text-cyan-400" />
-            Katman Yöneticisi
-          </h3>
-          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
-            {layers.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center mt-4">Katman bulunamadı.</p>
-            ) : (
-              layers.map((l, idx) => (
-                <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-slate-800/50 border border-slate-750">
-                  <span className="text-xs text-slate-200 truncate pr-2">{l.name}</span>
-                  <button
-                    onClick={() => toggleLayer(l.name)}
-                    className={`w-8 h-4 rounded-full relative transition-colors ${l.visible ? 'bg-cyan-500' : 'bg-slate-600'}`}
-                  >
-                    <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all ${l.visible ? 'left-[18px]' : 'left-0.5'}`} />
-                  </button>
+            {!isParsed && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-3 p-6 text-center">
+                <div className="w-14 h-14 rounded-2xl bg-slate-800/60 border border-slate-700 flex items-center justify-center text-slate-400">
+                  <FileCode size={28} />
                 </div>
-              ))
+                <div className="space-y-1 max-w-sm">
+                  <p className="text-sm font-semibold text-slate-300">2D CAD Görüntüleyici Hazır</p>
+                  <p className="text-xs text-slate-500">
+                    Sol taraftaki panelden bir .dxf dosyası seçip &apos;Dosyayı Aç / Ayrıştır&apos; butonuna basarak haritanızı ekrana yükleyebilirsiniz.
+                  </p>
+                </div>
+              </div>
             )}
           </div>
         </div>
+
       </div>
     </div>
   );
