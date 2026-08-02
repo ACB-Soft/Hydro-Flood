@@ -14,7 +14,8 @@ import 'leaflet/dist/leaflet.css';
 import Dashboard from './components/Dashboard';
 import Analysis from './components/Analysis';
 import About from './components/About';
-import DXFAnalysis from './components/DXFAnalysis';
+import DXFAnalysis, { CADLayer } from './components/DXFAnalysis';
+import DEMGenerator from './components/DEMGenerator';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
 import Header from './components/Header';
@@ -113,8 +114,12 @@ const MANNING_PRESETS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator'>('dashboard');
   const [dxfSubTab, setDxfSubTab] = useState<'viewer' | 'converter'>('viewer');
+  const [dxfData, setDxfData] = useState<any>(null);
+  const [dxfLayers, setDxfLayers] = useState<CADLayer[]>([]);
+  const [dxfCrs, setDxfCrs] = useState<string>('NONE');
+  const [dxfFileName, setDxfFileName] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(1);
   const [dem, setDem] = useState<DEMData | null>(null);
   const [params, setParams] = useState({
@@ -1533,7 +1538,7 @@ ${floodPolygons.join('\n')}
       )}
 
       <main className={`flex-1 w-full max-w-[1920px] mx-auto px-2 sm:px-4 lg:px-6 flex flex-col min-h-0 ${
-        (activeTab === 'dxf-analysis' || activeTab === 'analysis') ? 'py-1 sm:py-2 overflow-hidden' : 'py-6 overflow-y-auto'
+        (activeTab === 'dxf-analysis' || activeTab === 'dem-generator' || activeTab === 'analysis') ? 'py-1 sm:py-2 overflow-hidden' : 'py-6 overflow-y-auto'
       }`}>
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
@@ -1545,9 +1550,8 @@ ${floodPolygons.join('\n')}
               }}
               onOpenAbout={() => setActiveTab('about')}
               onOpenSettings={() => setActiveTab('settings')}
-              onOpenDXFAnalysis={() => {
-                setActiveTab('dxf-analysis');
-              }}
+              onOpenDXFAnalysis={() => setActiveTab('dxf-analysis')}
+              onOpenDEMGenerator={() => setActiveTab('dem-generator')}
               isSimulating={isSimulating}
               progress={progress}
             />
@@ -1576,7 +1580,40 @@ ${floodPolygons.join('\n')}
             <About />
           )}
           {activeTab === 'dxf-analysis' && (
-            <DXFAnalysis />
+            <DXFAnalysis
+              dxfData={dxfData}
+              setDxfData={setDxfData}
+              layers={dxfLayers}
+              setLayers={setDxfLayers}
+              crs={dxfCrs}
+              setCrs={setDxfCrs}
+              dxfFileName={dxfFileName}
+              setDxfFileName={setDxfFileName}
+              onNavigateToDEMGenerator={() => setActiveTab('dem-generator')}
+            />
+          )}
+          {activeTab === 'dem-generator' && (
+            <DEMGenerator
+              dxfData={dxfData}
+              setDxfData={setDxfData}
+              layers={dxfLayers}
+              setLayers={setDxfLayers}
+              crs={dxfCrs}
+              setCrs={setDxfCrs}
+              dxfFileName={dxfFileName}
+              setDxfFileName={setDxfFileName}
+              onTransferToSimulation={(demResult, ascText) => {
+                const file = new File([ascText], `DEM_${demResult.cellSize}m.asc`, { type: 'text/plain' });
+                handleDemUpload({
+                  target: {
+                    files: [file]
+                  }
+                } as any);
+                setSimMethod('bathtub');
+                setActiveTab('analysis');
+                setCurrentStep(1);
+              }}
+            />
           )}
         </AnimatePresence>
       </main>

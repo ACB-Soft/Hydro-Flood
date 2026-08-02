@@ -1,11 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders } from 'lucide-react';
+import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders, Mountain } from 'lucide-react';
 import DxfParser from 'dxf-parser';
 
-interface CADLayer {
+export interface CADLayer {
   name: string;
   color: number;
   visible: boolean;
+}
+
+interface DXFAnalysisProps {
+  dxfData?: any;
+  setDxfData?: (data: any) => void;
+  layers?: CADLayer[];
+  setLayers?: React.Dispatch<React.SetStateAction<CADLayer[]>>;
+  crs?: string;
+  setCrs?: (crs: string) => void;
+  dxfFileName?: string | null;
+  setDxfFileName?: (name: string | null) => void;
+  onNavigateToDEMGenerator?: () => void;
 }
 
 const getAciColor = (colorNum?: any, defaultColor = '#38bdf8'): string => {
@@ -99,15 +111,52 @@ const CRS_LIST = [
   { code: 'EPSG:5256', name: 'TUREF / TM36 (3°)' },
 ];
 
-const DXFAnalysis: React.FC = () => {
+const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
+  dxfData: propsDxfData,
+  setDxfData: propsSetDxfData,
+  layers: propsLayers,
+  setLayers: propsSetLayers,
+  crs: propsCrs,
+  setCrs: propsSetCrs,
+  dxfFileName: propsDxfFileName,
+  setDxfFileName: propsSetDxfFileName,
+  onNavigateToDEMGenerator,
+}) => {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [crs, setCrs] = useState<string>('NONE');
+  const [localCrs, setLocalCrs] = useState<string>('NONE');
   const [isParsing, setIsParsing] = useState(false);
-  const [isParsed, setIsParsed] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
-  const [dxfData, setDxfData] = useState<any>(null);
-  const [layers, setLayers] = useState<CADLayer[]>([]);
+  const [localDxfData, setLocalDxfData] = useState<any>(null);
+  const [localLayers, setLocalLayers] = useState<CADLayer[]>([]);
   
+  const dxfData = propsDxfData ?? localDxfData;
+  const layers = propsLayers ?? localLayers;
+  const crs = propsCrs ?? localCrs;
+  const isParsed = Boolean(dxfData);
+
+  const updateDxfData = (data: any) => {
+    setLocalDxfData(data);
+    propsSetDxfData?.(data);
+  };
+
+  const updateLayers = (newLayers: CADLayer[] | ((prev: CADLayer[]) => CADLayer[])) => {
+    if (typeof newLayers === 'function') {
+      setLocalLayers(prev => {
+        const updated = newLayers(prev);
+        propsSetLayers?.(updated);
+        return updated;
+      });
+    } else {
+      setLocalLayers(newLayers);
+      propsSetLayers?.(newLayers);
+    }
+  };
+
+  const updateCrs = (c: string) => {
+    setLocalCrs(c);
+    propsSetCrs?.(c);
+  };
+
   // Mobile Tab State: 'controls' (default so user uploads/parses file first) or 'map'
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
 
@@ -121,8 +170,7 @@ const DXFAnalysis: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     setPendingFile(file);
-    setIsParsed(false);
-    setDxfData(null);
+    updateDxfData(null);
     setUploadMessage(`Dosya seçildi: ${file.name}`);
   };
 
@@ -139,7 +187,8 @@ const DXFAnalysis: React.FC = () => {
           const parser = new DxfParser();
           const parsed = parser.parseSync(content);
           
-          setDxfData(parsed);
+          updateDxfData(parsed);
+          propsSetDxfFileName?.(pendingFile.name);
           
           // Extract layers
           const extractedLayers: CADLayer[] = [];
@@ -153,11 +202,10 @@ const DXFAnalysis: React.FC = () => {
                 });
              }
           }
-          setLayers(extractedLayers);
+          updateLayers(extractedLayers);
           
           setZoom(1);
           setPan({ x: 0, y: 0 });
-          setIsParsed(true);
           setUploadMessage(`DXF Açıldı: ${extractedLayers.length} katman bulundu.`);
           // Switch to map view automatically on mobile after parsing
           setMobileTab('map');
@@ -171,9 +219,15 @@ const DXFAnalysis: React.FC = () => {
       reader.readAsText(pendingFile);
     } catch (err) {
       console.error(err);
+      setUploadMessage("Dosya okuma hatası oluştu.");
       setIsParsing(false);
-      setUploadMessage("Dosya okunurken hata oluştu.");
     }
+  };
+
+  const toggleLayer = (layerName: string) => {
+    updateLayers(prev =>
+      prev.map(l => l.name === layerName ? { ...l, visible: !l.visible } : l)
+    );
   };
 
   // Rendering DXF on Canvas
@@ -411,10 +465,6 @@ const DXFAnalysis: React.FC = () => {
     setPan({ x: 0, y: 0 });
   };
 
-  const toggleLayer = (name: string) => {
-    setLayers(prev => prev.map(l => l.name === name ? { ...l, visible: !l.visible } : l));
-  };
-
   return (
     <div className="w-full h-full flex flex-col min-h-0 overflow-hidden">
       
@@ -582,14 +632,15 @@ const DXFAnalysis: React.FC = () => {
             </div>
 
             <button
+              onClick={() => onNavigateToDEMGenerator?.()}
               disabled={!isParsed}
               className={`w-full mt-2 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border shadow-sm shrink-0 ${
                 isParsed
-                  ? 'bg-blue-600 hover:bg-blue-500 border-blue-400 text-white shadow-blue-500/20'
+                  ? 'bg-blue-600 hover:bg-blue-500 border-blue-400 text-white shadow-blue-500/20 cursor-pointer'
                   : 'bg-slate-800/80 border-slate-700 text-slate-500 cursor-not-allowed'
               }`}
             >
-              <Layers size={13} />
+              <Mountain size={13} />
               <span>Katmanları DEM Üreticiye Aktar</span>
             </button>
           </div>
@@ -609,6 +660,16 @@ const DXFAnalysis: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2">
+              {isParsed && (
+                <button
+                  onClick={() => onNavigateToDEMGenerator?.()}
+                  className="px-2.5 py-1 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-md shadow-cyan-500/20 border border-cyan-300 transition-all cursor-pointer"
+                >
+                  <Mountain size={13} />
+                  <span>DEM Üret</span>
+                </button>
+              )}
+
               {/* Quick Mobile Settings Button */}
               <button
                 onClick={() => setMobileTab('controls')}
@@ -674,6 +735,7 @@ const DXFAnalysis: React.FC = () => {
         </div>
 
       </div>
+
     </div>
   );
 };
