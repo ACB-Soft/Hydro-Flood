@@ -339,9 +339,21 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           ? getAciColor(entityRawColor, layerColorHex) 
           : layerColorHex;
 
+        // Determine line weight from DXF entity or layer
+        const entityLw = entity.lineWeight ?? entity.lineweight;
+        const layerLw = layer?.lineWeight;
+        let lwMM = 0.25; // Default 0.25mm
+        if (typeof entityLw === 'number' && entityLw > 0) {
+          lwMM = entityLw / 100;
+        } else if (typeof layerLw === 'number' && layerLw > 0) {
+          lwMM = layerLw / 100;
+        }
+        // Convert mm to pixels (~3.78 px per mm), adjusted for zoom
+        const calcLineWidth = Math.max(1 / zoom, (lwMM * 3.5) / zoom);
+
         ctx.strokeStyle = strokeColor;
         ctx.fillStyle = strokeColor;
-        ctx.lineWidth = 1.5 / zoom;
+        ctx.lineWidth = calcLineWidth;
 
         if (entity.type === 'LINE') {
           const v0 = entity.vertices ? entity.vertices[0] : entity.startPoint;
@@ -389,8 +401,24 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           if (pt) {
             const px = (pt.x - midX) * fitScale;
             const py = -(pt.y - midY) * fitScale;
+            
+            // Read $PDSIZE from DXF header if available
+            const pdSizeHeader = dxfData.header?.$PDSIZE ?? 0;
+            let pdWorldSize = 0;
+            if (pdSizeHeader > 0) {
+              pdWorldSize = pdSizeHeader;
+            } else if (pdSizeHeader < 0) {
+              pdWorldSize = (Math.abs(pdSizeHeader) / 100) * spanX;
+            } else {
+              pdWorldSize = spanX * 0.003; // Fallback ~0.3% of drawing width
+            }
+            const ptRadius = Math.max(2 / zoom, (pdWorldSize * fitScale) / 2);
+
             ctx.beginPath();
-            ctx.arc(px, py, 2.5 / zoom, 0, 2 * Math.PI);
+            ctx.arc(px, py, ptRadius, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(px, py, Math.max(1 / zoom, ptRadius * 0.25), 0, 2 * Math.PI);
             ctx.fill();
           }
         } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
@@ -398,9 +426,37 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           if (pt && entity.text) {
             const tx = (pt.x - midX) * fitScale;
             const ty = -(pt.y - midY) * fitScale;
-            const fontSize = Math.max(10, Math.min(24, (entity.textHeight || 10) * fitScale));
-            ctx.font = `${fontSize}px sans-serif`;
-            ctx.fillText(entity.text, tx, ty);
+            
+            // Clean MTEXT formatting codes (\P, \f..., \H..., \W..., \{, \})
+            let rawStr = String(entity.text)
+              .replace(/\\P/g, ' ')
+              .replace(/\\{[^}]*\}|\\[a-zA-Z0-9]+;/g, '')
+              .replace(/[\{\}]/g, '')
+              .trim();
+            if (!rawStr) return;
+
+            // Read CAD text height directly from DXF entity (height / textHeight / nominalTextHeight)
+            let cadTextHeight = entity.height || entity.textHeight || entity.nominalTextHeight;
+            if (!cadTextHeight || cadTextHeight <= 0) {
+              cadTextHeight = dxfData.header?.$TEXTSIZE || (spanX * 0.005);
+            }
+
+            // Calculate exact font size in canvas space
+            const fontCanvasPx = cadTextHeight * fitScale;
+
+            ctx.save();
+            ctx.translate(tx, ty);
+
+            // Apply rotation if defined in DXF entity (in degrees)
+            if (entity.rotation) {
+              const rotRad = -(entity.rotation * Math.PI) / 180;
+              ctx.rotate(rotRad);
+            }
+
+            ctx.font = `${fontCanvasPx}px sans-serif`;
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(rawStr, 0, 0);
+            ctx.restore();
           }
         }
       });

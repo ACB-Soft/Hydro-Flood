@@ -90,6 +90,14 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
   const [showContours, setShowContours] = useState<boolean>(true);
   const [contourInterval, setContourInterval] = useState<number>(5);
 
+  const [minZFilter, setMinZFilter] = useState<string>('');
+  const [maxZFilter, setMaxZFilter] = useState<string>('');
+  const [detectedMinZ, setDetectedMinZ] = useState<number | null>(null);
+  const [detectedMaxZ, setDetectedMaxZ] = useState<number | null>(null);
+  const [zeroCount, setZeroCount] = useState<number>(0);
+  const [totalDetectedPoints, setTotalDetectedPoints] = useState<number>(0);
+  const [nonZeroMinZ, setNonZeroMinZ] = useState<number | null>(null);
+
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [demResult, setDemResult] = useState<DEMResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -103,6 +111,49 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
   const activeLayers = layers.filter(l => l.visible);
   const activeLayerNames = new Set(activeLayers.map(l => l.name));
+
+  // Detect Z statistics from active layers
+  useEffect(() => {
+    if (!dxfData) {
+      setDetectedMinZ(null);
+      setDetectedMaxZ(null);
+      setZeroCount(0);
+      setTotalDetectedPoints(0);
+      setNonZeroMinZ(null);
+      return;
+    }
+
+    const points = extractPointsFromDXF(dxfData, activeLayerNames);
+    if (points.length === 0) {
+      setDetectedMinZ(null);
+      setDetectedMaxZ(null);
+      setZeroCount(0);
+      setTotalDetectedPoints(0);
+      setNonZeroMinZ(null);
+      return;
+    }
+
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    let posMinZ = Infinity;
+    let zeros = 0;
+
+    points.forEach(p => {
+      if (p.z < minZ) minZ = p.z;
+      if (p.z > maxZ) maxZ = p.z;
+      if (Math.abs(p.z) < 1e-3) {
+        zeros++;
+      } else if (p.z > 0 && p.z < posMinZ) {
+        posMinZ = p.z;
+      }
+    });
+
+    setDetectedMinZ(minZ === Infinity ? null : minZ);
+    setDetectedMaxZ(maxZ === -Infinity ? null : maxZ);
+    setZeroCount(zeros);
+    setTotalDetectedPoints(points.length);
+    setNonZeroMinZ(posMinZ === Infinity ? null : posMinZ);
+  }, [dxfData, layers]);
 
   // Render canvas whenever DEM result or contour settings change
   useEffect(() => {
@@ -177,11 +228,21 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
     await new Promise(resolve => setTimeout(resolve, 50));
 
     try {
-      const points = extractPointsFromDXF(dxfData, activeLayerNames);
+      let points = extractPointsFromDXF(dxfData, activeLayerNames);
+
+      // Apply Min Z & Max Z Filter
+      if (minZFilter.trim() !== '' && !isNaN(Number(minZFilter))) {
+        const minVal = Number(minZFilter);
+        points = points.filter(p => p.z >= minVal);
+      }
+      if (maxZFilter.trim() !== '' && !isNaN(Number(maxZFilter))) {
+        const maxVal = Number(maxZFilter);
+        points = points.filter(p => p.z <= maxVal);
+      }
 
       if (points.length < 3) {
         throw new Error(
-          'Seçili aktif katmanlarda en az 3 adet Kotlu/3D nokta bulunamadı. Lütfen görünür katmanlarda Z yüksekliği tanımlı elemanlar olduğundan emin olun.'
+          `Seçili katmanlarda ve uygulanan Z filtresine (${minZFilter || '-∞'}m - ${maxZFilter || '+∞'}m) uyan en az 3 adet 3D nokta bulunamadı.`
         );
       }
 
@@ -366,11 +427,105 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
             </div>
           )}
 
-          {/* Card 3: Çözünürlük (Cell Size) Seçici */}
+          {/* Card 3: Kot (Z) Yükseklik Filtresi & İstatistikleri */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <Sliders size={13} className="text-cyan-400" />
+                3. Kot (Z) Yükseklik Filtresi
+              </label>
+              {(minZFilter || maxZFilter) && (
+                <button
+                  onClick={() => { setMinZFilter(''); setMaxZFilter(''); }}
+                  className="text-[10px] text-cyan-400 hover:underline font-mono"
+                >
+                  Filtreyi Temizle
+                </button>
+              )}
+            </div>
+
+            {/* Detected Stats Info Box */}
+            {dxfData && detectedMinZ !== null && detectedMaxZ !== null && (
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2 space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">Aktif Katman Kotları:</span>
+                  <span className="font-mono font-bold text-cyan-300">
+                    {detectedMinZ.toFixed(1)}m — {detectedMaxZ.toFixed(1)}m
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-slate-400">
+                  <span>Toplam Nokta: <strong className="text-slate-200">{totalDetectedPoints}</strong></span>
+                  {zeroCount > 0 && (
+                    <span className="text-amber-400 font-medium">Kot 0 olan: {zeroCount} nokta</span>
+                  )}
+                </div>
+
+                {zeroCount > 0 && nonZeroMinZ !== null && (
+                  <button
+                    onClick={() => {
+                      setMinZFilter(String(Math.floor(nonZeroMinZ)));
+                    }}
+                    className="w-full mt-1 py-1 px-2 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all"
+                  >
+                    <span>⚡ Sıfır (0m) Kotları Filtrele (Min {Math.floor(nonZeroMinZ)}m Yap)</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Min Z & Max Z Input Fields */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-slate-400 block">Min Kot Z (m)</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={detectedMinZ !== null ? String(detectedMinZ.toFixed(1)) : 'Min'}
+                    value={minZFilter}
+                    onChange={(e) => setMinZFilter(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 text-xs text-white px-2 py-1.5 rounded-xl outline-none font-mono"
+                  />
+                  {minZFilter && (
+                    <button 
+                      onClick={() => setMinZFilter('')} 
+                      className="absolute right-2 top-1.5 text-slate-500 hover:text-white text-xs"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-slate-400 block">Max Kot Z (m)</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={detectedMaxZ !== null ? String(detectedMaxZ.toFixed(1)) : 'Max'}
+                    value={maxZFilter}
+                    onChange={(e) => setMaxZFilter(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 text-xs text-white px-2 py-1.5 rounded-xl outline-none font-mono"
+                  />
+                  {maxZFilter && (
+                    <button 
+                      onClick={() => setMaxZFilter('')} 
+                      className="absolute right-2 top-1.5 text-slate-500 hover:text-white text-xs"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Çözünürlük (Cell Size) Seçici */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
             <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
               <Grid size={13} className="text-cyan-400" />
-              3. Grid Çözünürlüğü (Cell Size)
+              4. Grid Çözünürlüğü (Cell Size)
             </label>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 gap-1.5">
@@ -396,7 +551,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
             </div>
           </div>
 
-          {/* Card 4: DEM Oluştur Butonu */}
+          {/* Card 5: DEM Oluştur Butonu */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
             <button
               onClick={handleGenerateDEM}
