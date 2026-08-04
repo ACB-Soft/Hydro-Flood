@@ -1289,34 +1289,24 @@ export default function App() {
       riskPolygons.push(...floodPolygons);
     }
 
-    // 1. Çalışma Alanı Layer
-    if (areaKml) {
-      kml += `    <Placemark>
+    // DEM verisinin dış sınırları (4 köşe koordinatı WGS84 dönüşümü)
+    const demSw = transform(dem.xll, dem.yll);
+    const demSe = transform(dem.xll + dem.width * dem.cellSize, dem.yll);
+    const demNe = transform(dem.xll + dem.width * dem.cellSize, dem.yll + dem.height * dem.cellSize);
+    const demNw = transform(dem.xll, dem.yll + dem.height * dem.cellSize);
+    const demOuterCoordsStr = `${demSw[0]},${demSw[1]},0 ${demSe[0]},${demSe[1]},0 ${demNe[0]},${demNe[1]},0 ${demNw[0]},${demNw[1]},0 ${demSw[0]},${demSw[1]},0`;
+
+    // 1. Çalışma Alanı Layer (DEM Verisi Dış Sınırları)
+    kml += `    <Placemark>
       <name>1- Çalışma Alanı</name>
-      <description>Yüklenen Çalışma Alanı Sınırı (${areaKml.name})</description>
+      <description>DEM Verisinin Dış Sınırları (Çalışma Alanı)</description>
       <styleUrl>#study_area_style</styleUrl>
       <Polygon>
         <outerBoundaryIs><LinearRing><coordinates>
-          ${areaKml.coords.map(([lat, lon]) => `${lon},${lat},0`).join(' ')}
+          ${demOuterCoordsStr}
         </coordinates></LinearRing></outerBoundaryIs>
       </Polygon>
     </Placemark>\n`;
-    } else if (wgs84Bounds) {
-      kml += `    <Placemark>
-      <name>1- Çalışma Alanı</name>
-      <description>DEM Coğrafi Matriks Sınırları (Çalışma Alanı)</description>
-      <styleUrl>#study_area_style</styleUrl>
-      <Polygon>
-        <outerBoundaryIs><LinearRing><coordinates>
-          ${wgs84Bounds[0][1]},${wgs84Bounds[0][0]},0
-          ${wgs84Bounds[1][1]},${wgs84Bounds[0][0]},0
-          ${wgs84Bounds[1][1]},${wgs84Bounds[1][0]},0
-          ${wgs84Bounds[0][1]},${wgs84Bounds[1][0]},0
-          ${wgs84Bounds[0][1]},${wgs84Bounds[0][0]},0
-        </coordinates></LinearRing></outerBoundaryIs>
-      </Polygon>
-    </Placemark>\n`;
-    }
 
     // 2. Kaynak Noktası Layer
     if (sourceWgs) {
