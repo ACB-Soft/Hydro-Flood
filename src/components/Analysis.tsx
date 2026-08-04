@@ -74,6 +74,7 @@ interface AnalysisProps {
   setAreaMask: (areaMask: any) => void;
   stats: any;
   wgs84Bounds: any;
+  demBoundaryWgs?: number[][][];
   startSimulation: () => void;
   handleKmlUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleSourceKmlUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -99,7 +100,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
     currentStep, setCurrentStep, dem, params, coords, selectedCRS, setSelectedCRS,
     isSimulating, progress, bathtubLevel, setBathtubLevel, floodImage,
     elevationImage, reliefImage, riverKml, sourceKmlName,
-    sourceWgs, areaKml, stats, wgs84Bounds, startSimulation, handleSourceKmlUpload,
+    sourceWgs, areaKml, stats, wgs84Bounds, demBoundaryWgs, startSimulation, handleSourceKmlUpload,
     handleAreaKmlUpload, handleMapClick, exportToKml, handleDemUpload, CRS_LIST,
     setShowStats
   } = props;
@@ -646,7 +647,13 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     )}
                     <MapClickHandler onMapClick={handleMapClick} />
                     {riverKml && <Polyline positions={riverKml.coords} color="#3b82f6" weight={3.5} opacity={0.9} />}
-                    {areaKml && <Polygon positions={areaKml.coords} color="#10b981" weight={2.5} fillOpacity={0.25} />}
+                    {areaKml ? (
+                      <Polygon positions={areaKml.coords} color="#10b981" weight={2.5} fillOpacity={0.25} />
+                    ) : demBoundaryWgs && demBoundaryWgs.length > 0 ? (
+                      demBoundaryWgs.map((loop, idx) => (
+                        <Polygon key={idx} positions={loop.map(([lon, lat]) => [lat, lon])} color="#10b981" weight={2.5} fillOpacity={0.2} />
+                      ))
+                    ) : null}
                     {sourceWgs && (
                       <CircleMarker 
                         center={sourceWgs} 

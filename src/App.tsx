@@ -21,6 +21,7 @@ import Footer from './components/Footer';
 import Header from './components/Header';
 import Settings from './components/Settings';
 import ITwinWorkspace from './components/ITwinWorkspace';
+import { extractDemBoundaryPolygons } from './utils/demBoundary';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -611,6 +612,11 @@ export default function App() {
       return [[coords.lat, coords.lon], [coords.lat + 0.01, coords.lon + 0.01]] as [[number, number], [number, number]];
     }
   }, [dem, selectedCRS.def, coords.lat, coords.lon]);
+
+  const demBoundaryWgs = React.useMemo(() => {
+    if (!dem) return null;
+    return extractDemBoundaryPolygons(dem, selectedCRS.def);
+  }, [dem, selectedCRS.def]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -1261,6 +1267,16 @@ export default function App() {
       } catch (err) {
         console.error("Failed to construct studyAreaPoly:", err);
       }
+    } else if (demBoundaryWgs && demBoundaryWgs.length > 0) {
+      try {
+        if (demBoundaryWgs.length === 1) {
+          studyAreaPoly = turf.polygon([demBoundaryWgs[0]]);
+        } else {
+          studyAreaPoly = turf.multiPolygon(demBoundaryWgs.map(loop => [loop]));
+        }
+      } catch (err) {
+        console.error("Failed to construct studyAreaPoly from demBoundaryWgs:", err);
+      }
     }
 
     // Generate Risk Area Polygons (with Turf dynamic vector geometric intersection clipping)
@@ -1289,24 +1305,46 @@ export default function App() {
       riskPolygons.push(...floodPolygons);
     }
 
-    // DEM verisinin dış sınırları (4 köşe koordinatı WGS84 dönüşümü)
-    const demSw = transform(dem.xll, dem.yll);
-    const demSe = transform(dem.xll + dem.width * dem.cellSize, dem.yll);
-    const demNe = transform(dem.xll + dem.width * dem.cellSize, dem.yll + dem.height * dem.cellSize);
-    const demNw = transform(dem.xll, dem.yll + dem.height * dem.cellSize);
-    const demOuterCoordsStr = `${demSw[0]},${demSw[1]},0 ${demSe[0]},${demSe[1]},0 ${demNe[0]},${demNe[1]},0 ${demNw[0]},${demNw[1]},0 ${demSw[0]},${demSw[1]},0`;
-
-    // 1. Çalışma Alanı Layer (DEM Verisi Dış Sınırları)
-    kml += `    <Placemark>
+    // 1. Çalışma Alanı Layer
+    if (areaKml) {
+      kml += `    <Placemark>
       <name>1- Çalışma Alanı</name>
-      <description>DEM Verisinin Dış Sınırları (Çalışma Alanı)</description>
+      <description>Yüklenen Çalışma Alanı Sınırı (${areaKml.name})</description>
       <styleUrl>#study_area_style</styleUrl>
       <Polygon>
         <outerBoundaryIs><LinearRing><coordinates>
-          ${demOuterCoordsStr}
+          ${areaKml.coords.map(([lat, lon]) => `${lon},${lat},0`).join(' ')}
         </coordinates></LinearRing></outerBoundaryIs>
       </Polygon>
     </Placemark>\n`;
+    } else if (demBoundaryWgs && demBoundaryWgs.length > 0) {
+      const polyStrList = demBoundaryWgs.map(loop => `      <Polygon>
+        <outerBoundaryIs><LinearRing><coordinates>
+          ${loop.map(([lon, lat]) => `${lon},${lat},0`).join(' ')}
+        </coordinates></LinearRing></outerBoundaryIs>
+      </Polygon>`);
+      kml += `    <Placemark>
+      <name>1- Çalışma Alanı</name>
+      <description>DEM Yükseklik Verisi Gerçek Dış Sınırı (Çalışma Alanı)</description>
+      <styleUrl>#study_area_style</styleUrl>
+${polyStrList.length > 1 ? `      <MultiGeometry>\n${polyStrList.join('\n')}\n      </MultiGeometry>` : polyStrList[0]}
+    </Placemark>\n`;
+    } else if (wgs84Bounds) {
+      kml += `    <Placemark>
+      <name>1- Çalışma Alanı</name>
+      <description>DEM Coğrafi Matriks Sınırları (Çalışma Alanı)</description>
+      <styleUrl>#study_area_style</styleUrl>
+      <Polygon>
+        <outerBoundaryIs><LinearRing><coordinates>
+          ${wgs84Bounds[0][1]},${wgs84Bounds[0][0]},0
+          ${wgs84Bounds[1][1]},${wgs84Bounds[0][0]},0
+          ${wgs84Bounds[1][1]},${wgs84Bounds[1][0]},0
+          ${wgs84Bounds[0][1]},${wgs84Bounds[1][0]},0
+          ${wgs84Bounds[0][1]},${wgs84Bounds[0][0]},0
+        </coordinates></LinearRing></outerBoundaryIs>
+      </Polygon>
+    </Placemark>\n`;
+    }
 
     // 2. Kaynak Noktası Layer
     if (sourceWgs) {
@@ -1557,7 +1595,7 @@ ${floodPolygons.join('\n')}
                 floodImage, setFloodImage, elevationImage, setElevationImage, reliefImage,
                 streamImage, setStreamImage, 
                 viewMode, setViewMode, flowAcc, setFlowAcc, riverKml, setRiverKml, sourceKmlName, setSourceKmlName,
-                sourceWgs, setSourceWgs, areaKml, setAreaKml, areaMask, setAreaMask, stats, wgs84Bounds,
+                sourceWgs, setSourceWgs, areaKml, setAreaKml, areaMask, setAreaMask, stats, wgs84Bounds, demBoundaryWgs,
                 startSimulation, handleKmlUpload, handleSourceKmlUpload, handleAreaKmlUpload, handleMapClick,
                 exportToKml, handleDemUpload, CRS_LIST, MANNING_PRESETS, workerRef
               }}

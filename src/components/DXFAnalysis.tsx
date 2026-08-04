@@ -1,11 +1,9 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon } from 'lucide-react';
 import DxfParser from 'dxf-parser';
 import proj4 from 'proj4';
-import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, Marker, useMap, useMapEvents } from 'react-leaflet';
-import L from 'leaflet';
+import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { MapAutoCenter } from './MapHelpers';
 
 export interface CADLayer {
   name: string;
@@ -110,7 +108,7 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 const CRS_LIST = [
-  { code: 'NONE', name: 'Seçilmedi (Yerel Koordinat / Auto TM30)' },
+  { code: 'NONE', name: 'Seçilmedi (Yerel Koordinat)' },
   { code: 'EPSG:4326', name: 'WGS 84 (Coğrafi - Global)', def: '+proj=longlat +datum=WGS84 +no_defs' },
   { code: 'EPSG:3857', name: 'WGS 84 / Pseudo-Mercator (Web Mercator)', def: '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs' },
   { code: 'EPSG:5253', name: 'TUREF / TM27 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=27 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
@@ -144,88 +142,12 @@ const BASEMAP_URLS: Record<string, string> = {
   street: 'https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png'
 };
 
-const createTextIcon = (text: string, color: string, rotation = 0) => {
-  return L.divIcon({
-    className: 'cad-text-label',
-    html: `<div style="color: ${color}; font-size: 11px; font-weight: 600; font-family: sans-serif; white-space: nowrap; transform: rotate(${-rotation}deg); transform-origin: left bottom; text-shadow: 0 0 3px #000; pointer-events: none;">${text}</div>`,
-    iconSize: [0, 0],
-    iconAnchor: [0, 0]
-  });
-};
-
-function MapBoundsFitter({ bounds, fitKey }: { bounds: [[number, number], [number, number]] | null; fitKey: number }) {
+function LeafletCenterUpdater({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
   useEffect(() => {
-    if (bounds) {
-      map.fitBounds(bounds, { padding: [30, 30] });
-    }
-  }, [bounds, fitKey, map]);
+    map.setView(center, zoom, { animate: false });
+  }, [center, zoom, map]);
   return null;
-}
-
-function MouseCoordinatesDisplay() {
-  const [coordsText, setCoordsText] = useState<string>('');
-  useMapEvents({
-    mousemove: (e) => {
-      setCoordsText(`Enlem: ${e.latlng.lat.toFixed(6)}, Boylam: ${e.latlng.lng.toFixed(6)}`);
-    }
-  });
-
-  if (!coordsText) return null;
-
-  return (
-    <div className="absolute bottom-3 left-3 z-[1000] bg-slate-950/80 backdrop-blur-md text-slate-300 px-2.5 py-1 rounded-lg border border-slate-750 text-[11px] font-mono shadow-md pointer-events-none">
-      {coordsText}
-    </div>
-  );
-}
-
-function dxfToWgs84(
-  x: number,
-  y: number,
-  crsCode: string,
-  dxfBounds: { minX: number; minY: number; maxX: number; maxY: number }
-): [number, number] {
-  if (isNaN(x) || isNaN(y)) return [39.9208, 32.8541];
-
-  if (crsCode !== 'NONE') {
-    const crsItem = CRS_LIST.find(c => c.code === crsCode);
-    if (crsItem?.def) {
-      try {
-        const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [x, y]);
-        if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-          return [lat, lon];
-        }
-      } catch (e) {
-        // Fallback
-      }
-    }
-  }
-
-  // Auto-detect if coordinates are in UTM/TM meters (e.g. X: 100,000 - 900,000, Y: 3,000,000 - 5,000,000)
-  if (x > 100000 && x < 900000 && y > 3000000 && y < 5000000) {
-    try {
-      const tm30Def = '+proj=tmerc +lat_0=0 +lon_0=30 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs';
-      const [lon, lat] = proj4(tm30Def, 'EPSG:4326', [x, y]);
-      if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-        return [lat, lon];
-      }
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  // Local CAD grid relative to center
-  const midX = (dxfBounds.minX + dxfBounds.maxX) / 2 || 0;
-  const midY = (dxfBounds.minY + dxfBounds.maxY) / 2 || 0;
-  
-  const dX = x - midX;
-  const dY = y - midY;
-  
-  const lat = 39.9208 + (dY / 111320);
-  const lon = 32.8541 + (dX / (111320 * Math.cos(39.9208 * Math.PI / 180)));
-  
-  return [lat, lon];
 }
 
 const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
@@ -274,10 +196,17 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     propsSetCrs?.(c);
   };
 
-  // Mobile Tab State: 'controls' (default) or 'map'
+  // Mobile Tab State: 'controls' (default so user uploads/parses file first) or 'map'
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
   const [basemap, setBasemap] = useState<'none' | 'hybrid' | 'satellite' | 'esri' | 'street'>('none');
-  const [fitKey, setFitKey] = useState<number>(0);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+  const [mapCenter, setMapCenter] = useState<[number, number]>([39.9208, 32.8541]);
+  const [mapZoom, setMapZoom] = useState<number>(15);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -317,8 +246,10 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           }
           updateLayers(extractedLayers);
           
-          setFitKey(k => k + 1);
+          setZoom(1);
+          setPan({ x: 0, y: 0 });
           setUploadMessage(`DXF Açıldı: ${extractedLayers.length} katman bulundu.`);
+          // Switch to map view automatically on mobile after parsing
           setMobileTab('map');
         } catch (err) {
           console.error("DXF Parse Error:", err);
@@ -341,181 +272,321 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     );
   };
 
-  // Process and memoize vector features for Leaflet
-  const { features, mapBounds, entityCount } = useMemo(() => {
-    if (!dxfData || !dxfData.entities || dxfData.entities.length === 0) {
-      return { features: [], mapBounds: null, entityCount: 0 };
+  // Rendering DXF on Canvas
+  useEffect(() => {
+    if (!canvasRef.current || !dxfData || !isParsed) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Handle high DPI displays
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+
+    const width = rect.width;
+    const height = rect.height;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    if (basemap === 'none') {
+      ctx.fillStyle = '#0b1329';
+      ctx.fillRect(0, 0, width, height);
+    } else {
+      ctx.fillStyle = 'rgba(11, 19, 41, 0.25)';
+      ctx.fillRect(0, 0, width, height);
     }
 
-    // 1. Calculate raw DXF bounds
+    // Calculate extents
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    dxfData.entities.forEach((entity: any) => {
-      const layer = layers.find(l => l.name === entity.layer);
-      if (layer && !layer.visible) return;
+    if (dxfData.entities && dxfData.entities.length > 0) {
+       dxfData.entities.forEach((entity: any) => {
+          const layer = layers.find(l => l.name === entity.layer);
+          if (layer && !layer.visible) return;
 
-      if (entity.vertices) {
-        entity.vertices.forEach((v: any) => {
-          if (typeof v.x === 'number') {
-            if (v.x < minX) minX = v.x;
-            if (v.x > maxX) maxX = v.x;
+          if (entity.vertices) {
+             entity.vertices.forEach((v: any) => {
+                if (v.x < minX) minX = v.x;
+                if (v.y < minY) minY = v.y;
+                if (v.x > maxX) maxX = v.x;
+                if (v.y > maxY) maxY = v.y;
+             });
+          } else if (entity.center && entity.radius) {
+             if (entity.center.x - entity.radius < minX) minX = entity.center.x - entity.radius;
+             if (entity.center.y - entity.radius < minY) minY = entity.center.y - entity.radius;
+             if (entity.center.x + entity.radius > maxX) maxX = entity.center.x + entity.radius;
+             if (entity.center.y + entity.radius > maxY) maxY = entity.center.y + entity.radius;
+          } else if (entity.position) {
+             if (entity.position.x < minX) minX = entity.position.x;
+             if (entity.position.y < minY) minY = entity.position.y;
+             if (entity.position.x > maxX) maxX = entity.position.x;
+             if (entity.position.y > maxY) maxY = entity.position.y;
+          } else if (entity.startPoint && entity.endPoint) {
+             if (entity.startPoint.x < minX) minX = entity.startPoint.x;
+             if (entity.startPoint.y < minY) minY = entity.startPoint.y;
+             if (entity.startPoint.x > maxX) maxX = entity.startPoint.x;
+             if (entity.startPoint.y > maxY) maxY = entity.startPoint.y;
+             if (entity.endPoint.x < minX) minX = entity.endPoint.x;
+             if (entity.endPoint.y < minY) minY = entity.endPoint.y;
+             if (entity.endPoint.x > maxX) maxX = entity.endPoint.x;
+             if (entity.endPoint.y > maxY) maxY = entity.endPoint.y;
           }
-          if (typeof v.y === 'number') {
-            if (v.y < minY) minY = v.y;
-            if (v.y > maxY) maxY = v.y;
-          }
-        });
-      } else if (entity.center && entity.radius) {
-        if (entity.center.x - entity.radius < minX) minX = entity.center.x - entity.radius;
-        if (entity.center.y - entity.radius < minY) minY = entity.center.y - entity.radius;
-        if (entity.center.x + entity.radius > maxX) maxX = entity.center.x + entity.radius;
-        if (entity.center.y + entity.radius > maxY) maxY = entity.center.y + entity.radius;
-      } else if (entity.position) {
-        if (entity.position.x < minX) minX = entity.position.x;
-        if (entity.position.y < minY) minY = entity.position.y;
-        if (entity.position.x > maxX) maxX = entity.position.x;
-        if (entity.position.y > maxY) maxY = entity.position.y;
-      } else if (entity.startPoint && entity.endPoint) {
-        if (entity.startPoint.x < minX) minX = entity.startPoint.x;
-        if (entity.startPoint.y < minY) minY = entity.startPoint.y;
-        if (entity.startPoint.x > maxX) maxX = entity.startPoint.x;
-        if (entity.startPoint.y > maxY) maxY = entity.startPoint.y;
-        if (entity.endPoint.x < minX) minX = entity.endPoint.x;
-        if (entity.endPoint.y < minY) minY = entity.endPoint.y;
-        if (entity.endPoint.x > maxX) maxX = entity.endPoint.x;
-        if (entity.endPoint.y > maxY) maxY = entity.endPoint.y;
-      }
-    });
+       });
+    }
 
     if (minX === Infinity) {
-      minX = 0; minY = 0; maxX = 100; maxY = 100;
+       minX = 0; minY = 0; maxX = 100; maxY = 100;
     }
-    const rawBounds = { minX, minY, maxX, maxY };
 
-    // 2. Map coordinates to WGS84
-    let minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
-    const updateBounds = (lat: number, lon: number) => {
-      if (isNaN(lat) || isNaN(lon)) return;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-      if (lon < minLon) minLon = lon;
-      if (lon > maxLon) maxLon = lon;
-    };
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    const centerX = width / 2 + pan.x;
+    const centerY = height / 2 + pan.y;
 
-    const featList: any[] = [];
-    let visibleCount = 0;
+    const fitScale = Math.min((width * 0.85) / spanX, (height * 0.85) / spanY) || 1;
 
-    dxfData.entities.forEach((entity: any, index: number) => {
-      const layer = layers.find(l => l.name === entity.layer);
-      if (layer && !layer.visible) return;
+    // Project world center for Satellite Basemap synchronization
+    const worldMidX = midX - (pan.x / (fitScale * zoom));
+    const worldMidY = midY + (pan.y / (fitScale * zoom));
 
-      visibleCount++;
-
-      const layerColorHex = getAciColor(layer?.color, '#38bdf8');
-      const entityRawColor = entity.color ?? entity.colorNumber ?? entity.trueColor;
-      const color = (entityRawColor !== undefined && entityRawColor !== 256) 
-        ? getAciColor(entityRawColor, layerColorHex) 
-        : layerColorHex;
-
-      const weight = 2;
-
-      if (entity.type === 'LINE') {
-        const v0 = entity.vertices ? entity.vertices[0] : entity.startPoint;
-        const v1 = entity.vertices ? entity.vertices[1] : entity.endPoint;
-        if (v0 && v1) {
-          const p0 = dxfToWgs84(v0.x, v0.y, crs, rawBounds);
-          const p1 = dxfToWgs84(v1.x, v1.y, crs, rawBounds);
-          updateBounds(p0[0], p0[1]);
-          updateBounds(p1[0], p1[1]);
-          featList.push({ id: `line-${index}`, type: 'polyline', positions: [p0, p1], color, weight });
-        }
-      } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
-        if (entity.vertices && entity.vertices.length > 0) {
-          const pts: [number, number][] = [];
-          entity.vertices.forEach((v: any) => {
-            const p = dxfToWgs84(v.x, v.y, crs, rawBounds);
-            updateBounds(p[0], p[1]);
-            pts.push(p);
-          });
-          const isClosed = entity.shape || entity.closed;
-          featList.push({
-            id: `poly-${index}`,
-            type: isClosed ? 'polygon' : 'polyline',
-            positions: pts,
-            color,
-            weight
-          });
-        }
-      } else if (entity.type === 'CIRCLE') {
-        if (entity.center) {
-          const r = entity.radius || 1;
-          const pts: [number, number][] = [];
-          const segments = 32;
-          for (let i = 0; i <= segments; i++) {
-            const angle = (i / segments) * 2 * Math.PI;
-            const cx = entity.center.x + r * Math.cos(angle);
-            const cy = entity.center.y + r * Math.sin(angle);
-            const p = dxfToWgs84(cx, cy, crs, rawBounds);
-            updateBounds(p[0], p[1]);
-            pts.push(p);
+    if (crs !== 'NONE') {
+      const crsItem = CRS_LIST.find(c => c.code === crs);
+      if (crsItem?.def) {
+        try {
+          const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [worldMidX, worldMidY]);
+          if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            setMapCenter([lat, lon]);
+            setMapZoom(Math.max(2, Math.min(19, Math.round(15 + Math.log2(zoom)))));
           }
-          featList.push({ id: `circle-${index}`, type: 'polyline', positions: pts, color, weight });
-        }
-      } else if (entity.type === 'ARC') {
-        if (entity.center) {
-          const r = entity.radius || 1;
-          const startAng = entity.startAngle || 0;
-          let endAng = entity.endAngle || 0;
-          if (endAng < startAng) endAng += 2 * Math.PI;
-          const pts: [number, number][] = [];
-          const segments = 24;
-          for (let i = 0; i <= segments; i++) {
-            const angle = startAng + (i / segments) * (endAng - startAng);
-            const ax = entity.center.x + r * Math.cos(angle);
-            const ay = entity.center.y + r * Math.sin(angle);
-            const p = dxfToWgs84(ax, ay, crs, rawBounds);
-            updateBounds(p[0], p[1]);
-            pts.push(p);
-          }
-          featList.push({ id: `arc-${index}`, type: 'polyline', positions: pts, color, weight });
-        }
-      } else if (entity.type === 'POINT') {
-        const pt = entity.position || (entity.vertices && entity.vertices[0]);
-        if (pt) {
-          const p = dxfToWgs84(pt.x, pt.y, crs, rawBounds);
-          updateBounds(p[0], p[1]);
-          featList.push({ id: `point-${index}`, type: 'point', position: p, color });
-        }
-      } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
-        const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
-        if (pt && entity.text) {
-          let rawStr = String(entity.text)
-            .replace(/\\P/g, ' ')
-            .replace(/\\{[^}]*\}|\\[a-zA-Z0-9]+;/g, '')
-            .replace(/[\{\}]/g, '')
-            .trim();
-          if (rawStr) {
-            const p = dxfToWgs84(pt.x, pt.y, crs, rawBounds);
-            updateBounds(p[0], p[1]);
-            featList.push({
-              id: `text-${index}`,
-              type: 'text',
-              position: p,
-              text: rawStr,
-              color,
-              rotation: entity.rotation || 0
-            });
-          }
+        } catch (e) {
+          // proj4 fallback
         }
       }
-    });
+    } else if (worldMidX >= 25 && worldMidX <= 45 && worldMidY >= 35 && worldMidY <= 42) {
+      setMapCenter([worldMidY, worldMidX]);
+    }
 
-    const calculatedBounds: [[number, number], [number, number]] | null = 
-      (minLat !== Infinity && minLon !== Infinity && maxLat !== -Infinity && maxLon !== -Infinity)
-        ? [[minLat, minLon], [maxLat, maxLon]]
-        : null;
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    ctx.scale(zoom, zoom);
 
-    return { features: featList, mapBounds: calculatedBounds, entityCount: visibleCount };
-  }, [dxfData, layers, crs]);
+    // Grid background
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1 / zoom;
+    const gridSize = Math.max(10, Math.round(spanX / 10));
+    for (let x = minX - spanX; x <= maxX + spanX; x += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo((x - midX) * fitScale, -(minY - spanY - midY) * fitScale);
+      ctx.lineTo((x - midX) * fitScale, -(maxY + spanY - midY) * fitScale);
+      ctx.stroke();
+    }
+    for (let y = minY - spanY; y <= maxY + spanY; y += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo((minX - spanX - midX) * fitScale, -(y - midY) * fitScale);
+      ctx.lineTo((maxX + spanX - midX) * fitScale, -(y - midY) * fitScale);
+      ctx.stroke();
+    }
+
+    // Draw entities with their original layer/entity colors
+    if (dxfData.entities) {
+      dxfData.entities.forEach((entity: any) => {
+        const layer = layers.find(l => l.name === entity.layer);
+        if (layer && !layer.visible) return;
+
+        // Determine entity color (entity color override vs layer color)
+        const layerColorHex = getAciColor(layer?.color, '#38bdf8');
+        const entityRawColor = entity.color ?? entity.colorNumber ?? entity.trueColor;
+        const strokeColor = (entityRawColor !== undefined && entityRawColor !== 256) 
+          ? getAciColor(entityRawColor, layerColorHex) 
+          : layerColorHex;
+
+        // Determine line weight from DXF entity or layer
+        const entityLw = entity.lineWeight ?? entity.lineweight;
+        const layerLw = layer?.lineWeight;
+        let lwMM = 0.25; // Default 0.25mm
+        if (typeof entityLw === 'number' && entityLw > 0) {
+          lwMM = entityLw / 100;
+        } else if (typeof layerLw === 'number' && layerLw > 0) {
+          lwMM = layerLw / 100;
+        }
+        // Convert mm to pixels (~3.78 px per mm), adjusted for zoom
+        const calcLineWidth = Math.max(1 / zoom, (lwMM * 3.5) / zoom);
+
+        ctx.strokeStyle = strokeColor;
+        ctx.fillStyle = strokeColor;
+        ctx.lineWidth = calcLineWidth;
+
+        if (entity.type === 'LINE') {
+          const v0 = entity.vertices ? entity.vertices[0] : entity.startPoint;
+          const v1 = entity.vertices ? entity.vertices[1] : entity.endPoint;
+          if (v0 && v1) {
+            ctx.beginPath();
+            ctx.moveTo((v0.x - midX) * fitScale, -(v0.y - midY) * fitScale);
+            ctx.lineTo((v1.x - midX) * fitScale, -(v1.y - midY) * fitScale);
+            ctx.stroke();
+          }
+        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
+          if (entity.vertices && entity.vertices.length > 0) {
+            ctx.beginPath();
+            entity.vertices.forEach((v: any, i: number) => {
+              const sx = (v.x - midX) * fitScale;
+              const sy = -(v.y - midY) * fitScale;
+              if (i === 0) ctx.moveTo(sx, sy);
+              else ctx.lineTo(sx, sy);
+            });
+            if (entity.shape || entity.closed) ctx.closePath();
+            ctx.stroke();
+          }
+        } else if (entity.type === 'CIRCLE') {
+          if (entity.center) {
+            const cx = (entity.center.x - midX) * fitScale;
+            const cy = -(entity.center.y - midY) * fitScale;
+            const r = (entity.radius || 1) * fitScale;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+            ctx.stroke();
+          }
+        } else if (entity.type === 'ARC') {
+          if (entity.center) {
+            const cx = (entity.center.x - midX) * fitScale;
+            const cy = -(entity.center.y - midY) * fitScale;
+            const r = (entity.radius || 1) * fitScale;
+            const startAngle = -(entity.endAngle || 0);
+            const endAngle = -(entity.startAngle || 0);
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, startAngle, endAngle);
+            ctx.stroke();
+          }
+        } else if (entity.type === 'POINT') {
+          const pt = entity.position || (entity.vertices && entity.vertices[0]);
+          if (pt) {
+            const px = (pt.x - midX) * fitScale;
+            const py = -(pt.y - midY) * fitScale;
+            
+            // Read $PDSIZE from DXF header if available
+            const pdSizeHeader = dxfData.header?.$PDSIZE ?? 0;
+            let pdWorldSize = 0;
+            if (pdSizeHeader > 0) {
+              pdWorldSize = pdSizeHeader;
+            } else if (pdSizeHeader < 0) {
+              pdWorldSize = (Math.abs(pdSizeHeader) / 100) * spanX;
+            } else {
+              pdWorldSize = spanX * 0.003; // Fallback ~0.3% of drawing width
+            }
+            const ptRadius = Math.max(2 / zoom, (pdWorldSize * fitScale) / 2);
+
+            ctx.beginPath();
+            ctx.arc(px, py, ptRadius, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(px, py, Math.max(1 / zoom, ptRadius * 0.25), 0, 2 * Math.PI);
+            ctx.fill();
+          }
+        } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+          const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
+          if (pt && entity.text) {
+            const tx = (pt.x - midX) * fitScale;
+            const ty = -(pt.y - midY) * fitScale;
+            
+            // Clean MTEXT formatting codes (\P, \f..., \H..., \W..., \{, \})
+            let rawStr = String(entity.text)
+              .replace(/\\P/g, ' ')
+              .replace(/\\{[^}]*\}|\\[a-zA-Z0-9]+;/g, '')
+              .replace(/[\{\}]/g, '')
+              .trim();
+            if (!rawStr) return;
+
+            // Read CAD text height directly from DXF entity (height / textHeight / nominalTextHeight)
+            let cadTextHeight = entity.height || entity.textHeight || entity.nominalTextHeight;
+            if (!cadTextHeight || cadTextHeight <= 0) {
+              cadTextHeight = dxfData.header?.$TEXTSIZE || (spanX * 0.005);
+            }
+
+            // Calculate exact font size in canvas space
+            const fontCanvasPx = cadTextHeight * fitScale;
+
+            ctx.save();
+            ctx.translate(tx, ty);
+
+            // Apply rotation if defined in DXF entity (in degrees)
+            if (entity.rotation) {
+              const rotRad = -(entity.rotation * Math.PI) / 180;
+              ctx.rotate(rotRad);
+            }
+
+            ctx.font = `${fontCanvasPx}px sans-serif`;
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(rawStr, 0, 0);
+            ctx.restore();
+          }
+        }
+      });
+    }
+
+    ctx.restore();
+
+  }, [dxfData, isParsed, zoom, pan, layers, mobileTab]);
+
+  // Mouse pan handlers
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setIsPanning(true);
+    setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanning) {
+      setPan({
+        x: e.clientX - startPan.x,
+        y: e.clientY - startPan.y
+      });
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  // Touch pan handlers for mobile
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 1) {
+      setIsPanning(true);
+      setStartPan({ x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y });
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (isPanning && e.touches.length === 1) {
+      setPan({
+        x: e.touches[0].clientX - startPan.x,
+        y: e.touches[0].clientY - startPan.y
+      });
+    }
+  };
+
+  const handleTouchEnd = () => {
+    setIsPanning(false);
+  };
+
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const zoomFactor = 1.1;
+    if (e.deltaY < 0) {
+      setZoom((prev) => Math.min(prev * zoomFactor, 50));
+    } else {
+      setZoom((prev) => Math.max(prev / zoomFactor, 0.1));
+    }
+  };
+
+  const resetView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
 
   return (
     <div className="w-full h-full flex flex-col min-h-0 overflow-hidden">
@@ -546,14 +617,14 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           }`}
         >
           <Eye size={13} />
-          <span>2D CAD Leaflet Ekranı</span>
+          <span>2D CAD Harita Ekranı</span>
         </button>
       </div>
 
       {/* Main Grid Container */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-full min-h-0">
         
-        {/* LEFT COLUMN: Controls Panel */}
+        {/* LEFT COLUMN: Controls Panel (Visible on Desktop OR when MobileTab === 'controls') */}
         <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto lg:overflow-hidden ${
           mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
         }`}>
@@ -642,7 +713,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             )}
           </div>
 
-          {/* 4. Katman Yöneticisi */}
+          {/* 4. Katman Yöneticisi - En Fazla Yüksekliği Kaplar */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-2.5 flex flex-col flex-1 min-h-0 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between mb-2 shrink-0">
               <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -699,21 +770,16 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
 
         </div>
 
-        {/* RIGHT COLUMN: Leaflet 2D CAD Harita Ekranı */}
-        <div className={`lg:col-span-9 bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col relative shadow-inner h-full min-h-0 ${
+        {/* RIGHT COLUMN: CAD Canvas Viewer (Visible on Desktop OR when MobileTab === 'map') */}
+        <div className={`lg:col-span-9 bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden flex flex-col relative shadow-inner h-full min-h-0 ${
           mobileTab === 'map' ? 'flex' : 'hidden lg:flex'
         }`}>
           
           {/* Canvas Toolbar Header */}
-          <div className="px-3 py-2 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between z-10 shrink-0">
+          <div className="px-3 py-2 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between z-10 shrink-0">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-              <h3 className="text-xs font-bold text-white">2D CAD Harita Görüntüleyici (Leaflet)</h3>
-              {isParsed && (
-                <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full font-mono">
-                  {entityCount} Çizim Elemanı
-                </span>
-              )}
+              <h3 className="text-xs font-bold text-white">2D CAD Görüntüleme Ekranı</h3>
             </div>
 
             <div className="flex items-center gap-2">
@@ -725,7 +791,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                   onChange={(e) => setBasemap(e.target.value as any)}
                   className="bg-transparent text-xs text-slate-200 font-medium outline-none cursor-pointer"
                 >
-                  <option value="none" className="bg-slate-900 text-white">Altlık: Koyu CAD Tuvali</option>
+                  <option value="none" className="bg-slate-900 text-white">Uydu Altlığı: Kapalı (Koyu Tuval)</option>
                   <option value="hybrid" className="bg-slate-900 text-white">Uydu Hibrit (Google)</option>
                   <option value="satellite" className="bg-slate-900 text-white">Uydu Saf (Google)</option>
                   <option value="esri" className="bg-slate-900 text-white">Esri World Imagery</option>
@@ -752,90 +818,68 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                 <span>Paneli Aç</span>
               </button>
 
-              {isParsed && (
-                <button
-                  onClick={() => setFitKey(k => k + 1)}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors border border-slate-700 cursor-pointer"
-                  title="Çizimi Odakla / Sıfırla"
-                >
-                  <RotateCcw size={12} />
-                  <span>Çizimi Odakla</span>
-                </button>
-              )}
+              <div className="bg-slate-900/90 px-2 py-1 rounded-lg border border-slate-700 text-[11px] font-mono text-cyan-400 flex items-center gap-1">
+                <ZoomIn size={12} />
+                <span>{Math.round(zoom * 100)}%</span>
+              </div>
+              <button
+                onClick={resetView}
+                disabled={!isParsed}
+                className="p-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors"
+                title="Sıfırla"
+              >
+                <RotateCcw size={12} />
+              </button>
             </div>
           </div>
 
-          {/* Leaflet Map Container */}
-          <div className="flex-1 relative w-full h-full min-h-0 bg-[#0b1329]">
-            {isParsed && basemap !== 'none' && crs === 'NONE' && (
-              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] bg-amber-500/90 text-slate-950 px-3 py-1 rounded-full font-bold text-[11px] shadow-lg flex items-center gap-1.5 pointer-events-none">
-                <span>💡 Uydu altlığının çiziminizle birebir çakışması için sol panelden Koordinat Sistemini (CRS) seçiniz.</span>
+          {/* Canvas Container */}
+          <div className="flex-1 relative w-full h-full min-h-0">
+            {/* Satellite Basemap Background Layer */}
+            {isParsed && basemap !== 'none' && mapCenter && (
+              <div className="absolute inset-0 z-0 opacity-90 overflow-hidden pointer-events-none">
+                <MapContainer
+                  center={mapCenter}
+                  zoom={mapZoom}
+                  zoomControl={false}
+                  attributionControl={false}
+                  dragging={false}
+                  scrollWheelZoom={false}
+                  className="w-full h-full"
+                >
+                  <TileLayer url={BASEMAP_URLS[basemap] || BASEMAP_URLS.hybrid} />
+                  <LeafletCenterUpdater center={mapCenter} zoom={mapZoom} />
+                </MapContainer>
               </div>
             )}
 
-            {isParsed ? (
-              <MapContainer
-                center={mapBounds ? [(mapBounds[0][0] + mapBounds[1][0]) / 2, (mapBounds[0][1] + mapBounds[1][1]) / 2] : [39.9208, 32.8541]}
-                zoom={14}
-                preferCanvas={true}
-                zoomControl={true}
-                className="w-full h-full z-0"
-              >
-                {basemap !== 'none' && (
-                  <TileLayer url={BASEMAP_URLS[basemap] || BASEMAP_URLS.hybrid} />
-                )}
+            {isParsed && basemap !== 'none' && crs === 'NONE' && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-amber-500/90 text-slate-950 px-3 py-1 rounded-full font-bold text-[11px] shadow-lg flex items-center gap-1.5 pointer-events-none">
+                <span>💡 Uydu altlığının çiziminizle birebir eşleşmesi için sol panelden Koordinat Sistemini (CRS) seçiniz.</span>
+              </div>
+            )}
 
-                <MapBoundsFitter bounds={mapBounds} fitKey={fitKey} />
-                <MouseCoordinatesDisplay />
+            <canvas
+              ref={canvasRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onWheel={handleWheel}
+              className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing touch-none z-10"
+              style={{ display: isParsed ? 'block' : 'none' }}
+            />
 
-                {features.map((feat) => {
-                  if (feat.type === 'polyline') {
-                    return (
-                      <Polyline
-                        key={feat.id}
-                        positions={feat.positions}
-                        pathOptions={{ color: feat.color, weight: feat.weight, opacity: 0.9 }}
-                      />
-                    );
-                  }
-                  if (feat.type === 'polygon') {
-                    return (
-                      <Polygon
-                        key={feat.id}
-                        positions={feat.positions}
-                        pathOptions={{ color: feat.color, weight: feat.weight, fill: false, opacity: 0.9 }}
-                      />
-                    );
-                  }
-                  if (feat.type === 'point') {
-                    return (
-                      <CircleMarker
-                        key={feat.id}
-                        center={feat.position}
-                        radius={3}
-                        pathOptions={{ color: feat.color, fillColor: feat.color, fillOpacity: 0.9, weight: 1 }}
-                      />
-                    );
-                  }
-                  if (feat.type === 'text') {
-                    return (
-                      <Marker
-                        key={feat.id}
-                        position={feat.position}
-                        icon={createTextIcon(feat.text, feat.color, feat.rotation)}
-                      />
-                    );
-                  }
-                  return null;
-                })}
-              </MapContainer>
-            ) : (
+            {!isParsed && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-3 p-6 text-center">
                 <div className="w-14 h-14 rounded-2xl bg-slate-800/60 border border-slate-700 flex items-center justify-center text-slate-400">
                   <FileCode size={28} />
                 </div>
                 <div className="space-y-1 max-w-sm">
-                  <p className="text-sm font-semibold text-slate-300">2D CAD Harita Görüntüleyici (Leaflet) Hazır</p>
+                  <p className="text-sm font-semibold text-slate-300">2D CAD Görüntüleyici Hazır</p>
                   <p className="text-xs text-slate-500">
                     {mobileTab === 'map' ? (
                       <>
