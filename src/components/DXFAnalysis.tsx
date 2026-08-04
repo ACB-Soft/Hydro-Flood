@@ -613,7 +613,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         <button
           onClick={() => setMobileTab('map')}
           className={`flex-1 py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-            mobileTab === 'map' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+            mobileTab === 'map' ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
           <Eye size={13} />
@@ -630,26 +630,26 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         }`}>
           
           {/* 1. Ultra Compact Dosya Seçici */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-2.5 shrink-0 shadow-sm space-y-1.5">
+          <div className="bg-white border border-slate-300 rounded-2xl p-2.5 shrink-0 shadow-sm space-y-1.5">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Upload size={13} className="text-cyan-400" />
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <Upload size={13} className="text-cyan-600" />
                 1. DXF Dosyası Seç
               </h3>
               {pendingFile && (
-                <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-md border border-emerald-500/20 flex items-center gap-1">
+                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1">
                   <CheckCircle size={10} /> Seçildi
                 </span>
               )}
             </div>
             
-            <label className="border border-dashed border-slate-700 hover:border-cyan-500/50 rounded-xl px-2.5 py-1.5 flex items-center gap-2 cursor-pointer transition-all bg-slate-800/40 hover:bg-slate-800">
+            <label className="border border-dashed border-slate-300 hover:border-cyan-500 rounded-xl px-2.5 py-1.5 flex items-center gap-2 cursor-pointer transition-all bg-slate-50 hover:bg-slate-100">
               <input type="file" accept=".dxf" className="hidden" onChange={handleFileUpload} />
-              <div className="w-6 h-6 bg-cyan-500/10 rounded-lg flex items-center justify-center text-cyan-400 shrink-0">
+              <div className="w-6 h-6 bg-cyan-100 rounded-lg flex items-center justify-center text-cyan-700 shrink-0">
                 <Upload size={13} />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-slate-200 truncate">
+                <p className="text-xs font-medium text-slate-800 truncate">
                   {pendingFile ? pendingFile.name : 'DXF Seç veya Sürükle'}
                 </p>
               </div>
@@ -657,18 +657,18 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           </div>
 
           {/* 2. Projeksiyon Tanımlayıcı (İsteğe Bağlı) */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-2.5 shrink-0 shadow-sm space-y-1">
+          <div className="bg-white border border-slate-300 rounded-2xl p-2.5 shrink-0 shadow-sm space-y-1">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Compass size={13} className="text-indigo-400" />
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <Compass size={13} className="text-indigo-600" />
                 2. Projeksiyon / CRS
               </h3>
-              <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">İsteğe Bağlı</span>
+              <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">İsteğe Bağlı</span>
             </div>
             <select
               value={crs}
               onChange={(e) => updateCrs(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+              className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-cyan-500"
             >
               {CRS_LIST.map((c) => (
                 <option key={c.code} value={c.code}>
@@ -679,14 +679,14 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           </div>
 
           {/* 3. Dosyayı Aç / Ayrıştır Butonu */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-2.5 shrink-0 shadow-sm space-y-1.5">
+          <div className="bg-white border border-slate-300 rounded-2xl p-2.5 shrink-0 shadow-sm space-y-1.5">
             <button
               onClick={handleParse}
               disabled={!pendingFile || isParsing}
-              className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-md ${
+              className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-sm ${
                 !pendingFile || isParsing
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-750'
-                  : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/25 border border-cyan-400'
+                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                  : 'bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500'
               }`}
             >
               {isParsing ? (
@@ -705,8 +705,8 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             {uploadMessage && (
               <div className={`text-[10px] p-1.5 rounded-xl border leading-tight ${
                 isParsed 
-                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                  : 'bg-slate-800/50 border-slate-700 text-slate-300'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-medium' 
+                  : 'bg-slate-100 border-slate-200 text-slate-700'
               }`}>
                 {uploadMessage}
               </div>
@@ -714,14 +714,14 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           </div>
 
           {/* 4. Katman Yöneticisi - En Fazla Yüksekliği Kaplar */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-2.5 flex flex-col flex-1 min-h-0 shadow-sm overflow-hidden">
+          <div className="bg-white border border-slate-300 rounded-2xl p-2.5 flex flex-col flex-1 min-h-0 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between mb-2 shrink-0">
-              <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Layers size={13} className="text-cyan-400" />
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <Layers size={13} className="text-cyan-600" />
                 4. Katman Yöneticisi
               </h3>
               {layers.length > 0 && (
-                <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full">
+                <span className="text-[10px] text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full font-medium">
                   {layers.length} Katman
                 </span>
               )}
@@ -734,18 +734,18 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                 </div>
               ) : (
                 layers.map((l, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-1.5 rounded-xl bg-slate-800/50 border border-slate-750">
+                  <div key={idx} className="flex items-center justify-between p-1.5 rounded-xl bg-slate-50 border border-slate-200">
                     <div className="flex items-center gap-2 min-w-0 pr-2">
                       <span 
-                        className="w-2.5 h-2.5 rounded-full shrink-0 border border-white/20 shadow-sm" 
+                        className="w-2.5 h-2.5 rounded-full shrink-0 border border-slate-300 shadow-sm" 
                         style={{ backgroundColor: getAciColor(l.color) }}
                         title={`Renk Kodu: ${l.color}`}
                       />
-                      <span className="text-xs text-slate-200 truncate">{l.name}</span>
+                      <span className="text-xs text-slate-800 truncate font-medium">{l.name}</span>
                     </div>
                     <button
                       onClick={() => toggleLayer(l.name)}
-                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${l.visible ? 'bg-cyan-500' : 'bg-slate-600'}`}
+                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${l.visible ? 'bg-cyan-600' : 'bg-slate-300'}`}
                     >
                       <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all ${l.visible ? 'left-[18px]' : 'left-0.5'}`} />
                     </button>
@@ -759,8 +759,8 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
               disabled={!isParsed}
               className={`w-full mt-2 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border shadow-sm shrink-0 ${
                 isParsed
-                  ? 'bg-blue-600 hover:bg-blue-500 border-blue-400 text-white shadow-blue-500/20 cursor-pointer'
-                  : 'bg-slate-800/80 border-slate-700 text-slate-500 cursor-not-allowed'
+                  ? 'bg-blue-600 hover:bg-blue-700 border-blue-500 text-white cursor-pointer'
+                  : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
               }`}
             >
               <Mountain size={13} />
@@ -771,38 +771,38 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         </div>
 
         {/* RIGHT COLUMN: CAD Canvas Viewer (Visible on Desktop OR when MobileTab === 'map') */}
-        <div className={`lg:col-span-9 bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden flex flex-col relative shadow-inner h-full min-h-0 ${
+        <div className={`lg:col-span-9 bg-white border border-slate-300 rounded-2xl overflow-hidden flex flex-col relative shadow-sm h-full min-h-0 ${
           mobileTab === 'map' ? 'flex' : 'hidden lg:flex'
         }`}>
           
           {/* Canvas Toolbar Header */}
-          <div className="px-3 py-2 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between z-10 shrink-0">
+          <div className="px-3 py-2 bg-slate-100 border-b border-slate-300 flex items-center justify-between z-10 shrink-0">
             <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-              <h3 className="text-xs font-bold text-white">2D CAD Görüntüleme Ekranı</h3>
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 animate-pulse" />
+              <h3 className="text-xs font-bold text-slate-900">2D CAD Görüntüleme Ekranı</h3>
             </div>
 
             <div className="flex items-center gap-2">
               {/* Satellite Basemap Selector */}
-              <div className="flex items-center gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-750">
-                <Globe size={13} className="text-cyan-400" />
+              <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-lg border border-slate-300">
+                <Globe size={13} className="text-cyan-600" />
                 <select
                   value={basemap}
                   onChange={(e) => setBasemap(e.target.value as any)}
-                  className="bg-transparent text-xs text-slate-200 font-medium outline-none cursor-pointer"
+                  className="bg-transparent text-xs text-slate-800 font-medium outline-none cursor-pointer"
                 >
-                  <option value="none" className="bg-slate-900 text-white">Uydu Altlığı: Kapalı (Koyu Tuval)</option>
-                  <option value="hybrid" className="bg-slate-900 text-white">Uydu Hibrit (Google)</option>
-                  <option value="satellite" className="bg-slate-900 text-white">Uydu Saf (Google)</option>
-                  <option value="esri" className="bg-slate-900 text-white">Esri World Imagery</option>
-                  <option value="street" className="bg-slate-900 text-white">Sokak Haritası (OSM)</option>
+                  <option value="none" className="bg-white text-slate-900">Uydu Altlığı: Kapalı (Koyu Tuval)</option>
+                  <option value="hybrid" className="bg-white text-slate-900">Uydu Hibrit (Google)</option>
+                  <option value="satellite" className="bg-white text-slate-900">Uydu Saf (Google)</option>
+                  <option value="esri" className="bg-white text-slate-900">Esri World Imagery</option>
+                  <option value="street" className="bg-white text-slate-900">Sokak Haritası (OSM)</option>
                 </select>
               </div>
 
               {isParsed && (
                 <button
                   onClick={() => onNavigateToDEMGenerator?.()}
-                  className="px-2.5 py-1 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-md shadow-cyan-500/20 border border-cyan-300 transition-all cursor-pointer"
+                  className="px-2.5 py-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-sm border border-cyan-500 transition-all cursor-pointer"
                 >
                   <Mountain size={13} />
                   <span>DEM Üret</span>
@@ -812,20 +812,20 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
               {/* Quick Mobile Settings Button */}
               <button
                 onClick={() => setMobileTab('controls')}
-                className="lg:hidden px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
+                className="lg:hidden px-2.5 py-1 bg-cyan-100 hover:bg-cyan-200 text-cyan-800 border border-cyan-300 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
               >
                 <Sliders size={12} />
                 <span>Paneli Aç</span>
               </button>
 
-              <div className="bg-slate-900/90 px-2 py-1 rounded-lg border border-slate-700 text-[11px] font-mono text-cyan-400 flex items-center gap-1">
+              <div className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-300 text-[11px] font-mono text-cyan-700 font-bold flex items-center gap-1">
                 <ZoomIn size={12} />
                 <span>{Math.round(zoom * 100)}%</span>
               </div>
               <button
                 onClick={resetView}
                 disabled={!isParsed}
-                className="p-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors"
+                className="p-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 border border-slate-300 rounded-lg transition-colors"
                 title="Sıfırla"
               >
                 <RotateCcw size={12} />
@@ -834,7 +834,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           </div>
 
           {/* Canvas Container */}
-          <div className="flex-1 relative w-full h-full min-h-0">
+          <div className="flex-1 relative w-full h-full min-h-0 bg-slate-900">
             {/* Satellite Basemap Background Layer */}
             {isParsed && basemap !== 'none' && mapCenter && (
               <div className="absolute inset-0 z-0 opacity-90 overflow-hidden pointer-events-none">
@@ -854,7 +854,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             )}
 
             {isParsed && basemap !== 'none' && crs === 'NONE' && (
-              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-amber-500/90 text-slate-950 px-3 py-1 rounded-full font-bold text-[11px] shadow-lg flex items-center gap-1.5 pointer-events-none">
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-amber-500 text-slate-950 px-3 py-1 rounded-full font-bold text-[11px] shadow-lg flex items-center gap-1.5 pointer-events-none">
                 <span>💡 Uydu altlığının çiziminizle birebir eşleşmesi için sol panelden Koordinat Sistemini (CRS) seçiniz.</span>
               </div>
             )}
@@ -874,16 +874,16 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             />
 
             {!isParsed && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-3 p-6 text-center">
-                <div className="w-14 h-14 rounded-2xl bg-slate-800/60 border border-slate-700 flex items-center justify-center text-slate-400">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 gap-3 p-6 text-center bg-slate-100">
+                <div className="w-14 h-14 rounded-2xl bg-white border border-slate-300 flex items-center justify-center text-slate-500 shadow-sm">
                   <FileCode size={28} />
                 </div>
                 <div className="space-y-1 max-w-sm">
-                  <p className="text-sm font-semibold text-slate-300">2D CAD Görüntüleyici Hazır</p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-sm font-semibold text-slate-900">2D CAD Görüntüleyici Hazır</p>
+                  <p className="text-xs text-slate-600">
                     {mobileTab === 'map' ? (
                       <>
-                        Üstteki <span className="text-cyan-400 font-bold">Paneli Aç</span> butonundan bir .dxf dosyası seçip haritanızı ekrana yükleyebilirsiniz.
+                        Üstteki <span className="text-cyan-700 font-bold">Paneli Aç</span> butonundan bir .dxf dosyası seçip haritanızı ekrana yükleyebilirsiniz.
                       </>
                     ) : (
                       <>

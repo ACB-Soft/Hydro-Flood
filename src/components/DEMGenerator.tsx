@@ -326,11 +326,11 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
     <div className="h-full flex flex-col overflow-hidden space-y-2 sm:space-y-3">
       
       {/* Mobile Tab Switcher */}
-      <div className="lg:hidden flex items-center bg-slate-900 border border-slate-800 p-1 rounded-xl shrink-0">
+      <div className="lg:hidden flex items-center bg-white border border-slate-300 p-1 rounded-xl shrink-0 shadow-sm">
         <button
           onClick={() => setMobileTab('controls')}
           className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-            mobileTab === 'controls' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+            mobileTab === 'controls' ? 'bg-cyan-700 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
           <Sliders size={14} />
@@ -339,7 +339,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
         <button
           onClick={() => setMobileTab('preview')}
           className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-            mobileTab === 'preview' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+            mobileTab === 'preview' ? 'bg-cyan-700 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
           <Mountain size={14} />
@@ -356,66 +356,66 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
         }`}>
           
           {/* Card 1: DXF Dosya Yükleme veya Aktif Dosya Bilgisi */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+          <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <FileCode size={14} className="text-cyan-400" />
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <FileCode size={14} className="text-cyan-700" />
                 1. DXF Dosya Kaynağı
               </h3>
               {dxfFileName && (
-                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-mono border border-emerald-500/30">
+                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-mono font-bold border border-emerald-300">
                   Yüklendi
                 </span>
               )}
             </div>
 
             {dxfData ? (
-              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 space-y-2">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-2">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">Dosya:</span>
-                  <span className="text-white font-mono font-bold truncate max-w-[150px]">{dxfFileName || 'CAD_Map.dxf'}</span>
+                  <span className="text-slate-600 font-medium">Dosya:</span>
+                  <span className="text-slate-900 font-mono font-bold truncate max-w-[150px]">{dxfFileName || 'CAD_Map.dxf'}</span>
                 </div>
 
                 {/* CRS Selection Dropdown */}
                 <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 font-medium block">Koordinat Sistemi (CRS):</label>
+                  <label className="text-[10px] text-slate-600 font-semibold block">Koordinat Sistemi (CRS):</label>
                   <select
                     value={crs || 'NONE'}
                     onChange={(e) => setCrs(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-750 focus:border-cyan-500 rounded-xl px-2 py-1.5 text-xs font-semibold text-cyan-300 outline-none cursor-pointer transition-all"
+                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 rounded-xl px-2 py-1.5 text-xs font-bold text-cyan-900 outline-none cursor-pointer transition-all shadow-sm"
                   >
-                    <option value="NONE" className="bg-slate-900 text-white">Seçilmedi (Yerel Koordinat)</option>
+                    <option value="NONE" className="bg-white text-slate-900">Seçilmedi (Yerel Koordinat)</option>
                     <optgroup label="TUREF / TM (3° - Türkiye)">
                       {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(item => (
-                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
                           {item.code} - {item.name}
                         </option>
                       ))}
                     </optgroup>
                     <optgroup label="ED50 / TM (3° - Türkiye)">
                       {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(item => (
-                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
                           {item.code} - {item.name}
                         </option>
                       ))}
                     </optgroup>
                     <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
                       {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(item => (
-                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
                           {item.code} - {item.name}
                         </option>
                       ))}
                     </optgroup>
                     <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
                       {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(item => (
-                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
                           {item.code} - {item.name}
                         </option>
                       ))}
                     </optgroup>
                     <optgroup label="Global & Standartlar">
                       {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(item => (
-                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
                           {item.code} - {item.name}
                         </option>
                       ))}
@@ -423,16 +423,16 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                   </select>
                 </div>
 
-                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-900">
-                  <span className="text-slate-400">Aktif Katman:</span>
-                  <span className="text-emerald-400 font-bold">{activeLayers.length} / {layers.length}</span>
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
+                  <span className="text-slate-600 font-medium">Aktif Katman:</span>
+                  <span className="text-emerald-700 font-bold">{activeLayers.length} / {layers.length}</span>
                 </div>
               </div>
             ) : (
               <div className="space-y-2">
-                <label className="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 bg-slate-950/60 rounded-xl p-3 text-center cursor-pointer block transition-colors">
-                  <Upload size={20} className="mx-auto text-slate-400 mb-1" />
-                  <span className="text-xs text-slate-300 font-medium block">.dxf Dosyası Seçin</span>
+                <label className="border-2 border-dashed border-slate-300 hover:border-cyan-600 bg-slate-50 hover:bg-slate-100/80 rounded-xl p-3 text-center cursor-pointer block transition-colors shadow-sm">
+                  <Upload size={20} className="mx-auto text-slate-500 mb-1" />
+                  <span className="text-xs text-slate-800 font-bold block">.dxf Dosyası Seçin</span>
                   <span className="text-[10px] text-slate-500 block">CAD / GIS Harita Verisi</span>
                   <input type="file" accept=".dxf" onChange={handleFileUpload} className="hidden" />
                 </label>
@@ -441,7 +441,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                   <button
                     onClick={handleParseDXF}
                     disabled={isParsing}
-                    className="w-full py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-cyan-500/20"
+                    className="w-full py-2 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     {isParsing ? <RefreshCw size={13} className="animate-spin" /> : <Eye size={13} />}
                     <span>{isParsing ? 'Ayrıştırılıyor...' : 'DXF Ayrıştır'}</span>
@@ -449,7 +449,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                 )}
 
                 {uploadMessage && (
-                  <div className="text-[10px] p-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300">
+                  <div className="text-[10px] p-2 rounded-xl bg-slate-100 border border-slate-300 text-slate-700 font-medium">
                     {uploadMessage}
                   </div>
                 )}
@@ -459,32 +459,32 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
           {/* Card 2: Katman Yöneticisi */}
           {dxfData && (
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 flex flex-col flex-1 min-h-0 shadow-sm overflow-hidden">
+            <div className="bg-white border border-slate-300 rounded-2xl p-3 flex flex-col flex-1 min-h-0 shadow-sm overflow-hidden">
               <div className="flex items-center justify-between mb-2 shrink-0">
-                <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <Layers size={13} className="text-cyan-400" />
+                <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                  <Layers size={13} className="text-cyan-700" />
                   2. Kullanılacak Katmanlar
                 </h3>
-                <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full">
+                <span className="text-[10px] text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full font-semibold border border-slate-200">
                   {layers.length} Katman
                 </span>
               </div>
 
               <div className="flex-1 overflow-y-auto space-y-1 pr-1 min-h-0 custom-scrollbar">
                 {layers.map((l, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-1.5 rounded-xl bg-slate-800/50 border border-slate-750">
+                  <div key={idx} className="flex items-center justify-between p-1.5 rounded-xl bg-slate-50 border border-slate-200">
                     <div className="flex items-center gap-2 min-w-0 pr-2">
                       <span 
-                        className="w-2.5 h-2.5 rounded-full shrink-0 border border-white/20 shadow-sm" 
+                        className="w-2.5 h-2.5 rounded-full shrink-0 border border-slate-300 shadow-sm" 
                         style={{ backgroundColor: getAciColor(l.color) }}
                       />
-                      <span className="text-xs text-slate-200 truncate">{l.name}</span>
+                      <span className="text-xs text-slate-800 font-semibold truncate">{l.name}</span>
                     </div>
                     <button
                       onClick={() => toggleLayer(l.name)}
-                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${l.visible ? 'bg-cyan-500' : 'bg-slate-600'}`}
+                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${l.visible ? 'bg-cyan-600' : 'bg-slate-300'}`}
                     >
-                      <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all ${l.visible ? 'left-[18px]' : 'left-0.5'}`} />
+                      <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all shadow-sm ${l.visible ? 'left-[18px]' : 'left-0.5'}`} />
                     </button>
                   </div>
                 ))}
@@ -493,16 +493,16 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
           )}
 
           {/* Card 3: Kot (Z) Yükseklik Filtresi & İstatistikleri */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+          <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-                <Sliders size={13} className="text-cyan-400" />
+              <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <Sliders size={13} className="text-cyan-700" />
                 3. Kot (Z) Yükseklik Filtresi
               </label>
               {(minZFilter || maxZFilter) && (
                 <button
                   onClick={() => { setMinZFilter(''); setMaxZFilter(''); }}
-                  className="text-[10px] text-cyan-400 hover:underline font-mono"
+                  className="text-[10px] text-cyan-700 hover:underline font-mono font-bold"
                 >
                   Filtreyi Temizle
                 </button>
@@ -511,17 +511,17 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
             {/* Detected Stats Info Box */}
             {dxfData && detectedMinZ !== null && detectedMaxZ !== null && (
-              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2 space-y-1">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400">Aktif Katman Kotları:</span>
-                  <span className="font-mono font-bold text-cyan-300">
+                  <span className="text-slate-600 font-medium">Aktif Katman Kotları:</span>
+                  <span className="font-mono font-bold text-cyan-800">
                     {detectedMinZ.toFixed(1)}m — {detectedMaxZ.toFixed(1)}m
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-400">
-                  <span>Toplam Nokta: <strong className="text-slate-200">{totalDetectedPoints}</strong></span>
+                <div className="flex items-center justify-between text-[10px] text-slate-600">
+                  <span>Toplam Nokta: <strong className="text-slate-900">{totalDetectedPoints}</strong></span>
                   {zeroCount > 0 && (
-                    <span className="text-amber-400 font-medium">Kot 0 olan: {zeroCount} nokta</span>
+                    <span className="text-amber-700 font-bold">Kot 0 olan: {zeroCount} nokta</span>
                   )}
                 </div>
 
@@ -530,7 +530,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                     onClick={() => {
                       setMinZFilter(String(Math.floor(nonZeroMinZ)));
                     }}
-                    className="w-full mt-1 py-1 px-2 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all"
+                    className="w-full mt-1 py-1 px-2 bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all"
                   >
                     <span>⚡ Sıfır (0m) Kotları Filtrele (Min {Math.floor(nonZeroMinZ)}m Yap)</span>
                   </button>
@@ -541,7 +541,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
             {/* Min Z & Max Z Input Fields */}
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <label className="text-[10px] font-medium text-slate-400 block">Min Kot Z (m)</label>
+                <label className="text-[10px] font-semibold text-slate-600 block">Min Kot Z (m)</label>
                 <div className="relative">
                   <input
                     type="number"
@@ -549,12 +549,12 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                     placeholder={detectedMinZ !== null ? String(detectedMinZ.toFixed(1)) : 'Min'}
                     value={minZFilter}
                     onChange={(e) => setMinZFilter(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 text-xs text-white px-2 py-1.5 rounded-xl outline-none font-mono"
+                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 text-xs text-slate-900 px-2 py-1.5 rounded-xl outline-none font-mono shadow-sm"
                   />
                   {minZFilter && (
                     <button 
                       onClick={() => setMinZFilter('')} 
-                      className="absolute right-2 top-1.5 text-slate-500 hover:text-white text-xs"
+                      className="absolute right-2 top-1.5 text-slate-400 hover:text-slate-700 text-xs font-bold"
                     >
                       ×
                     </button>
@@ -563,7 +563,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-medium text-slate-400 block">Max Kot Z (m)</label>
+                <label className="text-[10px] font-semibold text-slate-600 block">Max Kot Z (m)</label>
                 <div className="relative">
                   <input
                     type="number"
@@ -571,12 +571,12 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                     placeholder={detectedMaxZ !== null ? String(detectedMaxZ.toFixed(1)) : 'Max'}
                     value={maxZFilter}
                     onChange={(e) => setMaxZFilter(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 text-xs text-white px-2 py-1.5 rounded-xl outline-none font-mono"
+                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 text-xs text-slate-900 px-2 py-1.5 rounded-xl outline-none font-mono shadow-sm"
                   />
                   {maxZFilter && (
                     <button 
                       onClick={() => setMaxZFilter('')} 
-                      className="absolute right-2 top-1.5 text-slate-500 hover:text-white text-xs"
+                      className="absolute right-2 top-1.5 text-slate-400 hover:text-slate-700 text-xs font-bold"
                     >
                       ×
                     </button>
@@ -587,9 +587,9 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
           </div>
 
           {/* Card 4: Çözünürlük (Cell Size) Seçici */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
-            <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-              <Grid size={13} className="text-cyan-400" />
+          <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+            <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+              <Grid size={13} className="text-cyan-700" />
               4. Grid Çözünürlüğü (Cell Size)
             </label>
 
@@ -600,15 +600,15 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                   onClick={() => setCellSize(cs.value)}
                   className={`p-2 rounded-xl border text-left transition-all ${
                     cellSize === cs.value
-                      ? 'bg-cyan-500/20 border-cyan-400 text-white shadow-sm'
-                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200'
+                      ? 'bg-cyan-100 border-cyan-500 text-cyan-900 font-bold shadow-sm'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                   }`}
                 >
                   <div className="text-xs font-bold flex items-center justify-between">
                     <span>{cs.value}m</span>
-                    {cellSize === cs.value && <div className="w-1.5 h-1.5 rounded-full bg-cyan-400" />}
+                    {cellSize === cs.value && <div className="w-1.5 h-1.5 rounded-full bg-cyan-700" />}
                   </div>
-                  <div className="text-[9px] text-slate-400 truncate mt-0.5">
+                  <div className="text-[9px] text-slate-500 truncate mt-0.5">
                     {cs.label.split('(')[1]?.replace(')', '') || ''}
                   </div>
                 </button>
@@ -617,14 +617,14 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
           </div>
 
           {/* Card 5: DEM Oluştur Butonu */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+          <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
             <button
               onClick={handleGenerateDEM}
               disabled={isGenerating || !dxfData || activeLayers.length === 0}
-              className={`w-full py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-lg ${
+              className={`w-full py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-sm ${
                 isGenerating || !dxfData || activeLayers.length === 0
-                  ? 'bg-slate-800 text-slate-500 border border-slate-750 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 shadow-cyan-500/25 border border-cyan-300 cursor-pointer'
+                  ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-cyan-700 via-blue-700 to-cyan-800 hover:from-cyan-800 hover:to-blue-800 text-white shadow-md border border-cyan-600 cursor-pointer'
               }`}
             >
               {isGenerating ? (
@@ -641,8 +641,8 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
             </button>
 
             {errorMsg && (
-              <div className="p-2 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-[11px] flex items-center gap-1.5">
-                <AlertTriangle size={14} className="shrink-0" />
+              <div className="p-2 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-[11px] font-semibold flex items-center gap-1.5">
+                <AlertTriangle size={14} className="shrink-0 text-rose-600" />
                 <span>{errorMsg}</span>
               </div>
             )}
@@ -651,18 +651,18 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
         </div>
 
         {/* RIGHT COLUMN: DEM Map Viewer & Results Panel (3/4 Layout = lg:col-span-9) */}
-        <div className={`lg:col-span-9 bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden flex flex-col relative shadow-inner h-full min-h-0 ${
+        <div className={`lg:col-span-9 bg-white border border-slate-300 rounded-2xl overflow-hidden flex flex-col relative shadow-sm h-full min-h-0 ${
           mobileTab === 'preview' ? 'flex' : 'hidden lg:flex'
         }`}>
           
           {/* Viewer Toolbar Header */}
-          <div className="px-3.5 py-2.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between z-10 shrink-0">
+          <div className="px-3.5 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between z-10 shrink-0 text-white">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
               <h3 className="text-xs font-bold text-white flex items-center gap-2">
                 Topoğrafik Yükseklik Haritası
                 {demResult && (
-                  <span className="text-[10px] bg-cyan-500/15 text-cyan-300 px-2 py-0.5 rounded-md font-mono border border-cyan-500/30">
+                  <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-md font-mono border border-cyan-500/30">
                     TIN Surface ({demResult.cols}x{demResult.rows})
                   </span>
                 )}
@@ -670,14 +670,14 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5">
-              <div className="bg-slate-900 px-2 py-1 rounded-lg border border-slate-750 text-[11px] font-mono text-cyan-400 flex items-center gap-1">
+              <div className="bg-slate-800 px-2 py-1 rounded-lg border border-slate-700 text-[11px] font-mono text-cyan-300 flex items-center gap-1">
                 <ZoomIn size={12} />
                 <span>{Math.round(zoom * 100)}%</span>
               </div>
               <button
                 onClick={resetView}
                 disabled={!demResult}
-                className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors"
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors cursor-pointer"
                 title="Görünümü Sıfırla"
               >
                 <RotateCcw size={13} />
@@ -711,9 +711,9 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                 </div>
 
                 {/* Color Elevation Legend Overlay Bar */}
-                <div className="absolute bottom-3 left-3 right-3 bg-slate-950/90 border border-slate-800 backdrop-blur-md rounded-xl p-2.5 shadow-xl space-y-1 max-w-lg mx-auto pointer-events-none">
+                <div className="absolute bottom-3 left-3 right-3 bg-slate-900/90 border border-slate-700 backdrop-blur-md rounded-xl p-2.5 shadow-xl space-y-1 max-w-lg mx-auto pointer-events-none">
                   <div className="h-2.5 rounded-full w-full bg-gradient-to-r from-[#10b981] via-[#a3e635] via-[#eab308] via-[#b45309] to-[#ffffff] border border-white/10" />
-                  <div className="flex justify-between text-[10px] text-slate-300 font-mono">
+                  <div className="flex justify-between text-[10px] text-slate-200 font-mono">
                     <span className="text-emerald-400 font-bold">{demResult.minZ.toFixed(1)} m (Düşük)</span>
                     <span className="text-amber-300">{(demResult.minZ + (demResult.maxZ - demResult.minZ) / 2).toFixed(1)} m</span>
                     <span className="text-white font-bold">{demResult.maxZ.toFixed(1)} m (Yüksek)</span>
@@ -721,13 +721,13 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-3 p-6 text-center">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
                 <div className="w-16 h-16 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center text-cyan-400 shadow-xl">
                   <Mountain size={32} />
                 </div>
                 <div className="space-y-1 max-w-sm">
-                  <p className="text-sm font-semibold text-slate-300">Sayısal Yükseklik Modeli Hazır</p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-sm font-semibold text-slate-200">Sayısal Yükseklik Modeli Hazır</p>
+                  <p className="text-xs text-slate-400">
                     Sol taraftaki panelden çözünürlüğü seçip &apos;Sayısal Yükseklik Modeli Üret&apos; butonuna basarak 3D arazi yüzeyinizi oluşturabilirsiniz.
                   </p>
                 </div>
@@ -737,47 +737,47 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
           {/* Bottom Results & Export Footer Bar */}
           {demResult && (
-            <div className="p-3 bg-slate-950/90 border-t border-slate-800 shrink-0 space-y-2.5">
+            <div className="p-3 bg-slate-50 border-t border-slate-300 shrink-0 space-y-2.5">
               
               {/* Statistic Badges */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-                <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-2">
-                  <p className="text-[9px] text-slate-400 font-medium">Minimum Kot (Z-Min)</p>
-                  <p className="text-xs font-bold text-emerald-400 font-mono mt-0.5">{demResult.minZ.toFixed(2)} m</p>
+                <div className="bg-white border border-slate-300 rounded-xl p-2 shadow-sm">
+                  <p className="text-[9px] text-slate-500 font-bold uppercase">Minimum Kot (Z-Min)</p>
+                  <p className="text-xs font-bold text-emerald-700 font-mono mt-0.5">{demResult.minZ.toFixed(2)} m</p>
                 </div>
 
-                <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-2">
-                  <p className="text-[9px] text-slate-400 font-medium">Maksimum Kot (Z-Max)</p>
-                  <p className="text-xs font-bold text-amber-400 font-mono mt-0.5">{demResult.maxZ.toFixed(2)} m</p>
+                <div className="bg-white border border-slate-300 rounded-xl p-2 shadow-sm">
+                  <p className="text-[9px] text-slate-500 font-bold uppercase">Maksimum Kot (Z-Max)</p>
+                  <p className="text-xs font-bold text-amber-700 font-mono mt-0.5">{demResult.maxZ.toFixed(2)} m</p>
                 </div>
 
-                <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-2">
-                  <p className="text-[9px] text-slate-400 font-medium">Ortalama Kot (Z-Ort)</p>
-                  <p className="text-xs font-bold text-cyan-400 font-mono mt-0.5">{demResult.meanZ.toFixed(2)} m</p>
+                <div className="bg-white border border-slate-300 rounded-xl p-2 shadow-sm">
+                  <p className="text-[9px] text-slate-500 font-bold uppercase">Ortalama Kot (Z-Ort)</p>
+                  <p className="text-xs font-bold text-cyan-700 font-mono mt-0.5">{demResult.meanZ.toFixed(2)} m</p>
                 </div>
 
-                <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-2">
-                  <p className="text-[9px] text-slate-400 font-medium">Matris Çözünürlüğü</p>
-                  <p className="text-xs font-bold text-slate-200 font-mono mt-0.5">{demResult.cols} x {demResult.rows}</p>
+                <div className="bg-white border border-slate-300 rounded-xl p-2 shadow-sm">
+                  <p className="text-[9px] text-slate-500 font-bold uppercase">Matris Çözünürlüğü</p>
+                  <p className="text-xs font-bold text-slate-800 font-mono mt-0.5">{demResult.cols} x {demResult.rows}</p>
                 </div>
 
-                <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-2">
-                  <p className="text-[9px] text-slate-400 font-medium">Nokta Sayısı</p>
-                  <p className="text-xs font-bold text-purple-400 font-mono mt-0.5">{demResult.pointCount}</p>
+                <div className="bg-white border border-slate-300 rounded-xl p-2 shadow-sm">
+                  <p className="text-[9px] text-slate-500 font-bold uppercase">Nokta Sayısı</p>
+                  <p className="text-xs font-bold text-purple-700 font-mono mt-0.5">{demResult.pointCount}</p>
                 </div>
 
-                <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-2">
-                  <p className="text-[9px] text-slate-400 font-medium">TIN Üçgen Sayısı</p>
-                  <p className="text-xs font-bold text-indigo-400 font-mono mt-0.5">{demResult.triangleCount}</p>
+                <div className="bg-white border border-slate-300 rounded-xl p-2 shadow-sm">
+                  <p className="text-[9px] text-slate-500 font-bold uppercase">TIN Üçgen Sayısı</p>
+                  <p className="text-xs font-bold text-indigo-700 font-mono mt-0.5">{demResult.triangleCount}</p>
                 </div>
               </div>
 
               {/* Export Buttons */}
-              <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-slate-850">
+              <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-slate-200">
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     onClick={() => exportDEMToASC(demResult, `DEM_${cellSize}m.asc`)}
-                    className="px-3 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
                   >
                     <FileText size={13} />
                     <span>ESRI ASCII (.asc) İndir</span>
@@ -785,7 +785,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
                   <button
                     onClick={() => exportDEMToCSV(demResult, `DEM_points_${cellSize}m.csv`)}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
                   >
                     <BarChart2 size={13} />
                     <span>CSV Noktaları</span>
@@ -793,7 +793,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
                   <button
                     onClick={downloadCanvasImage}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
                   >
                     <Eye size={13} />
                     <span>PNG Görseli</span>
@@ -822,7 +822,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                       }
                       onTransferToSimulation(demResult, lines.join('\n'));
                     }}
-                    className="px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-slate-950 font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-md shadow-blue-500/20 transition-all cursor-pointer"
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-blue-700 to-cyan-700 hover:from-blue-800 hover:to-cyan-800 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
                   >
                     <Droplets size={14} />
                     <span>Taşkın Simülasyonunda Kullan</span>

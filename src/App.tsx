@@ -16,6 +16,7 @@ import Analysis from './components/Analysis';
 import About from './components/About';
 import DXFAnalysis, { CADLayer } from './components/DXFAnalysis';
 import DEMGenerator from './components/DEMGenerator';
+import DynamicFlood from './components/DynamicFlood';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
 import Header from './components/Header';
@@ -115,7 +116,7 @@ const MANNING_PRESETS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood'>('dashboard');
   const [dxfSubTab, setDxfSubTab] = useState<'viewer' | 'converter'>('viewer');
   const [dxfData, setDxfData] = useState<any>(null);
   const [dxfLayers, setDxfLayers] = useState<CADLayer[]>([]);
@@ -603,10 +604,20 @@ export default function App() {
       const fromCRS = selectedCRS.def;
       const toCRS = '+proj=longlat +datum=WGS84 +no_defs';
       
-      const sw = proj4(fromCRS, toCRS, [dem.xll, dem.yll]);
-      const ne = proj4(fromCRS, toCRS, [dem.xll + dem.width * dem.cellSize, dem.yll + dem.height * dem.cellSize]);
+      const pSW = proj4(fromCRS, toCRS, [dem.xll, dem.yll]);
+      const pNW = proj4(fromCRS, toCRS, [dem.xll, dem.yll + dem.height * dem.cellSize]);
+      const pNE = proj4(fromCRS, toCRS, [dem.xll + dem.width * dem.cellSize, dem.yll + dem.height * dem.cellSize]);
+      const pSE = proj4(fromCRS, toCRS, [dem.xll + dem.width * dem.cellSize, dem.yll]);
       
-      return [[sw[1], sw[0]], [ne[1], ne[0]]] as [[number, number], [number, number]];
+      const lats = [pSW[1], pNW[1], pNE[1], pSE[1]];
+      const lons = [pSW[0], pNW[0], pNE[0], pSE[0]];
+
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons);
+      const maxLon = Math.max(...lons);
+
+      return [[minLat, minLon], [maxLat, maxLon]] as [[number, number], [number, number]];
     } catch (e) {
       // Fallback if proj4 fails
       return [[coords.lat, coords.lon], [coords.lat + 0.01, coords.lon + 0.01]] as [[number, number], [number, number]];
@@ -776,9 +787,30 @@ export default function App() {
       const width = image.getWidth();
       const height = image.getHeight();
       
-      const origin = image.getOrigin();
-      const res = image.getResolution();
-      const cellSize = res ? Math.abs(res[0]) : 10;
+      let xll = coords.lon;
+      let yll = coords.lat;
+      let cellSize = 10;
+
+      try {
+        const bbox = image.getBoundingBox();
+        if (bbox && bbox.length >= 4 && !isNaN(bbox[0]) && !isNaN(bbox[1])) {
+          xll = bbox[0];
+          yll = bbox[1];
+          cellSize = Math.abs((bbox[2] - bbox[0]) / width);
+        } else {
+          const origin = image.getOrigin();
+          const res = image.getResolution();
+          cellSize = res ? Math.abs(res[0]) : 10;
+          xll = origin ? origin[0] : coords.lon;
+          yll = origin ? origin[1] - (height * cellSize) : coords.lat;
+        }
+      } catch (e) {
+        const origin = image.getOrigin();
+        const res = image.getResolution();
+        cellSize = res ? Math.abs(res[0]) : 10;
+        xll = origin ? origin[0] : coords.lon;
+        yll = origin ? origin[1] - (height * cellSize) : coords.lat;
+      }
       
       const noDataVal = image.getGDALNoData() ?? -9999;
       let min = Infinity, max = -Infinity;
@@ -801,10 +833,6 @@ export default function App() {
         min = 0;
         max = 1;
       }
-
-      // Calculate lower-left corner for consistency
-      const xll = origin ? origin[0] : coords.lon;
-      const yll = origin ? origin[1] - (height * cellSize) : coords.lat;
 
       const slopeInfo = calculateSlope(floatData, width, height, cellSize, yll);
       
@@ -863,18 +891,21 @@ export default function App() {
     let dataStartLine = 0;
 
     for (let i = 0; i < 10; i++) {
+      if (!lines[i]) continue;
       const parts = lines[i].trim().split(/\s+/);
       const key = parts[0].toLowerCase();
       const val = parseFloat(parts[1]);
 
       if (key === 'ncols') width = val;
       else if (key === 'nrows') height = val;
-      else if (key === 'xllcorner') xll = val;
-      else if (key === 'yllcorner') yll = val;
       else if (key === 'cellsize') cellSize = val;
       else if (key === 'nodata_value') nodata = val;
+      else if (key === 'xllcorner') xll = val;
+      else if (key === 'yllcorner') yll = val;
+      else if (key === 'xllcenter') xll = val - (cellSize > 0 ? 0.5 * cellSize : 0);
+      else if (key === 'yllcenter') yll = val - (cellSize > 0 ? 0.5 * cellSize : 0);
       
-      if (!isNaN(val) && i > 0 && !['ncols', 'nrows', 'xllcorner', 'yllcorner', 'cellsize', 'nodata_value'].includes(key)) {
+      if (!isNaN(val) && i > 0 && !['ncols', 'nrows', 'xllcorner', 'yllcorner', 'xllcenter', 'yllcenter', 'cellsize', 'nodata_value'].includes(key)) {
         dataStartLine = i;
         break;
       }
@@ -1200,7 +1231,7 @@ export default function App() {
 
           // Find max width for this rectangle
           let width = 0;
-          while (x + width + 1 <= dem.width) {
+          while (x + width + 1 < dem.width) {
             const nextIdx = y * dem.width + (x + width + 1);
             if (visited[nextIdx] || !maskFn(nextIdx)) break;
             width += 1;
@@ -1209,7 +1240,7 @@ export default function App() {
           // Find max height for this rectangle
           let height = 0;
           let canExpandDown = true;
-          while (y + height + 1 <= dem.height && canExpandDown) {
+          while (y + height + 1 < dem.height && canExpandDown) {
             for (let wx = 0; wx <= width; wx++) {
               const downIdx = (y + height + 1) * dem.width + (x + wx);
               if (visited[downIdx] || !maskFn(downIdx)) {
@@ -1227,11 +1258,11 @@ export default function App() {
             }
           }
 
-          // Create coordinates (xmin, ymax, xmax, ymin)
-          const xmin = coords.lon + (x * coords.cellSize);
-          const xmax = coords.lon + ((x + width + 1) * coords.cellSize);
-          const ymax = coords.lat + ((dem.height - y) * coords.cellSize);
-          const ymin = ymax - ((height + 1) * coords.cellSize);
+          // Create exact projected coordinates (xmin, ymax, xmax, ymin) using DEM metadata
+          const xmin = dem.xll + (x * dem.cellSize);
+          const xmax = dem.xll + ((x + width + 1) * dem.cellSize);
+          const ymax = dem.yll + ((dem.height - y) * dem.cellSize);
+          const ymin = ymax - ((height + 1) * dem.cellSize);
 
           const p1 = transform(xmin, ymax);
           const p2 = transform(xmax, ymax);
@@ -1252,58 +1283,19 @@ export default function App() {
             </coordinates></LinearRing></outerBoundaryIs>
           </Polygon>`);
 
-    // Prepare Study Area Polygon for Turf
-    let studyAreaPoly: any = null;
-    if (areaKml && areaKml.coords.length > 2) {
-      const studyCoords = areaKml.coords.map(([lat, lon]) => [lon, lat]);
-      if (
-        studyCoords[0][0] !== studyCoords[studyCoords.length - 1][0] ||
-        studyCoords[0][1] !== studyCoords[studyCoords.length - 1][1]
-      ) {
-        studyCoords.push([studyCoords[0][0], studyCoords[0][1]]);
-      }
-      try {
-        studyAreaPoly = turf.polygon([studyCoords]);
-      } catch (err) {
-        console.error("Failed to construct studyAreaPoly:", err);
-      }
-    } else if (demBoundaryWgs && demBoundaryWgs.length > 0) {
-      try {
-        if (demBoundaryWgs.length === 1) {
-          studyAreaPoly = turf.polygon([demBoundaryWgs[0]]);
-        } else {
-          studyAreaPoly = turf.multiPolygon(demBoundaryWgs.map(loop => [loop]));
-        }
-      } catch (err) {
-        console.error("Failed to construct studyAreaPoly from demBoundaryWgs:", err);
-      }
-    }
-
-    // Generate Risk Area Polygons (with Turf dynamic vector geometric intersection clipping)
-    const riskPolygons: string[] = [];
-    if (studyAreaPoly) {
-      for (const r of floodRects) {
-        try {
-          const fPoly = turf.polygon([[
-            [r.p1[0], r.p1[1]],
-            [r.p2[0], r.p2[1]],
-            [r.p3[0], r.p3[1]],
-            [r.p4[0], r.p4[1]],
-            [r.p1[0], r.p1[1]]
-          ]]);
-
-          const intersected = safeIntersect(studyAreaPoly, fPoly);
-          if (intersected) {
-            const kmlStrList = geojsonToKmlPolygons(intersected.geometry);
-            riskPolygons.push(...kmlStrList);
-          }
-        } catch (e) {
-          console.error("Failed to intersect flood rectangle:", e);
-        }
-      }
+    // Generate Risk Area Polygons (Fast scanline grid mask intersection instead of 50k Turf vector calls)
+    let riskRects: FloodRect[] = [];
+    if (areaMask) {
+      riskRects = getMergedRectangles((idx) => waterDepth[idx] >= minDepth && areaMask[idx] === 1);
     } else {
-      riskPolygons.push(...floodPolygons);
+      riskRects = floodRects;
     }
+
+    const riskPolygons = riskRects.map(r => `          <Polygon>
+            <outerBoundaryIs><LinearRing><coordinates>
+              ${r.p1[0]},${r.p1[1]},0 ${r.p2[0]},${r.p2[1]},0 ${r.p3[0]},${r.p3[1]},0 ${r.p4[0]},${r.p4[1]},0 ${r.p1[0]},${r.p1[1]},0
+            </coordinates></LinearRing></outerBoundaryIs>
+          </Polygon>`);
 
     // 1. Çalışma Alanı Layer
     if (areaKml) {
@@ -1461,7 +1453,7 @@ ${floodPolygons.join('\n')}
   }
 
   return (
-    <div className="h-screen h-[100dvh] w-screen overflow-hidden flex flex-col bg-slate-950 text-slate-100 selection:bg-blue-500/30 selection:text-white">
+    <div className="h-screen h-[100dvh] w-screen overflow-hidden flex flex-col bg-slate-200 text-slate-800 selection:bg-blue-500/30 selection:text-slate-900">
       {/* Stats Modal */}
       <AnimatePresence>
         {showStats && stats && (
@@ -1471,15 +1463,15 @@ ${floodPolygons.join('\n')}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowStats(false)}
-              className="absolute inset-0 bg-slate-950/60 backdrop-blur-md"
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-md"
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-2xl glass rounded-[2.5rem] overflow-hidden border border-white/20 shadow-2xl"
+              className="relative w-full max-w-2xl bg-slate-100 rounded-[2.5rem] overflow-hidden border border-slate-300 shadow-2xl text-slate-800"
             >
-              <div className="bg-gradient-to-r from-blue-600 to-cyan-500 p-8 text-white">
+              <div className="bg-gradient-to-r from-blue-600 to-cyan-600 p-8 text-white">
                 <div className="flex justify-between items-start">
                   <div className="space-y-1">
                     <h3 className="text-2xl font-display font-bold">Simülasyon İstatistikleri</h3>
@@ -1496,20 +1488,20 @@ ${floodPolygons.join('\n')}
               
               <div className="p-8 grid grid-cols-2 gap-6">
                 {[
-                  { label: 'Taşkın Alanı', value: `${stats.totalArea.toLocaleString()} m²`, icon: <Layers className="text-blue-400" /> },
-                  { label: 'Maksimum Derinlik', value: `${stats.maxDepth.toFixed(2)} m`, icon: <Droplets className="text-cyan-400" /> },
-                  { label: 'Ortalama Derinlik', value: `${stats.avgDepth.toFixed(2)} m`, icon: <Droplets className="text-blue-300" /> },
-                  { label: 'Toplam Hacim', value: `${stats.totalVolume.toLocaleString()} m³`, icon: <Droplets className="text-blue-500" /> },
-                  { label: 'Etkilenen Hücre', value: stats.floodedCells.toLocaleString(), icon: <MapIcon className="text-slate-400" /> },
-                  { label: 'Su Seviyesi Artışı', value: `+${bathtubLevel.toFixed(1)} m`, icon: <Play className="text-cyan-400" /> }
+                  { label: 'Taşkın Alanı', value: `${stats.totalArea.toLocaleString()} m²`, icon: <Layers className="text-blue-600" /> },
+                  { label: 'Maksimum Derinlik', value: `${stats.maxDepth.toFixed(2)} m`, icon: <Droplets className="text-cyan-600" /> },
+                  { label: 'Ortalama Derinlik', value: `${stats.avgDepth.toFixed(2)} m`, icon: <Droplets className="text-blue-500" /> },
+                  { label: 'Toplam Hacim', value: `${stats.totalVolume.toLocaleString()} m³`, icon: <Droplets className="text-blue-700" /> },
+                  { label: 'Etkilenen Hücre', value: stats.floodedCells.toLocaleString(), icon: <MapIcon className="text-slate-600" /> },
+                  { label: 'Su Seviyesi Artışı', value: `+${bathtubLevel.toFixed(1)} m`, icon: <Play className="text-cyan-600" /> }
                 ].map((stat, idx) => (
-                  <div key={idx} className="bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center gap-4">
-                    <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center shadow-sm border border-white/10">
+                  <div key={idx} className="bg-white border border-slate-200 p-5 rounded-2xl flex items-center gap-4 shadow-sm">
+                    <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center shadow-inner border border-slate-200">
                       {stat.icon}
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{stat.label}</p>
-                      <p className="text-lg font-display font-bold text-white">{stat.value}</p>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{stat.label}</p>
+                      <p className="text-lg font-display font-bold text-slate-900">{stat.value}</p>
                     </div>
                   </div>
                 ))}
@@ -1517,33 +1509,33 @@ ${floodPolygons.join('\n')}
 
               {areaKml && (
                 <div className="px-8 pb-8">
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-6 rounded-3xl space-y-4">
-                    <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
+                  <div className="bg-emerald-50 border border-emerald-200 p-6 rounded-3xl space-y-4">
+                    <h3 className="text-sm font-bold text-emerald-700 flex items-center gap-2">
                       <Layers size={18} />
                       İnceleme Alanı Analizi ({areaKml.name})
                     </h3>
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="bg-white/5 p-4 rounded-2xl shadow-sm border border-white/10">
-                        <div className="text-[10px] text-emerald-400 uppercase mb-1 font-bold">Riskli Alan</div>
-                        <div className="text-lg font-display font-bold text-emerald-300">{stats.areaFloodedM2.toLocaleString()} m²</div>
+                      <div className="bg-white p-4 rounded-2xl shadow-sm border border-emerald-100">
+                        <div className="text-[10px] text-emerald-600 uppercase mb-1 font-bold">Riskli Alan</div>
+                        <div className="text-lg font-display font-bold text-emerald-800">{stats.areaFloodedM2.toLocaleString()} m²</div>
                       </div>
-                      <div className="bg-white/5 p-4 rounded-2xl shadow-sm border border-white/10">
-                        <div className="text-[10px] text-emerald-400 uppercase mb-1 font-bold">Risk Oranı</div>
-                        <div className="text-lg font-display font-bold text-emerald-300">%{stats.areaRiskPercent.toFixed(1)}</div>
+                      <div className="bg-white p-4 rounded-2xl shadow-sm border border-emerald-100">
+                        <div className="text-[10px] text-emerald-600 uppercase mb-1 font-bold">Risk Oranı</div>
+                        <div className="text-lg font-display font-bold text-emerald-800">%{stats.areaRiskPercent.toFixed(1)}</div>
                       </div>
-                      <div className="bg-white/5 p-4 rounded-2xl shadow-sm border border-white/10">
-                        <div className="text-[10px] text-emerald-400 uppercase mb-1 font-bold">Maks. Derinlik</div>
-                        <div className="text-lg font-display font-bold text-emerald-300">{stats.areaMaxDepth.toFixed(2)} m</div>
+                      <div className="bg-white p-4 rounded-2xl shadow-sm border border-emerald-100">
+                        <div className="text-[10px] text-emerald-600 uppercase mb-1 font-bold">Maks. Derinlik</div>
+                        <div className="text-lg font-display font-bold text-emerald-800">{stats.areaMaxDepth.toFixed(2)} m</div>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              <div className="p-8 bg-white/5 border-t border-white/10 flex justify-end">
+              <div className="p-8 bg-slate-200/80 border-t border-slate-300 flex justify-end">
                 <button 
                   onClick={() => setShowStats(false)}
-                  className="px-6 py-3 bg-blue-600 outline-none text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all"
+                  className="px-6 py-3 bg-blue-600 outline-none text-white rounded-xl text-sm font-bold shadow-md hover:bg-blue-700 transition-all"
                 >
                   Kapat
                 </button>
@@ -1580,6 +1572,7 @@ ${floodPolygons.join('\n')}
               onOpenSettings={() => setActiveTab('settings')}
               onOpenDXFAnalysis={() => setActiveTab('dxf-analysis')}
               onOpenDEMGenerator={() => setActiveTab('dem-generator')}
+              onOpenDynamicFlood={() => setActiveTab('dynamic-flood')}
               isSimulating={isSimulating}
               progress={progress}
             />
@@ -1642,6 +1635,9 @@ ${floodPolygons.join('\n')}
                 setCurrentStep(1);
               }}
             />
+          )}
+          {activeTab === 'dynamic-flood' && (
+            <DynamicFlood onBackToDashboard={() => setActiveTab('dashboard')} />
           )}
         </AnimatePresence>
       </main>

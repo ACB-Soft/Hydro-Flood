@@ -2,8 +2,8 @@ import React from 'react';
 import { ChevronLeft } from 'lucide-react';
 
 interface HeaderProps {
-  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator';
-  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator') => void;
+  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood';
+  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood') => void;
   currentStep: number;
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   isSimulating: boolean;
@@ -41,6 +41,8 @@ const Header: React.FC<HeaderProps> = ({
         return 'DXF Dosya Analizleri';
       case 'dem-generator':
         return 'Sayısal Yükseklik Modeli (DEM) Üretici';
+      case 'dynamic-flood':
+        return '2B Dinamik Hidrodinamik Taşkın Modeli';
       case 'analysis':
         if (currentStep === 5) {
           return 'Statik Simülasyon Sonucu';
@@ -52,35 +54,35 @@ const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="w-full shrink-0 z-50 glass border-b border-white/10 px-4 sm:px-6 py-4">
+    <header className="w-full shrink-0 z-50 bg-slate-200 border-b border-slate-300 shadow-sm px-4 sm:px-6 py-4 text-slate-900">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-3 sm:gap-4">
           {activeTab !== 'dashboard' && (
             <button
               onClick={handleBack}
-              className="p-2 hover:bg-white/10 rounded-xl transition-colors text-blue-400 border border-white/10"
+              className="p-2 bg-white hover:bg-slate-100 rounded-xl transition-colors text-slate-700 border border-slate-300 shadow-sm"
               title="Geri Dön"
             >
               <ChevronLeft size={20} />
             </button>
           )}
-          <h1 className="text-xl sm:text-2xl font-display font-bold text-white tracking-tight">
+          <h1 className="text-xl sm:text-2xl font-display font-bold text-slate-900 tracking-tight">
             {getPageTitle()}
           </h1>
 
           {isSimulating && (
-            <div className="hidden sm:flex items-center gap-3 bg-blue-500/10 px-4 py-2 rounded-xl border border-blue-500/20 animate-pulse ml-4">
-              <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
-              <span className="text-xs font-bold text-blue-400">Simülasyon Çalışıyor... %{Math.round(progress)}</span>
+            <div className="hidden sm:flex items-center gap-3 bg-blue-100 px-4 py-2 rounded-xl border border-blue-300 animate-pulse ml-4">
+              <div className="w-2 h-2 bg-blue-600 rounded-full animate-ping" />
+              <span className="text-xs font-bold text-blue-700">Simülasyon Çalışıyor... %{Math.round(progress)}</span>
             </div>
           )}
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
           {isSimulating && (
-            <div className="sm:hidden flex items-center gap-2 bg-blue-500/10 p-2 rounded-lg border border-blue-500/20">
-              <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping" />
-              <span className="text-[10px] font-bold text-blue-400">%{Math.round(progress)}</span>
+            <div className="sm:hidden flex items-center gap-2 bg-blue-100 p-2 rounded-lg border border-blue-300">
+              <div className="w-2 h-2 bg-blue-600 rounded-full animate-ping" />
+              <span className="text-[10px] font-bold text-blue-700">%{Math.round(progress)}</span>
             </div>
           )}
         </div>
