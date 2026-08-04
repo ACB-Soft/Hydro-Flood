@@ -240,12 +240,13 @@ export function getElevationColor(z: number, minZ: number, maxZ: number): { r: n
   const val = Math.max(0, Math.min(1, (z - minZ) / range));
 
   const stops = [
-    { pos: 0.0, color: [20, 120, 20] },   // Deep Green
-    { pos: 0.2, color: [80, 180, 80] },   // Light Green
-    { pos: 0.4, color: [230, 230, 120] }, // Yellow
-    { pos: 0.6, color: [200, 150, 80] },  // Warm Amber
-    { pos: 0.8, color: [140, 70, 30] },   // Saddle Brown
-    { pos: 1.0, color: [255, 255, 255] }  // Snow White
+    { pos: 0.00, color: [16, 124, 65] },   // Deep Valley / Basin Green
+    { pos: 0.15, color: [70, 175, 90] },   // Meadow Green
+    { pos: 0.35, color: [235, 215, 110] }, // Sunlit Lowland Gold
+    { pos: 0.55, color: [205, 125, 45] },  // Terracotta Hillside
+    { pos: 0.75, color: [140, 75, 35] },   // High Mountain Brown
+    { pos: 0.90, color: [160, 165, 175] }, // Alpine Slate Ridge
+    { pos: 1.00, color: [250, 250, 255] }  // Summit Snow White
   ];
 
   let r = 255, g_col = 255, b_col = 255;

@@ -326,23 +326,27 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
     <div className="h-full flex flex-col overflow-hidden space-y-2 sm:space-y-3">
       
       {/* Mobile Tab Switcher */}
-      <div className="lg:hidden flex items-center bg-white border border-slate-300 p-1 rounded-xl shrink-0 shadow-sm">
+      <div className="flex lg:hidden bg-slate-200 border border-slate-300 rounded-xl p-1 mb-2 shrink-0">
         <button
           onClick={() => setMobileTab('controls')}
-          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-            mobileTab === 'controls' ? 'bg-cyan-700 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            mobileTab === 'controls'
+              ? 'bg-cyan-700 text-white shadow-sm'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/50'
           }`}
         >
-          <Sliders size={14} />
-          <span>Ayarlar & Katmanlar</span>
+          <Sliders size={13} />
+          <span>Sol Panel (Ayarlar)</span>
         </button>
         <button
           onClick={() => setMobileTab('preview')}
-          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-            mobileTab === 'preview' ? 'bg-cyan-700 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            mobileTab === 'preview'
+              ? 'bg-cyan-700 text-white shadow-sm'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/50'
           }`}
         >
-          <Mountain size={14} />
+          <Eye size={13} />
           <span>DEM Haritası {demResult && '✓'}</span>
         </button>
       </div>
@@ -656,37 +660,46 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
         }`}>
           
           {/* Viewer Toolbar Header */}
-          <div className="px-3.5 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between z-10 shrink-0 text-white">
+          <div className="px-3 py-2 bg-slate-100 border-b border-slate-300 flex items-center justify-between z-10 shrink-0">
             <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-              <h3 className="text-xs font-bold text-white flex items-center gap-2">
-                Topoğrafik Yükseklik Haritası
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 animate-pulse" />
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                Topoğrafik Yükseklik Haritası (DEM)
                 {demResult && (
-                  <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-md font-mono border border-cyan-500/30">
+                  <span className="text-[10px] bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-md font-mono border border-cyan-300 font-bold">
                     TIN Surface ({demResult.cols}x{demResult.rows})
                   </span>
                 )}
               </h3>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <div className="bg-slate-800 px-2 py-1 rounded-lg border border-slate-700 text-[11px] font-mono text-cyan-300 flex items-center gap-1">
+            <div className="flex items-center gap-2">
+              {/* Quick Mobile Settings Button */}
+              <button
+                onClick={() => setMobileTab('controls')}
+                className="lg:hidden px-2.5 py-1 bg-cyan-100 hover:bg-cyan-200 text-cyan-800 border border-cyan-300 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
+              >
+                <Sliders size={12} />
+                <span>Paneli Aç</span>
+              </button>
+
+              <div className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-300 text-[11px] font-mono text-cyan-700 font-bold flex items-center gap-1">
                 <ZoomIn size={12} />
                 <span>{Math.round(zoom * 100)}%</span>
               </div>
               <button
                 onClick={resetView}
                 disabled={!demResult}
-                className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors cursor-pointer"
-                title="Görünümü Sıfırla"
+                className="p-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                title="Sıfırla"
               >
-                <RotateCcw size={13} />
+                <RotateCcw size={12} />
               </button>
             </div>
           </div>
 
           {/* Canvas Display Body */}
-          <div className="flex-1 relative w-full h-full min-h-0 bg-slate-950 flex items-center justify-center overflow-hidden">
+          <div className="flex-1 relative w-full h-full min-h-0 bg-slate-900 flex items-center justify-center overflow-hidden">
             
             {demResult ? (
               <div 
@@ -712,23 +725,31 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
                 {/* Color Elevation Legend Overlay Bar */}
                 <div className="absolute bottom-3 left-3 right-3 bg-slate-900/90 border border-slate-700 backdrop-blur-md rounded-xl p-2.5 shadow-xl space-y-1 max-w-lg mx-auto pointer-events-none">
-                  <div className="h-2.5 rounded-full w-full bg-gradient-to-r from-[#10b981] via-[#a3e635] via-[#eab308] via-[#b45309] to-[#ffffff] border border-white/10" />
+                  <div className="h-2.5 rounded-full w-full bg-gradient-to-r from-[#107c41] via-[#46af5a] via-[#ebd76e] via-[#cd7d2d] via-[#8c4b23] via-[#a0a5b0] to-[#fafaff] border border-white/10" />
                   <div className="flex justify-between text-[10px] text-slate-200 font-mono">
                     <span className="text-emerald-400 font-bold">{demResult.minZ.toFixed(1)} m (Düşük)</span>
                     <span className="text-amber-300">{(demResult.minZ + (demResult.maxZ - demResult.minZ) / 2).toFixed(1)} m</span>
-                    <span className="text-white font-bold">{demResult.maxZ.toFixed(1)} m (Yüksek)</span>
+                    <span className="text-slate-100 font-bold">{demResult.maxZ.toFixed(1)} m (Yüksek)</span>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
-                <div className="w-16 h-16 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center text-cyan-400 shadow-xl">
-                  <Mountain size={32} />
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 gap-3 p-6 text-center bg-slate-100">
+                <div className="w-14 h-14 rounded-2xl bg-white border border-slate-300 flex items-center justify-center text-slate-500 shadow-sm">
+                  <Mountain size={28} />
                 </div>
                 <div className="space-y-1 max-w-sm">
-                  <p className="text-sm font-semibold text-slate-200">Sayısal Yükseklik Modeli Hazır</p>
-                  <p className="text-xs text-slate-400">
-                    Sol taraftaki panelden çözünürlüğü seçip &apos;Sayısal Yükseklik Modeli Üret&apos; butonuna basarak 3D arazi yüzeyinizi oluşturabilirsiniz.
+                  <p className="text-sm font-semibold text-slate-900">DEM Harita Görüntüleyici Hazır</p>
+                  <p className="text-xs text-slate-600">
+                    {mobileTab === 'preview' ? (
+                      <>
+                        Üstteki <span className="text-cyan-700 font-bold">Paneli Aç</span> butonundan çözünürlüğü seçip DEM üretebilirsiniz.
+                      </>
+                    ) : (
+                      <>
+                        Sol taraftaki panelden çözünürlüğü seçip &apos;Sayısal Yükseklik Modeli Üret&apos; butonuna basarak haritanızı ekrana yükleyebilirsiniz.
+                      </>
+                    )}
                   </p>
                 </div>
               </div>

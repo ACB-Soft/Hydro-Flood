@@ -592,28 +592,32 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     <div className="w-full h-full flex flex-col min-h-0 overflow-hidden">
       
       {/* Mobile Tab Navigation (< lg screen width) */}
-      <div className="flex lg:hidden bg-slate-900 border border-slate-800 rounded-xl p-1 mb-2 shrink-0">
+      <div className="flex lg:hidden bg-slate-200 border border-slate-300 rounded-xl p-1 mb-2 shrink-0">
         <button
           onClick={() => setMobileTab('controls')}
-          className={`flex-1 py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all relative ${
-            mobileTab === 'controls' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all relative ${
+            mobileTab === 'controls'
+              ? 'bg-cyan-700 text-white shadow-sm'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/50'
           }`}
         >
           <Sliders size={13} />
           <span>Dosya & Katman Paneli</span>
           {pendingFile && !isParsed && (
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse absolute top-1 right-2" />
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse absolute top-1 right-2" />
           )}
           {isParsed && (
-            <span className="text-[9px] bg-slate-950 text-emerald-400 px-1.5 py-0.2 rounded-full font-mono">
+            <span className="text-[9px] bg-cyan-100 text-cyan-800 border border-cyan-300 px-1.5 py-0.5 rounded-full font-mono font-bold">
               {layers.length}
             </span>
           )}
         </button>
         <button
           onClick={() => setMobileTab('map')}
-          className={`flex-1 py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-            mobileTab === 'map' ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            mobileTab === 'map'
+              ? 'bg-cyan-700 text-white shadow-sm'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/50'
           }`}
         >
           <Eye size={13} />
