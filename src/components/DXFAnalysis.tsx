@@ -1,11 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders, Mountain } from 'lucide-react';
+import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon } from 'lucide-react';
 import DxfParser from 'dxf-parser';
+import proj4 from 'proj4';
+import { MapContainer, TileLayer, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 
 export interface CADLayer {
   name: string;
   color: number;
   visible: boolean;
+  lineWeight?: number;
 }
 
 interface DXFAnalysisProps {
@@ -104,12 +108,47 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 const CRS_LIST = [
-  { code: 'NONE', name: 'Seçilmedi (Varsayılan Yerel Koordinat)' },
-  { code: 'EPSG:5253', name: 'TUREF / TM27 (3°)' },
-  { code: 'EPSG:5254', name: 'TUREF / TM30 (3°)' },
-  { code: 'EPSG:5255', name: 'TUREF / TM33 (3°)' },
-  { code: 'EPSG:5256', name: 'TUREF / TM36 (3°)' },
+  { code: 'NONE', name: 'Seçilmedi (Yerel Koordinat)' },
+  { code: 'EPSG:4326', name: 'WGS 84 (Coğrafi - Global)', def: '+proj=longlat +datum=WGS84 +no_defs' },
+  { code: 'EPSG:3857', name: 'WGS 84 / Pseudo-Mercator (Web Mercator)', def: '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs' },
+  { code: 'EPSG:5253', name: 'TUREF / TM27 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=27 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5254', name: 'TUREF / TM30 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=30 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5255', name: 'TUREF / TM33 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=33 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5256', name: 'TUREF / TM36 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=36 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5257', name: 'TUREF / TM39 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=39 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5258', name: 'TUREF / TM42 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=42 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5259', name: 'TUREF / TM45 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=45 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:32635', name: 'WGS 84 / UTM Zone 35N (6°)', def: '+proj=utm +zone=35 +datum=WGS84 +units=m +no_defs' },
+  { code: 'EPSG:32636', name: 'WGS 84 / UTM Zone 36N (6°)', def: '+proj=utm +zone=36 +datum=WGS84 +units=m +no_defs' },
+  { code: 'EPSG:32637', name: 'WGS 84 / UTM Zone 37N (6°)', def: '+proj=utm +zone=37 +datum=WGS84 +units=m +no_defs' },
+  { code: 'EPSG:32638', name: 'WGS 84 / UTM Zone 38N (6°)', def: '+proj=utm +zone=38 +datum=WGS84 +units=m +no_defs' },
+  { code: 'EPSG:5220', name: 'ED50 / TM27 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=27 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5221', name: 'ED50 / TM30 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=30 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5222', name: 'ED50 / TM33 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=33 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5223', name: 'ED50 / TM36 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=36 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5224', name: 'ED50 / TM39 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=39 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5225', name: 'ED50 / TM42 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=42 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5226', name: 'ED50 / TM45 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=45 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:23035', name: 'ED50 / UTM Zone 35N (6°)', def: '+proj=utm +zone=35 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:23036', name: 'ED50 / UTM Zone 36N (6°)', def: '+proj=utm +zone=36 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:23037', name: 'ED50 / UTM Zone 37N (6°)', def: '+proj=utm +zone=37 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:23038', name: 'ED50 / UTM Zone 38N (6°)', def: '+proj=utm +zone=38 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
 ];
+
+const BASEMAP_URLS: Record<string, string> = {
+  hybrid: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+  satellite: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+  esri: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  street: 'https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png'
+};
+
+function LeafletCenterUpdater({ center, zoom }: { center: [number, number]; zoom: number }) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, zoom, { animate: false });
+  }, [center, zoom, map]);
+  return null;
+}
 
 const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
   dxfData: propsDxfData,
@@ -159,12 +198,15 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
 
   // Mobile Tab State: 'controls' (default so user uploads/parses file first) or 'map'
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
+  const [basemap, setBasemap] = useState<'none' | 'hybrid' | 'satellite' | 'esri' | 'street'>('none');
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+  const [mapCenter, setMapCenter] = useState<[number, number]>([39.9208, 32.8541]);
+  const [mapZoom, setMapZoom] = useState<number>(15);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -251,9 +293,13 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     // Clear canvas
     ctx.clearRect(0, 0, width, height);
 
-    // Dark theme background
-    ctx.fillStyle = '#0b1329';
-    ctx.fillRect(0, 0, width, height);
+    if (basemap === 'none') {
+      ctx.fillStyle = '#0b1329';
+      ctx.fillRect(0, 0, width, height);
+    } else {
+      ctx.fillStyle = 'rgba(11, 19, 41, 0.25)';
+      ctx.fillRect(0, 0, width, height);
+    }
 
     // Calculate extents
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -304,6 +350,27 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     const centerY = height / 2 + pan.y;
 
     const fitScale = Math.min((width * 0.85) / spanX, (height * 0.85) / spanY) || 1;
+
+    // Project world center for Satellite Basemap synchronization
+    const worldMidX = midX - (pan.x / (fitScale * zoom));
+    const worldMidY = midY + (pan.y / (fitScale * zoom));
+
+    if (crs !== 'NONE') {
+      const crsItem = CRS_LIST.find(c => c.code === crs);
+      if (crsItem?.def) {
+        try {
+          const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [worldMidX, worldMidY]);
+          if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            setMapCenter([lat, lon]);
+            setMapZoom(Math.max(2, Math.min(19, Math.round(15 + Math.log2(zoom)))));
+          }
+        } catch (e) {
+          // proj4 fallback
+        }
+      }
+    } else if (worldMidX >= 25 && worldMidX <= 45 && worldMidY >= 35 && worldMidY <= 42) {
+      setMapCenter([worldMidY, worldMidX]);
+    }
 
     ctx.save();
     ctx.translate(centerX, centerY);
@@ -600,7 +667,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             </div>
             <select
               value={crs}
-              onChange={(e) => setCrs(e.target.value)}
+              onChange={(e) => updateCrs(e.target.value)}
               className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
             >
               {CRS_LIST.map((c) => (
@@ -716,6 +783,22 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              {/* Satellite Basemap Selector */}
+              <div className="flex items-center gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-750">
+                <Globe size={13} className="text-cyan-400" />
+                <select
+                  value={basemap}
+                  onChange={(e) => setBasemap(e.target.value as any)}
+                  className="bg-transparent text-xs text-slate-200 font-medium outline-none cursor-pointer"
+                >
+                  <option value="none" className="bg-slate-900 text-white">Uydu Altlığı: Kapalı (Koyu Tuval)</option>
+                  <option value="hybrid" className="bg-slate-900 text-white">Uydu Hibrit (Google)</option>
+                  <option value="satellite" className="bg-slate-900 text-white">Uydu Saf (Google)</option>
+                  <option value="esri" className="bg-slate-900 text-white">Esri World Imagery</option>
+                  <option value="street" className="bg-slate-900 text-white">Sokak Haritası (OSM)</option>
+                </select>
+              </div>
+
               {isParsed && (
                 <button
                   onClick={() => onNavigateToDEMGenerator?.()}
@@ -752,6 +835,30 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
 
           {/* Canvas Container */}
           <div className="flex-1 relative w-full h-full min-h-0">
+            {/* Satellite Basemap Background Layer */}
+            {isParsed && basemap !== 'none' && mapCenter && (
+              <div className="absolute inset-0 z-0 opacity-90 overflow-hidden pointer-events-none">
+                <MapContainer
+                  center={mapCenter}
+                  zoom={mapZoom}
+                  zoomControl={false}
+                  attributionControl={false}
+                  dragging={false}
+                  scrollWheelZoom={false}
+                  className="w-full h-full"
+                >
+                  <TileLayer url={BASEMAP_URLS[basemap] || BASEMAP_URLS.hybrid} />
+                  <LeafletCenterUpdater center={mapCenter} zoom={mapZoom} />
+                </MapContainer>
+              </div>
+            )}
+
+            {isParsed && basemap !== 'none' && crs === 'NONE' && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-amber-500/90 text-slate-950 px-3 py-1 rounded-full font-bold text-[11px] shadow-lg flex items-center gap-1.5 pointer-events-none">
+                <span>💡 Uydu altlığının çiziminizle birebir eşleşmesi için sol panelden Koordinat Sistemini (CRS) seçiniz.</span>
+              </div>
+            )}
+
             <canvas
               ref={canvasRef}
               onMouseDown={handleMouseDown}
@@ -762,7 +869,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
               onWheel={handleWheel}
-              className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing touch-none"
+              className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing touch-none z-10"
               style={{ display: isParsed ? 'block' : 'none' }}
             />
 

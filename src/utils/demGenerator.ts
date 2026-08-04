@@ -229,63 +229,47 @@ export function generateTINDEM(pointsInput: DEMPoint[], cellSize: number): DEMRe
 }
 
 /**
- * Color mapper for terrain heightmaps (Hypsometric Terrain Palette)
+ * Color mapper for terrain heightmaps with Hypsometric Relief Gradient
  */
 export function getElevationColor(z: number, minZ: number, maxZ: number): { r: number; g: number; b: number } {
   if (isNaN(z)) {
-    return { r: 15, g: 23, b: 42 }; // Dark background for no-data
+    return { r: 15, g: 23, b: 42 };
   }
 
-  const range = maxZ - minZ;
-  const t = range <= 0 ? 0.5 : Math.max(0, Math.min(1, (z - minZ) / range));
+  const range = Math.max(0.001, maxZ - minZ);
+  const val = Math.max(0, Math.min(1, (z - minZ) / range));
 
-  // Hypsometric tint stops: Deep Blue -> Emerald -> Yellow/Green -> Yellow -> Brown -> White
-  if (t < 0.2) {
-    const factor = t / 0.2;
-    return {
-      r: Math.round(16 + factor * (34 - 16)),
-      g: Math.round(185 + factor * (197 - 185)),
-      b: Math.round(129 + factor * (94 - 129))
-    }; // Deep Green/Emerald
-  } else if (t < 0.4) {
-    const factor = (t - 0.2) / 0.2;
-    return {
-      r: Math.round(34 + factor * (163 - 34)),
-      g: Math.round(197 + factor * (230 - 197)),
-      b: Math.round(94 + factor * (53 - 94))
-    }; // Greenish-Yellow
-  } else if (t < 0.65) {
-    const factor = (t - 0.4) / 0.25;
-    return {
-      r: Math.round(163 + factor * (234 - 163)),
-      g: Math.round(230 + factor * (179 - 230)),
-      b: Math.round(53 + factor * (8 - 53))
-    }; // Yellow to Warm Amber
-  } else if (t < 0.85) {
-    const factor = (t - 0.65) / 0.2;
-    return {
-      r: Math.round(234 + factor * (180 - 234)),
-      g: Math.round(179 + factor * (83 - 179)),
-      b: Math.round(8 + factor * (9 - 8))
-    }; // Amber to Saddle Brown
-  } else {
-    const factor = (t - 0.85) / 0.15;
-    return {
-      r: Math.round(180 + factor * (255 - 180)),
-      g: Math.round(83 + factor * (255 - 83)),
-      b: Math.round(9 + factor * (255 - 9))
-    }; // Brown to Snow White
+  const stops = [
+    { pos: 0.0, color: [20, 120, 20] },   // Deep Green
+    { pos: 0.2, color: [80, 180, 80] },   // Light Green
+    { pos: 0.4, color: [230, 230, 120] }, // Yellow
+    { pos: 0.6, color: [200, 150, 80] },  // Warm Amber
+    { pos: 0.8, color: [140, 70, 30] },   // Saddle Brown
+    { pos: 1.0, color: [255, 255, 255] }  // Snow White
+  ];
+
+  let r = 255, g_col = 255, b_col = 255;
+  for (let s = 0; s < stops.length - 1; s++) {
+    const s1 = stops[s];
+    const s2 = stops[s + 1];
+    if (val >= s1.pos && val <= s2.pos) {
+      const f = (val - s1.pos) / (s2.pos - s1.pos);
+      r = s1.color[0] + (s2.color[0] - s1.color[0]) * f;
+      g_col = s1.color[1] + (s2.color[1] - s1.color[1]) * f;
+      b_col = s1.color[2] + (s2.color[2] - s1.color[2]) * f;
+      break;
+    }
   }
+
+  return { r, g: g_col, b: b_col };
 }
 
 /**
- * Renders DEM Grid onto HTML Canvas
+ * Renders DEM Grid onto HTML Canvas with Horn's 3x3 Hillshade & Hypsometric Tinting
  */
 export function renderDEMToCanvas(
   canvas: HTMLCanvasElement,
-  dem: DEMResult,
-  showContours = true,
-  contourInterval = 5
+  dem: DEMResult
 ) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -299,36 +283,71 @@ export function renderDEMToCanvas(
   const imgData = ctx.createImageData(width, height);
   const data = imgData.data;
 
+  // Hillshade Sun parameters (Azimuth: 315 deg NW, Altitude/Zenith: 45 deg)
+  const zenith_rad = (90 - 45) * Math.PI / 180;
+  const azimuth_rad = (360 - 315 + 90) * Math.PI / 180;
+  const zFactor = 1.0;
+  const cellSize = dem.cellSize;
+
   // Render row-by-row (y inverted for standard map orientation)
   for (let r = 0; r < height; r++) {
     const mapR = height - 1 - r; // Canvas top is Y=0, map Y goes upwards
     for (let c = 0; c < width; c++) {
       const idx = (r * width + c) * 4;
-      const z = dem.grid[mapR * width + c];
+      const cellVal = dem.grid[mapR * width + c];
 
-      if (isNaN(z)) {
+      if (isNaN(cellVal)) {
         data[idx] = 15;
         data[idx + 1] = 23;
         data[idx + 2] = 42;
         data[idx + 3] = 0; // Transparent no-data
-      } else {
-        const { r: cr, g: cg, b: cb } = getElevationColor(z, dem.minZ, dem.maxZ);
-        data[idx] = cr;
-        data[idx + 1] = cg;
-        data[idx + 2] = cb;
-        data[idx + 3] = 255;
-
-        // Contour lines overlay
-        if (showContours && contourInterval > 0) {
-          const mod = Math.abs(z % contourInterval);
-          if (mod < (dem.maxZ - dem.minZ) / 200 || mod > contourInterval - ((dem.maxZ - dem.minZ) / 200)) {
-            data[idx] = 0;
-            data[idx + 1] = 0;
-            data[idx + 2] = 0;
-            data[idx + 3] = 180;
-          }
-        }
+        continue;
       }
+
+      // 1. Calculate Hillshade using Horn's 3x3 neighborhood algorithm
+      let hillshade = 1.0;
+      if (c > 0 && c < width - 1 && mapR > 0 && mapR < height - 1) {
+        const getSafe = (row: number, col: number) => {
+          const v = dem.grid[row * width + col];
+          return (!isNaN(v)) ? v : cellVal;
+        };
+
+        const a = getSafe(mapR - 1, c - 1);
+        const b = getSafe(mapR - 1, c);
+        const ch = getSafe(mapR - 1, c + 1);
+        const d_val = getSafe(mapR, c - 1);
+        const f = getSafe(mapR, c + 1);
+        const g = getSafe(mapR + 1, c - 1);
+        const h = getSafe(mapR + 1, c);
+        const k = getSafe(mapR + 1, c + 1);
+
+        const dz_dx = ((ch + 2 * f + k) - (a + 2 * d_val + g)) / (8 * cellSize);
+        const dz_dy = ((g + 2 * h + k) - (a + 2 * b + ch)) / (8 * cellSize);
+
+        const slope_rad = Math.atan(zFactor * Math.sqrt(dz_dx * dz_dx + dz_dy * dz_dy));
+        let aspect_rad = 0;
+        if (dz_dx !== 0) {
+          aspect_rad = Math.atan2(dz_dy, -dz_dx);
+          if (aspect_rad < 0) aspect_rad += 2 * Math.PI;
+        } else {
+          if (dz_dy > 0) aspect_rad = Math.PI / 2;
+          else if (dz_dy < 0) aspect_rad = 2 * Math.PI - Math.PI / 2;
+          else aspect_rad = 0;
+        }
+
+        hillshade = Math.max(0, Math.cos(zenith_rad) * Math.cos(slope_rad) +
+                    Math.sin(zenith_rad) * Math.sin(slope_rad) * Math.cos(azimuth_rad - aspect_rad));
+      }
+
+      // 2. Hypsometric Elevation Color
+      const { r: cr, g: cg, b: cb } = getElevationColor(cellVal, dem.minZ, dem.maxZ);
+
+      // 3. Blend Hypsometric Tint with Hillshade Light Intensity
+      const factor = 0.6 + (hillshade * 0.5);
+      data[idx] = Math.min(255, cr * factor);
+      data[idx + 1] = Math.min(255, cg * factor);
+      data[idx + 2] = Math.min(255, cb * factor);
+      data[idx + 3] = 255;
     }
   }
 

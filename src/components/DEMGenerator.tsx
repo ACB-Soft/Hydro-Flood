@@ -44,10 +44,40 @@ const CELL_SIZES = [
 
 const CRS_LIST = [
   { code: 'NONE', name: 'Seçilmedi (Yerel Koordinat)' },
-  { code: 'EPSG:5253', name: 'TUREF / TM27 (3°)' },
-  { code: 'EPSG:5254', name: 'TUREF / TM30 (3°)' },
-  { code: 'EPSG:5255', name: 'TUREF / TM33 (3°)' },
-  { code: 'EPSG:5256', name: 'TUREF / TM36 (3°)' },
+
+  // Global & Web Standard Systems
+  { code: 'EPSG:4326', name: 'WGS 84 (Coğrafi - Global)', def: '+proj=longlat +datum=WGS84 +no_defs' },
+  { code: 'EPSG:3857', name: 'WGS 84 / Pseudo-Mercator (Web Mercator)', def: '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs' },
+  
+  // Turkey TUREF / TM (3-Degree)
+  { code: 'EPSG:5253', name: 'TUREF / TM27 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=27 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5254', name: 'TUREF / TM30 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=30 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5255', name: 'TUREF / TM33 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=33 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5256', name: 'TUREF / TM36 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=36 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5257', name: 'TUREF / TM39 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=39 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5258', name: 'TUREF / TM42 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=42 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+  { code: 'EPSG:5259', name: 'TUREF / TM45 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=45 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs' },
+
+  // WGS 84 / UTM Northern Hemisphere (6-Degree)
+  { code: 'EPSG:32635', name: 'WGS 84 / UTM Zone 35N (6°)', def: '+proj=utm +zone=35 +datum=WGS84 +units=m +no_defs' },
+  { code: 'EPSG:32636', name: 'WGS 84 / UTM Zone 36N (6°)', def: '+proj=utm +zone=36 +datum=WGS84 +units=m +no_defs' },
+  { code: 'EPSG:32637', name: 'WGS 84 / UTM Zone 37N (6°)', def: '+proj=utm +zone=37 +datum=WGS84 +units=m +no_defs' },
+  { code: 'EPSG:32638', name: 'WGS 84 / UTM Zone 38N (6°)', def: '+proj=utm +zone=38 +datum=WGS84 +units=m +no_defs' },
+
+  // ED50 (European Datum 1950) 3-Degree (TM)
+  { code: 'EPSG:5220', name: 'ED50 / TM27 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=27 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5221', name: 'ED50 / TM30 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=30 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5222', name: 'ED50 / TM33 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=33 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5223', name: 'ED50 / TM36 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=36 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5224', name: 'ED50 / TM39 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=39 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5225', name: 'ED50 / TM42 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=42 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:5226', name: 'ED50 / TM45 (3°)', def: '+proj=tmerc +lat_0=0 +lon_0=45 +k=1 +x_0=500000 +y_0=0 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+
+  // ED50 (European Datum 1950) 6-Degree (UTM)
+  { code: 'EPSG:23035', name: 'ED50 / UTM Zone 35N (6°)', def: '+proj=utm +zone=35 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:23036', name: 'ED50 / UTM Zone 36N (6°)', def: '+proj=utm +zone=36 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:23037', name: 'ED50 / UTM Zone 37N (6°)', def: '+proj=utm +zone=37 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
+  { code: 'EPSG:23038', name: 'ED50 / UTM Zone 38N (6°)', def: '+proj=utm +zone=38 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs' },
 ];
 
 const getAciColor = (colorNum?: any, defaultColor = '#38bdf8'): string => {
@@ -87,8 +117,6 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
   const [cellSize, setCellSize] = useState<number>(2.0);
-  const [showContours, setShowContours] = useState<boolean>(true);
-  const [contourInterval, setContourInterval] = useState<number>(5);
 
   const [minZFilter, setMinZFilter] = useState<string>('');
   const [maxZFilter, setMaxZFilter] = useState<string>('');
@@ -155,12 +183,12 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
     setNonZeroMinZ(posMinZ === Infinity ? null : posMinZ);
   }, [dxfData, layers]);
 
-  // Render canvas whenever DEM result or contour settings change
+  // Render canvas whenever DEM result changes
   useEffect(() => {
     if (demResult && demCanvasRef.current) {
-      renderDEMToCanvas(demCanvasRef.current, demResult, showContours, contourInterval);
+      renderDEMToCanvas(demCanvasRef.current, demResult);
     }
-  }, [demResult, showContours, contourInterval]);
+  }, [demResult]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -248,13 +276,6 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
       const result = generateTINDEM(points, cellSize);
       setDemResult(result);
-
-      // Auto contour interval calculation
-      const range = result.maxZ - result.minZ;
-      if (range > 100) setContourInterval(20);
-      else if (range > 50) setContourInterval(10);
-      else if (range > 10) setContourInterval(5);
-      else setContourInterval(1);
 
       // Automatically switch to preview tab on mobile
       setMobileTab('preview');
@@ -349,16 +370,60 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
             </div>
 
             {dxfData ? (
-              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 space-y-1.5">
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 space-y-2">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">Dosya:</span>
                   <span className="text-white font-mono font-bold truncate max-w-[150px]">{dxfFileName || 'CAD_Map.dxf'}</span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">Projeksiyon:</span>
-                  <span className="text-cyan-400 font-mono font-bold">{crs}</span>
+
+                {/* CRS Selection Dropdown */}
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 font-medium block">Koordinat Sistemi (CRS):</label>
+                  <select
+                    value={crs || 'NONE'}
+                    onChange={(e) => setCrs(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-750 focus:border-cyan-500 rounded-xl px-2 py-1.5 text-xs font-semibold text-cyan-300 outline-none cursor-pointer transition-all"
+                  >
+                    <option value="NONE" className="bg-slate-900 text-white">Seçilmedi (Yerel Koordinat)</option>
+                    <optgroup label="TUREF / TM (3° - Türkiye)">
+                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(item => (
+                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                          {item.code} - {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="ED50 / TM (3° - Türkiye)">
+                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(item => (
+                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                          {item.code} - {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
+                      {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(item => (
+                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                          {item.code} - {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
+                      {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(item => (
+                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                          {item.code} - {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Global & Standartlar">
+                      {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(item => (
+                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                          {item.code} - {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-900">
                   <span className="text-slate-400">Aktif Katman:</span>
                   <span className="text-emerald-400 font-bold">{activeLayers.length} / {layers.length}</span>
                 </div>
@@ -604,49 +669,19 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
               </h3>
             </div>
 
-            <div className="flex items-center gap-3">
-              {demResult && (
-                <div className="flex items-center gap-2.5 border-r border-slate-800 pr-3">
-                  <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none">
-                    <input 
-                      type="checkbox" 
-                      checked={showContours} 
-                      onChange={(e) => setShowContours(e.target.checked)}
-                      className="rounded border-slate-700 text-cyan-500 focus:ring-0"
-                    />
-                    <span>İzohips Eğrileri</span>
-                  </label>
-
-                  {showContours && (
-                    <select
-                      value={contourInterval}
-                      onChange={(e) => setContourInterval(Number(e.target.value))}
-                      className="bg-slate-900 border border-slate-700 text-[11px] text-white px-2 py-0.5 rounded-lg focus:outline-none focus:border-cyan-500"
-                    >
-                      <option value={1}>1m Aralık</option>
-                      <option value={2}>2m Aralık</option>
-                      <option value={5}>5m Aralık</option>
-                      <option value={10}>10m Aralık</option>
-                      <option value={25}>25m Aralık</option>
-                    </select>
-                  )}
-                </div>
-              )}
-
-              <div className="flex items-center gap-1.5">
-                <div className="bg-slate-900 px-2 py-1 rounded-lg border border-slate-750 text-[11px] font-mono text-cyan-400 flex items-center gap-1">
-                  <ZoomIn size={12} />
-                  <span>{Math.round(zoom * 100)}%</span>
-                </div>
-                <button
-                  onClick={resetView}
-                  disabled={!demResult}
-                  className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors"
-                  title="Görünümü Sıfırla"
-                >
-                  <RotateCcw size={13} />
-                </button>
+            <div className="flex items-center gap-1.5">
+              <div className="bg-slate-900 px-2 py-1 rounded-lg border border-slate-750 text-[11px] font-mono text-cyan-400 flex items-center gap-1">
+                <ZoomIn size={12} />
+                <span>{Math.round(zoom * 100)}%</span>
               </div>
+              <button
+                onClick={resetView}
+                disabled={!demResult}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 rounded-lg transition-colors"
+                title="Görünümü Sıfırla"
+              >
+                <RotateCcw size={13} />
+              </button>
             </div>
           </div>
 
