@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon, Sun, Moon } from 'lucide-react';
+import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, ZoomOut, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon, Sun, Moon } from 'lucide-react';
 import DxfParser from 'dxf-parser';
 import proj4 from 'proj4';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
@@ -220,6 +220,9 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+  const touchStartDistRef = useRef<number | null>(null);
+  const touchStartZoomRef = useRef<number>(1);
+  const touchStartPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [mapCenter, setMapCenter] = useState<[number, number]>([39.9208, 32.8541]);
   const [mapZoom, setMapZoom] = useState<number>(15);
 
@@ -574,11 +577,21 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     setIsPanning(false);
   };
 
-  // Touch pan handlers for mobile
+  // Touch pan & pinch zoom handlers
   const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
     if (e.touches.length === 1) {
       setIsPanning(true);
       setStartPan({ x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y });
+      touchStartDistRef.current = null;
+    } else if (e.touches.length === 2) {
+      setIsPanning(false);
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      touchStartDistRef.current = dist;
+      touchStartZoomRef.current = zoom;
+      touchStartPanRef.current = { ...pan };
     }
   };
 
@@ -588,21 +601,96 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         x: e.touches[0].clientX - startPan.x,
         y: e.touches[0].clientY - startPan.y
       });
+    } else if (e.touches.length === 2 && touchStartDistRef.current && canvasRef.current) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      if (dist > 0) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const touchCenterX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        const touchCenterY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+
+        const zoomRatio = dist / touchStartDistRef.current;
+        const newZoom = Math.max(0.05, Math.min(100, touchStartZoomRef.current * zoomRatio));
+        const oldZoom = zoom;
+
+        if (newZoom !== oldZoom && oldZoom > 0) {
+          const scaleRatio = newZoom / oldZoom;
+          const width = rect.width;
+          const height = rect.height;
+
+          const newPanX = (touchCenterX - width / 2) - scaleRatio * (touchCenterX - width / 2 - pan.x);
+          const newPanY = (touchCenterY - height / 2) - scaleRatio * (touchCenterY - height / 2 - pan.y);
+
+          setZoom(newZoom);
+          setPan({ x: newPanX, y: newPanY });
+        }
+      }
     }
   };
 
   const handleTouchEnd = () => {
     setIsPanning(false);
+    touchStartDistRef.current = null;
   };
 
+  // Zoom towards cursor location
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    const zoomFactor = 1.1;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const zoomFactor = 1.15;
+    const oldZoom = zoom;
+    let newZoom = oldZoom;
+
     if (e.deltaY < 0) {
-      setZoom((prev) => Math.min(prev * zoomFactor, 50));
+      newZoom = Math.min(oldZoom * zoomFactor, 100);
     } else {
-      setZoom((prev) => Math.max(prev / zoomFactor, 0.1));
+      newZoom = Math.max(oldZoom / zoomFactor, 0.05);
     }
+
+    if (newZoom === oldZoom) return;
+
+    const scaleRatio = newZoom / oldZoom;
+    const width = rect.width;
+    const height = rect.height;
+
+    // Keep point under cursor fixed during zoom
+    const newPanX = (mouseX - width / 2) - scaleRatio * (mouseX - width / 2 - pan.x);
+    const newPanY = (mouseY - height / 2) - scaleRatio * (mouseY - height / 2 - pan.y);
+
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
+  };
+
+  const zoomIn = () => {
+    const oldZoom = zoom;
+    const newZoom = Math.min(oldZoom * 1.25, 100);
+    if (newZoom === oldZoom) return;
+    const scaleRatio = newZoom / oldZoom;
+    setPan((prev) => ({
+      x: prev.x * scaleRatio,
+      y: prev.y * scaleRatio,
+    }));
+    setZoom(newZoom);
+  };
+
+  const zoomOut = () => {
+    const oldZoom = zoom;
+    const newZoom = Math.max(oldZoom / 1.25, 0.05);
+    if (newZoom === oldZoom) return;
+    const scaleRatio = newZoom / oldZoom;
+    setPan((prev) => ({
+      x: prev.x * scaleRatio,
+      y: prev.y * scaleRatio,
+    }));
+    setZoom(newZoom);
   };
 
   const resetView = () => {
@@ -872,17 +960,34 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                 <span>Paneli Aç</span>
               </button>
 
-              <div className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-300 text-[11px] font-mono text-cyan-700 font-bold flex items-center gap-1">
-                <ZoomIn size={12} />
-                <span>{Math.round(zoom * 100)}%</span>
+              <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-slate-300 shadow-sm">
+                <button
+                  onClick={zoomOut}
+                  disabled={!isParsed}
+                  className="p-1 hover:bg-slate-100 disabled:opacity-40 text-slate-700 rounded-md transition-colors cursor-pointer"
+                  title="Uzaklaş (-)"
+                >
+                  <ZoomOut size={13} />
+                </button>
+                <span className="text-[11px] font-mono text-cyan-800 font-bold px-1 min-w-[42px] text-center select-none">
+                  {Math.round(zoom * 100)}%
+                </span>
+                <button
+                  onClick={zoomIn}
+                  disabled={!isParsed}
+                  className="p-1 hover:bg-slate-100 disabled:opacity-40 text-slate-700 rounded-md transition-colors cursor-pointer"
+                  title="Yakınlaş (+)"
+                >
+                  <ZoomIn size={13} />
+                </button>
               </div>
               <button
                 onClick={resetView}
                 disabled={!isParsed}
-                className="p-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 border border-slate-300 rounded-lg transition-colors"
-                title="Sıfırla"
+                className="p-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                title="Görünümü Sıfırla"
               >
-                <RotateCcw size={12} />
+                <RotateCcw size={13} />
               </button>
             </div>
           </div>
