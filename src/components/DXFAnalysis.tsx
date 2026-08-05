@@ -4,6 +4,7 @@ import DxfParser from 'dxf-parser';
 import proj4 from 'proj4';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import { parseDXFBuffer, fixTurkishDxfText } from '../utils/dxfUtils';
 
 export interface CADLayer {
   name: string;
@@ -239,25 +240,11 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
-          const content = e.target?.result as string;
-          const parser = new DxfParser();
-          const parsed = parser.parseSync(content);
+          const buffer = e.target?.result as ArrayBuffer;
+          const { parsed, extractedLayers } = parseDXFBuffer(buffer);
           
           updateDxfData(parsed);
           propsSetDxfFileName?.(pendingFile.name);
-          
-          // Extract layers
-          const extractedLayers: CADLayer[] = [];
-          if (parsed.tables && parsed.tables.layer && parsed.tables.layer.layers) {
-             const layerDict = parsed.tables.layer.layers;
-             for (const layerName in layerDict) {
-                extractedLayers.push({
-                   name: layerName,
-                   color: layerDict[layerName].color || 7,
-                   visible: true
-                });
-             }
-          }
           updateLayers(extractedLayers);
           
           setZoom(1);
@@ -272,7 +259,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           setIsParsing(false);
         }
       };
-      reader.readAsText(pendingFile);
+      reader.readAsArrayBuffer(pendingFile);
     } catch (err) {
       console.error(err);
       setUploadMessage("Dosya okuma hatası oluştu.");
@@ -528,11 +515,13 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             const ty = -(pt.y - midY) * fitScale;
             
             // Clean MTEXT formatting codes (\P, \f..., \H..., \W..., \{, \})
-            let rawStr = String(entity.text)
-              .replace(/\\P/g, ' ')
-              .replace(/\\{[^}]*\}|\\[a-zA-Z0-9]+;/g, '')
-              .replace(/[\{\}]/g, '')
-              .trim();
+            let rawStr = fixTurkishDxfText(
+              String(entity.text)
+                .replace(/\\P/g, ' ')
+                .replace(/\\{[^}]*\}|\\[a-zA-Z0-9]+;/g, '')
+                .replace(/[\{\}]/g, '')
+                .trim()
+            );
             if (!rawStr) return;
 
             // Read CAD text height directly from DXF entity (height / textHeight / nominalTextHeight)

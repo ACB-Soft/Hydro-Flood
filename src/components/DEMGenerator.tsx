@@ -14,6 +14,7 @@ import {
   exportDEMToCSV, 
   DEMResult 
 } from '../utils/demGenerator';
+import { parseDXFBuffer } from '../utils/dxfUtils';
 
 export interface CADLayer {
   name: string;
@@ -206,24 +207,11 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
-          const content = e.target?.result as string;
-          const parser = new DxfParser();
-          const parsed = parser.parseSync(content);
+          const buffer = e.target?.result as ArrayBuffer;
+          const { parsed, extractedLayers } = parseDXFBuffer(buffer);
 
           setDxfData(parsed);
           setDxfFileName(pendingFile.name);
-
-          const extractedLayers: CADLayer[] = [];
-          if (parsed.tables && parsed.tables.layer && parsed.tables.layer.layers) {
-            const layerDict = parsed.tables.layer.layers;
-            for (const layerName in layerDict) {
-              extractedLayers.push({
-                name: layerName,
-                color: layerDict[layerName].color || 7,
-                visible: true
-              });
-            }
-          }
           setLayers(extractedLayers);
           setUploadMessage(`Ayrıştırma başarılı! ${extractedLayers.length} katman bulundu.`);
         } catch (err: any) {
@@ -232,7 +220,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
           setIsParsing(false);
         }
       };
-      reader.readAsText(pendingFile);
+      reader.readAsArrayBuffer(pendingFile);
     } catch (err: any) {
       setUploadMessage(`Hata: ${err.message}`);
       setIsParsing(false);
