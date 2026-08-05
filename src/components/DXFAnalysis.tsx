@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon } from 'lucide-react';
+import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon, Sun, Moon } from 'lucide-react';
 import DxfParser from 'dxf-parser';
 import proj4 from 'proj4';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
@@ -24,21 +24,31 @@ interface DXFAnalysisProps {
   onNavigateToDEMGenerator?: () => void;
 }
 
-const getAciColor = (colorNum?: any, defaultColor = '#38bdf8'): string => {
+const getAciColor = (colorNum?: any, defaultColor = '#38bdf8', isLightBg = false): string => {
   if (colorNum === undefined || colorNum === null) return defaultColor;
   
   // Direct hex strings (e.g. "#FF0000" or "FF0000")
   if (typeof colorNum === 'string') {
-    if (colorNum.startsWith('#')) return colorNum;
+    if (colorNum.startsWith('#')) {
+      if (isLightBg && (colorNum.toLowerCase() === '#ffffff' || colorNum.toLowerCase() === '#fff')) {
+        return '#0f172a';
+      }
+      return colorNum;
+    }
     const parsed = parseInt(colorNum, 16);
-    if (!isNaN(parsed)) return '#' + parsed.toString(16).padStart(6, '0');
+    if (!isNaN(parsed)) {
+      const hex = '#' + parsed.toString(16).padStart(6, '0');
+      if (isLightBg && hex.toLowerCase() === '#ffffff') return '#0f172a';
+      return hex;
+    }
     return defaultColor;
   }
   
   // True color integer (> 255 e.g. 0x00FF0000)
   if (typeof colorNum === 'number' && colorNum > 255) {
-    const hex = (colorNum & 0xFFFFFF).toString(16).padStart(6, '0');
-    return `#${hex}`;
+    const hex = '#' + (colorNum & 0xFFFFFF).toString(16).padStart(6, '0');
+    if (isLightBg && hex.toLowerCase() === '#ffffff') return '#0f172a';
+    return hex;
   }
   
   let aci = Math.abs(Math.round(Number(colorNum)));
@@ -47,14 +57,14 @@ const getAciColor = (colorNum?: any, defaultColor = '#38bdf8'): string => {
   // Standard AutoCAD Color Index (ACI 1-9)
   const baseAci: Record<number, string> = {
     1: '#ff0000', // Red
-    2: '#ffff00', // Yellow
-    3: '#00ff00', // Green
-    4: '#00ffff', // Cyan
-    5: '#0000ff', // Blue
-    6: '#ff00ff', // Magenta
-    7: '#ffffff', // White
-    8: '#7f7f7f', // Dark Gray
-    9: '#c0c0c0', // Light Gray
+    2: isLightBg ? '#ca8a04' : '#ffff00', // Yellow
+    3: '#16a34a', // Green
+    4: isLightBg ? '#0284c7' : '#00ffff', // Cyan
+    5: '#2563eb', // Blue
+    6: '#d946ef', // Magenta
+    7: isLightBg ? '#0f172a' : '#ffffff', // White (ACI 7) -> Dark Slate on Light canvas
+    8: '#64748b', // Dark Gray
+    9: '#94a3b8', // Light Gray
   };
   
   if (baseAci[aci]) return baseAci[aci];
@@ -74,12 +84,15 @@ const getAciColor = (colorNum?: any, defaultColor = '#38bdf8'): string => {
     else if (shade === 6 || shade === 7) { s = 0.7; l = 0.5; }
     else if (shade === 8 || shade === 9) { s = 0.4; l = 0.3; }
 
-    return hslToHex(hue, s, l);
+    const hex = hslToHex(hue, s, l);
+    if (isLightBg && hex.toLowerCase() === '#ffffff') return '#0f172a';
+    return hex;
   }
   
   // Gray scale range 250..255
   if (aci >= 250 && aci <= 255) {
     const grayVal = Math.round(50 + (aci - 250) * 40);
+    if (isLightBg && grayVal > 220) return '#0f172a';
     const hex = grayVal.toString(16).padStart(2, '0');
     return `#${hex}${hex}${hex}`;
   }
@@ -199,6 +212,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
   // Mobile Tab State: 'controls' (default so user uploads/parses file first) or 'map'
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
   const [basemap, setBasemap] = useState<'none' | 'hybrid' | 'satellite' | 'esri' | 'street'>('none');
+  const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>('dark');
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [zoom, setZoom] = useState(1);
@@ -279,6 +293,8 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const isLightBg = canvasTheme === 'light' && basemap === 'none';
+
     // Handle high DPI displays
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -294,7 +310,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     ctx.clearRect(0, 0, width, height);
 
     if (basemap === 'none') {
-      ctx.fillStyle = '#0b1329';
+      ctx.fillStyle = isLightBg ? '#ffffff' : '#0b1329';
       ctx.fillRect(0, 0, width, height);
     } else {
       ctx.fillStyle = 'rgba(11, 19, 41, 0.25)';
@@ -361,8 +377,25 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         try {
           const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [worldMidX, worldMidY]);
           if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-            setMapCenter([lat, lon]);
-            setMapZoom(Math.max(2, Math.min(19, Math.round(15 + Math.log2(zoom)))));
+            let calculatedZoom = 15;
+            if (crs === 'EPSG:4326') {
+              calculatedZoom = Math.log2(fitScale * zoom * 1.40625);
+            } else {
+              const metersPerPixel = 1 / (fitScale * zoom);
+              const latRad = (lat * Math.PI) / 180;
+              const earthTileMetersAtZoom0 = 156543.03392 * Math.cos(latRad);
+              calculatedZoom = Math.log2(earthTileMetersAtZoom0 / metersPerPixel);
+            }
+            const clampedZoom = Math.max(2, Math.min(20, calculatedZoom));
+
+            setMapCenter(prev => {
+              if (Math.abs(prev[0] - lat) < 1e-7 && Math.abs(prev[1] - lon) < 1e-7) return prev;
+              return [lat, lon];
+            });
+            setMapZoom(prev => {
+              if (Math.abs(prev - clampedZoom) < 1e-4) return prev;
+              return clampedZoom;
+            });
           }
         } catch (e) {
           // proj4 fallback
@@ -377,7 +410,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     ctx.scale(zoom, zoom);
 
     // Grid background
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.strokeStyle = isLightBg ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 255, 255, 0.05)';
     ctx.lineWidth = 1 / zoom;
     const gridSize = Math.max(10, Math.round(spanX / 10));
     for (let x = minX - spanX; x <= maxX + spanX; x += gridSize) {
@@ -400,10 +433,10 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         if (layer && !layer.visible) return;
 
         // Determine entity color (entity color override vs layer color)
-        const layerColorHex = getAciColor(layer?.color, '#38bdf8');
+        const layerColorHex = getAciColor(layer?.color, isLightBg ? '#0284c7' : '#38bdf8', isLightBg);
         const entityRawColor = entity.color ?? entity.colorNumber ?? entity.trueColor;
         const strokeColor = (entityRawColor !== undefined && entityRawColor !== 256) 
-          ? getAciColor(entityRawColor, layerColorHex) 
+          ? getAciColor(entityRawColor, layerColorHex, isLightBg) 
           : layerColorHex;
 
         // Determine line weight from DXF entity or layer
@@ -531,7 +564,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
 
     ctx.restore();
 
-  }, [dxfData, isParsed, zoom, pan, layers, mobileTab]);
+  }, [dxfData, isParsed, zoom, pan, layers, mobileTab, canvasTheme, basemap, crs]);
 
   // Mouse pan handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -742,7 +775,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                     <div className="flex items-center gap-2 min-w-0 pr-2">
                       <span 
                         className="w-2.5 h-2.5 rounded-full shrink-0 border border-slate-300 shadow-sm" 
-                        style={{ backgroundColor: getAciColor(l.color) }}
+                        style={{ backgroundColor: getAciColor(l.color, '#38bdf8', canvasTheme === 'light' && basemap === 'none') }}
                         title={`Renk Kodu: ${l.color}`}
                       />
                       <span className="text-xs text-slate-800 truncate font-medium">{l.name}</span>
@@ -780,22 +813,50 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         }`}>
           
           {/* Canvas Toolbar Header */}
-          <div className="px-3 py-2 bg-slate-100 border-b border-slate-300 flex items-center justify-between z-10 shrink-0">
+          <div className="px-3 py-2 bg-slate-100 border-b border-slate-300 flex flex-wrap items-center justify-between gap-2 z-10 shrink-0">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 animate-pulse" />
               <h3 className="text-xs font-bold text-slate-900">2D CAD Görüntüleme Ekranı</h3>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Canvas Theme Selector (Dark / White) */}
+              <div className="flex items-center bg-white border border-slate-300 rounded-lg p-0.5 shadow-sm">
+                <button
+                  onClick={() => setCanvasTheme('dark')}
+                  className={`px-2 py-1 text-xs font-medium rounded-md flex items-center gap-1 transition-all ${
+                    canvasTheme === 'dark'
+                      ? 'bg-slate-900 text-cyan-400 font-bold shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Koyu Tuval (Siyah Arkaplan)"
+                >
+                  <Moon size={12} />
+                  <span>Koyu Tuval</span>
+                </button>
+                <button
+                  onClick={() => setCanvasTheme('light')}
+                  className={`px-2 py-1 text-xs font-medium rounded-md flex items-center gap-1 transition-all ${
+                    canvasTheme === 'light'
+                      ? 'bg-cyan-700 text-white font-bold shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Açık Tuval (Beyaz Arkaplan)"
+                >
+                  <Sun size={12} />
+                  <span>Beyaz Tuval</span>
+                </button>
+              </div>
+
               {/* Satellite Basemap Selector */}
-              <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-lg border border-slate-300">
+              <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-lg border border-slate-300 shadow-sm">
                 <Globe size={13} className="text-cyan-600" />
                 <select
                   value={basemap}
                   onChange={(e) => setBasemap(e.target.value as any)}
                   className="bg-transparent text-xs text-slate-800 font-medium outline-none cursor-pointer"
                 >
-                  <option value="none" className="bg-white text-slate-900">Uydu Altlığı: Kapalı (Koyu Tuval)</option>
+                  <option value="none" className="bg-white text-slate-900">Uydu Altlığı: Kapalı</option>
                   <option value="hybrid" className="bg-white text-slate-900">Uydu Hibrit (Google)</option>
                   <option value="satellite" className="bg-white text-slate-900">Uydu Saf (Google)</option>
                   <option value="esri" className="bg-white text-slate-900">Esri World Imagery</option>
@@ -838,20 +899,26 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           </div>
 
           {/* Canvas Container */}
-          <div className="flex-1 relative w-full h-full min-h-0 bg-slate-900">
+          <div className={`flex-1 relative w-full h-full min-h-0 ${
+            canvasTheme === 'light' && basemap === 'none' ? 'bg-white' : 'bg-slate-900'
+          }`}>
             {/* Satellite Basemap Background Layer */}
             {isParsed && basemap !== 'none' && mapCenter && (
               <div className="absolute inset-0 z-0 opacity-90 overflow-hidden pointer-events-none">
                 <MapContainer
                   center={mapCenter}
                   zoom={mapZoom}
+                  zoomSnap={0}
+                  zoomDelta={0.1}
                   zoomControl={false}
                   attributionControl={false}
                   dragging={false}
                   scrollWheelZoom={false}
+                  doubleClickZoom={false}
+                  touchZoom={false}
                   className="w-full h-full"
                 >
-                  <TileLayer url={BASEMAP_URLS[basemap] || BASEMAP_URLS.hybrid} />
+                  <TileLayer url={BASEMAP_URLS[basemap] || BASEMAP_URLS.hybrid} maxNativeZoom={19} maxZoom={22} />
                   <LeafletCenterUpdater center={mapCenter} zoom={mapZoom} />
                 </MapContainer>
               </div>
