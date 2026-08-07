@@ -108,6 +108,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
+  const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
 
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
 
@@ -400,120 +401,185 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 h-full min-h-0 flex-1">
             
             {/* LEFT PANEL: OPTIONS (Visible on Desktop OR when MobileTab === 'controls') */}
-            <div className={`lg:col-span-3 flex flex-col gap-2 h-full min-h-0 overflow-y-auto lg:overflow-hidden ${
+            <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto custom-scrollbar ${
               mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
             }`}>
               
-              {/* 1. DEM UPLOAD */}
-              <section className="bg-white rounded-xl p-2.5 border border-slate-300 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
-                <div className="pb-1 border-b border-slate-200 shrink-0">
-                  <h2 className="font-bold text-slate-900 text-xs">1. Topografya Verisi (DEM)</h2>
+              {/* 1. DEM & CRS SELECTION + DOSYAYI AÇ BUTTON */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
+                <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
+                  <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <FileText size={14} className="text-cyan-700" />
+                    <span>1. Topografya & Koordinat Sistemi</span>
+                  </h2>
+                  {isFileOpened && (
+                    <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-0.5">
+                      <CheckCircle2 size={10} />
+                      Açık
+                    </span>
+                  )}
                 </div>
 
-                <div className="my-auto">
+                {/* DEM File Selector */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">Topografya Dosyası (DEM):</label>
                   {dem ? (
-                    <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-lg flex items-center justify-between gap-2">
+                    <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex items-center justify-between gap-2">
                       <div className="space-y-0.5 overflow-hidden">
                         <div className="flex items-center gap-1.5">
                           <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
-                          <span className="font-bold text-slate-900 text-xs">DEM Yüklendi</span>
+                          <span className="font-bold text-slate-900 text-xs truncate">DEM Yüklendi</span>
                         </div>
                         <p className="text-[10px] text-slate-600 truncate">
                           {dem.width}x{dem.height} px • Çöz: {dem.cellSize.toFixed(2)}m
                         </p>
                       </div>
 
-                      <label className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all">
+                      <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all shadow-sm">
                         Değiştir
-                        <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
+                        <input type="file" accept=".tif,.tiff,.asc" onChange={(e) => { handleDemUpload(e); setIsFileOpened(false); }} className="hidden" />
                       </label>
                     </div>
                   ) : (
-                    <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
+                    <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
                       <div className="flex items-center gap-2 overflow-hidden">
-                        <div className="p-1 bg-cyan-100 text-cyan-800 rounded group-hover:scale-105 transition-transform shrink-0">
+                        <div className="p-1 bg-cyan-100 text-cyan-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
                           <Download size={14} />
                         </div>
                         <span className="font-bold text-xs text-slate-800 truncate">DEM Dosyası Seçin</span>
                       </div>
-                      <span className="px-2 py-0.5 bg-cyan-700 text-white rounded text-[10px] font-bold shrink-0 shadow-sm">
+                      <span className="px-2 py-0.5 bg-cyan-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
                         Gözat
                       </span>
                       <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
                     </label>
                   )}
                 </div>
-              </section>
 
-              {/* 2. CRS SELECTOR (İsteğe Bağlı) */}
-              <section className="bg-white rounded-xl p-2.5 border border-slate-300 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
-                <div className="flex items-center justify-between pb-1 border-b border-slate-200 shrink-0">
-                  <h2 className="font-bold text-slate-900 text-xs">2. Koordinat Sistemi (CRS)</h2>
-                  <span className="text-[9px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 font-semibold">İsteğe Bağlı</span>
+                {/* CRS Selection */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">Koordinat Sistemi (CRS):</label>
+                  <div className="relative">
+                    <select
+                      value={selectedCRS.code}
+                      onChange={(e) => {
+                        const found = CRS_LIST.find(c => c.code === e.target.value);
+                        if (found) setSelectedCRS(found);
+                      }}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-cyan-600 appearance-none cursor-pointer transition-all pr-7 shadow-sm"
+                    >
+                      <optgroup label="TUREF / TM (3° - Türkiye)">
+                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="ED50 / TM (3° - Türkiye)">
+                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
+                        {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
+                        {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Global & Standartlar">
+                        {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-600">
+                      <ChevronDown size={13} />
+                    </div>
+                  </div>
                 </div>
 
-                <div className="relative my-auto">
-                  <select
-                    value={selectedCRS.code}
-                    onChange={(e) => {
-                      const found = CRS_LIST.find(c => c.code === e.target.value);
-                      if (found) setSelectedCRS(found);
-                    }}
-                    className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-cyan-600 appearance-none cursor-pointer transition-all pr-7 shadow-sm"
-                  >
-                    <optgroup label="TUREF / TM (3° - Türkiye)">
-                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(crs => (
-                        <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
-                          {crs.code} - {crs.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="ED50 / TM (3° - Türkiye)">
-                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(crs => (
-                        <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
-                          {crs.code} - {crs.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
-                      {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(crs => (
-                        <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
-                          {crs.code} - {crs.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
-                      {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(crs => (
-                        <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
-                          {crs.code} - {crs.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Global & Standartlar">
-                      {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(crs => (
-                        <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
-                          {crs.code} - {crs.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  </select>
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-600">
-                    <ChevronDown size={13} />
-                  </div>
+                {/* DOSYAYI AÇ BUTTON */}
+                <button
+                  onClick={() => {
+                    if (!dem) {
+                      alert("Lütfen önce bir DEM (Topografya) dosyası yükleyin.");
+                      return;
+                    }
+                    setIsFileOpened(true);
+                    setMobileTab('map');
+                  }}
+                  className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer ${
+                    isFileOpened
+                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                      : 'bg-cyan-700 hover:bg-cyan-800 text-white'
+                  }`}
+                >
+                  <Eye size={15} />
+                  <span>{isFileOpened ? 'Harita Görünümü Aktif (Açık)' : 'Dosyayı Aç (Haritada Göster)'}</span>
+                </button>
+              </section>
+
+              {/* 2. VECTOR DATA UPLOADS (İnceleme Alanı ve Kaynak Nokta) */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2 shrink-0">
+                <div className="pb-1 border-b border-slate-200">
+                  <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <MapPin size={14} className="text-cyan-700" />
+                    <span>2. Vektör Verileri (KML)</span>
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {/* İnceleme Alanı Poligon KML */}
+                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center justify-center text-center ${
+                    areaKml ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                  }`}>
+                    <FileText className={areaKml ? "text-emerald-700 mb-0.5" : "text-slate-500 mb-0.5"} size={16} />
+                    <span className="text-[10px] font-bold text-slate-900 truncate w-full">
+                      {areaKml ? areaKml.name : 'İnceleme Alanı'}
+                    </span>
+                    <span className="text-[9px] text-slate-500">Poligon KML</span>
+                    <input type="file" accept=".kml" onChange={handleAreaKmlUpload} className="hidden" />
+                  </label>
+
+                  {/* Kaynak Nokta KML */}
+                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center justify-center text-center ${
+                    sourceKmlName ? 'bg-blue-50 border-blue-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                  }`}>
+                    <MapPin className={sourceKmlName ? "text-blue-700 mb-0.5" : "text-slate-500 mb-0.5"} size={16} />
+                    <span className="text-[10px] font-bold text-slate-900 truncate w-full">
+                      {sourceKmlName ? sourceKmlName : 'Kaynak Nokta'}
+                    </span>
+                    <span className="text-[9px] text-slate-500">Nokta KML</span>
+                    <input type="file" accept=".kml" onChange={handleSourceKmlUpload} className="hidden" />
+                  </label>
                 </div>
               </section>
 
               {/* 3. WATER LEVEL PARAMETER */}
-              <section className="bg-white rounded-xl p-2.5 border border-slate-300 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
-                <div className="pb-1 border-b border-slate-200 shrink-0">
-                  <h2 className="font-bold text-slate-900 text-xs">3. Su Seviyesi Parametresi</h2>
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2 shrink-0">
+                <div className="pb-1 border-b border-slate-200 flex items-center justify-between">
+                  <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Droplets size={14} className="text-cyan-700" />
+                    <span>3. Su Seviyesi Artışı</span>
+                  </h2>
+                  <span className="text-xs font-display font-bold text-cyan-800 bg-cyan-50 px-2 py-0.5 rounded-lg border border-cyan-200">
+                    +{bathtubLevel.toFixed(1)} m
+                  </span>
                 </div>
 
-                <div className="space-y-1.5 bg-slate-50 p-2 rounded-lg border border-slate-200 my-auto">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider">Su Seviyesi Artışı</label>
-                    <span className="text-xs font-display font-bold text-cyan-800">+{bathtubLevel.toFixed(1)} m</span>
-                  </div>
+                <div className="space-y-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                   <input 
                     type="range" 
                     min="0.1" 
@@ -521,16 +587,16 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     step="0.1"
                     value={bathtubLevel} 
                     onChange={(e) => setBathtubLevel(parseFloat(e.target.value))}
-                    className="w-full h-1 bg-slate-300 rounded-full appearance-none cursor-pointer accent-cyan-700"
+                    className="w-full h-1.5 bg-slate-300 rounded-full appearance-none cursor-pointer accent-cyan-700"
                   />
                   <div className="grid grid-cols-6 gap-1 pt-0.5">
                     {[1.0, 2.0, 3.0, 4.0, 5.0, 10.0].map((val) => (
                       <button
                         key={val}
                         onClick={() => setBathtubLevel(val)}
-                        className={`py-0.5 rounded text-[10px] font-bold border transition-all text-center cursor-pointer ${
+                        className={`py-1 rounded-lg text-[10px] font-bold border transition-all text-center cursor-pointer ${
                           bathtubLevel === val 
-                            ? 'bg-cyan-100 border-cyan-500 text-cyan-900' 
+                            ? 'bg-cyan-100 border-cyan-500 text-cyan-900 shadow-sm' 
                             : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
                         }`}
                       >
@@ -541,41 +607,21 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                 </div>
               </section>
 
-              {/* 4. KML UPLOADS */}
-              <section className="bg-white rounded-xl p-2.5 border border-slate-300 shadow-sm flex-1 min-h-0 flex flex-col justify-between">
-                <div className="pb-1 border-b border-slate-200 shrink-0">
-                  <h2 className="font-bold text-slate-900 text-xs">4. Konum ve Vektör Verileri</h2>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5 my-auto">
-                  <label className={`p-2 border rounded-lg cursor-pointer transition-all flex flex-col items-center justify-center text-center ${
-                    sourceKmlName ? 'bg-blue-50 border-blue-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                  }`}>
-                    <MapPin className={sourceKmlName ? "text-blue-700 mb-0.5" : "text-slate-500 mb-0.5"} size={14} />
-                    <span className="text-[10px] font-bold text-slate-900 truncate w-full">
-                      {sourceKmlName ? sourceKmlName : 'Kaynak KML'}
-                    </span>
-                    <span className="text-[9px] text-slate-500">Nokta Vektörü</span>
-                    <input type="file" accept=".kml" onChange={handleSourceKmlUpload} className="hidden" />
-                  </label>
-
-                  <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center justify-center text-center ${
-                    areaKml ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                  }`}>
-                    <FileText className={areaKml ? "text-emerald-700 mb-0.5" : "text-slate-500 mb-0.5"} size={14} />
-                    <span className="text-[10px] font-bold text-slate-900 truncate w-full">
-                      {areaKml ? areaKml.name : 'İnceleme Alanı'}
-                    </span>
-                    <span className="text-[9px] text-slate-500">Poligon Vektörü</span>
-                    <input type="file" accept=".kml" onChange={handleAreaKmlUpload} className="hidden" />
-                  </label>
-                </div>
-              </section>
+              {/* 4. START ANALYSIS BUTTON (MOVED TO LEFT PANEL) */}
+              <div className="pt-1 mt-auto shrink-0">
+                <button
+                  onClick={handleStartAnalysis}
+                  className="w-full py-2.5 px-3 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                >
+                  <Play size={15} className="fill-white" />
+                  <span>Analizi Başlat (Taşkın Simülasyonu)</span>
+                </button>
+              </div>
 
             </div>
 
-            {/* RIGHT PANEL: FULL-SIZE INTERACTIVE MAP & ACTION BUTTON (Visible on Desktop OR when MobileTab === 'map') */}
-            <div className={`lg:col-span-9 flex flex-col justify-between gap-2.5 h-full min-h-0 ${
+            {/* RIGHT PANEL: FULL-SIZE INTERACTIVE MAP (Visible on Desktop OR when MobileTab === 'map') */}
+            <div className={`lg:col-span-9 flex flex-col gap-2.5 h-full min-h-0 ${
               mobileTab === 'map' ? 'flex' : 'hidden lg:flex'
             }`}>
               
@@ -668,6 +714,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                         color="white" 
                         weight={2} 
                         fillOpacity={1} 
+                        
                       />
                     )}
                     {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
@@ -695,15 +742,6 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                   </div>
                 </div>
               </div>
-
-              {/* ACTION BUTTON RIGHT ON THE MAIN PANEL */}
-              <button
-                onClick={handleStartAnalysis}
-                className="w-full py-3 px-4 bg-gradient-to-r from-blue-700 via-cyan-700 to-blue-800 hover:from-blue-800 hover:to-cyan-800 text-white rounded-xl font-display font-bold text-xs sm:text-sm transition-all shadow-md flex items-center justify-center gap-2 shrink-0 cursor-pointer"
-              >
-                <Play size={16} className="fill-white" />
-                <span>Analizi Başlat (Bathtub Taşkın Simülasyonu)</span>
-              </button>
 
             </div>
 
