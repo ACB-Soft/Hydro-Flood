@@ -347,8 +347,8 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
           mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
         }`}>
           
-          {/* Card 1: DXF Dosya Yükleme veya Aktif Dosya Bilgisi */}
-          <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
+          {/* Card 1: DXF Dosya Kaynağı & Koordinat Sistemi */}
+          <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2.5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                 <FileCode size={14} className="text-cyan-700" />
@@ -362,59 +362,11 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
             </div>
 
             {dxfData ? (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-2">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-600 font-medium">Dosya:</span>
                   <span className="text-slate-900 font-mono font-bold truncate max-w-[150px]">{dxfFileName || 'CAD_Map.dxf'}</span>
                 </div>
-
-                {/* CRS Selection Dropdown */}
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-600 font-semibold block">Koordinat Sistemi (CRS):</label>
-                  <select
-                    value={crs || 'NONE'}
-                    onChange={(e) => setCrs(e.target.value)}
-                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 rounded-xl px-2 py-1.5 text-xs font-bold text-cyan-900 outline-none cursor-pointer transition-all shadow-sm"
-                  >
-                    <option value="NONE" className="bg-white text-slate-900">Seçilmedi (Yerel Koordinat)</option>
-                    <optgroup label="TUREF / TM (3° - Türkiye)">
-                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(item => (
-                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
-                          {item.code} - {item.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="ED50 / TM (3° - Türkiye)">
-                      {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(item => (
-                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
-                          {item.code} - {item.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
-                      {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(item => (
-                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
-                          {item.code} - {item.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
-                      {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(item => (
-                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
-                          {item.code} - {item.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Global & Standartlar">
-                      {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(item => (
-                        <option key={item.code} value={item.code} className="bg-white text-slate-900">
-                          {item.code} - {item.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  </select>
-                </div>
-
                 <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
                   <span className="text-slate-600 font-medium">Aktif Katman:</span>
                   <span className="text-emerald-700 font-bold">{activeLayers.length} / {layers.length}</span>
@@ -422,8 +374,8 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
               </div>
             ) : (
               <div className="space-y-2">
-                <label className="border-2 border-dashed border-slate-300 hover:border-cyan-600 bg-slate-50 hover:bg-slate-100/80 rounded-xl p-3 text-center cursor-pointer block transition-colors shadow-sm">
-                  <Upload size={20} className="mx-auto text-slate-500 mb-1" />
+                <label className="border-2 border-dashed border-slate-300 hover:border-cyan-600 bg-slate-50 hover:bg-slate-100/80 rounded-xl p-2.5 text-center cursor-pointer block transition-colors shadow-sm">
+                  <Upload size={18} className="mx-auto text-slate-500 mb-1" />
                   <span className="text-xs text-slate-800 font-bold block">.dxf Dosyası Seçin</span>
                   <span className="text-[10px] text-slate-500 block">CAD / GIS Harita Verisi</span>
                   <input type="file" accept=".dxf" onChange={handleFileUpload} className="hidden" />
@@ -447,23 +399,90 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                 )}
               </div>
             )}
+
+            {/* CRS Selection Dropdown - Always Visible */}
+            <div className="space-y-1 pt-1 border-t border-slate-200">
+              <label className="text-[10px] text-slate-700 font-bold block flex items-center justify-between">
+                <span>Koordinat Sistemi (CRS):</span>
+                {crs !== 'NONE' && (
+                  <span className="text-[9px] font-mono text-cyan-800 font-bold bg-cyan-50 px-1.5 py-0.2 rounded border border-cyan-200">
+                    {crs}
+                  </span>
+                )}
+              </label>
+              <select
+                value={crs || 'NONE'}
+                onChange={(e) => setCrs(e.target.value)}
+                className="w-full bg-white border border-slate-300 focus:border-cyan-600 rounded-xl px-2 py-1.5 text-xs font-bold text-cyan-900 outline-none cursor-pointer transition-all shadow-sm"
+              >
+                <option value="NONE" className="bg-white text-slate-900">Seçilmedi (Yerel Koordinat)</option>
+                <optgroup label="TUREF / TM (3° - Türkiye)">
+                  {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(item => (
+                    <option key={item.code} value={item.code} className="bg-white text-slate-900">
+                      {item.code} - {item.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="ED50 / TM (3° - Türkiye)">
+                  {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(item => (
+                    <option key={item.code} value={item.code} className="bg-white text-slate-900">
+                      {item.code} - {item.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
+                  {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(item => (
+                    <option key={item.code} value={item.code} className="bg-white text-slate-900">
+                      {item.code} - {item.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
+                  {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(item => (
+                    <option key={item.code} value={item.code} className="bg-white text-slate-900">
+                      {item.code} - {item.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Global & Standartlar">
+                  {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(item => (
+                    <option key={item.code} value={item.code} className="bg-white text-slate-900">
+                      {item.code} - {item.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
           </div>
 
-          {/* Card 2: Katman Yöneticisi */}
-          {dxfData && (
-            <div className="bg-white border border-slate-300 rounded-2xl p-3 flex flex-col flex-1 min-h-0 shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between mb-2 shrink-0">
-                <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                  <Layers size={13} className="text-cyan-700" />
-                  2. Kullanılacak Katmanlar
-                </h3>
+          {/* Card 2: Katman Yöneticisi - Always Visible */}
+          <div className="bg-white border border-slate-300 rounded-2xl p-3 flex flex-col flex-1 min-h-[140px] shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between mb-2 shrink-0">
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <Layers size={13} className="text-cyan-700" />
+                2. Katman Yöneticisi
+              </h3>
+              <div className="flex items-center gap-1.5">
+                {layers.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const allVisible = layers.every(l => l.visible);
+                      setLayers(prev => prev.map(l => ({ ...l, visible: !allVisible })));
+                    }}
+                    className="text-[10px] text-cyan-700 hover:underline font-bold cursor-pointer"
+                  >
+                    {layers.every(l => l.visible) ? 'Tümünü Gizle' : 'Tümünü Aç'}
+                  </button>
+                )}
                 <span className="text-[10px] text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full font-semibold border border-slate-200">
                   {layers.length} Katman
                 </span>
               </div>
+            </div>
 
-              <div className="flex-1 overflow-y-auto space-y-1 pr-1 min-h-0 custom-scrollbar">
-                {layers.map((l, idx) => (
+            <div className="flex-1 overflow-y-auto space-y-1 pr-1 min-h-0 custom-scrollbar">
+              {layers.length > 0 ? (
+                layers.map((l, idx) => (
                   <div key={idx} className="flex items-center justify-between p-1.5 rounded-xl bg-slate-50 border border-slate-200">
                     <div className="flex items-center gap-2 min-w-0 pr-2">
                       <span 
@@ -474,15 +493,22 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                     </div>
                     <button
                       onClick={() => toggleLayer(l.name)}
-                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${l.visible ? 'bg-cyan-600' : 'bg-slate-300'}`}
+                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 cursor-pointer ${l.visible ? 'bg-cyan-600' : 'bg-slate-300'}`}
                     >
                       <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all shadow-sm ${l.visible ? 'left-[18px]' : 'left-0.5'}`} />
                     </button>
                   </div>
-                ))}
-              </div>
+                ))
+              ) : (
+                <div className="h-full min-h-[90px] flex flex-col items-center justify-center text-center p-3 text-slate-400 space-y-1.5 bg-slate-50/70 rounded-xl border border-dashed border-slate-200">
+                  <Layers size={22} className="text-slate-300" />
+                  <p className="text-[11px] text-slate-500 font-medium leading-tight">
+                    DXF dosyası yüklendiğinde katmanlar burada listelenecektir.
+                  </p>
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Card 3: Kot (Z) Yükseklik Filtresi & İstatistikleri */}
           <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
