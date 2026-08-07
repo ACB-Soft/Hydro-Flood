@@ -1,10 +1,39 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, ZoomOut, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon, Sun, Moon } from 'lucide-react';
+import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, ZoomOut, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon, Sun, Moon, MousePointerClick, Info, X, Search } from 'lucide-react';
 import DxfParser from 'dxf-parser';
 import proj4 from 'proj4';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { parseDXFBuffer, fixTurkishDxfText } from '../utils/dxfUtils';
+
+function distToSegmentSquared(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+  if (l2 === 0) return (px - x1) * (px - x1) + (py - y1) * (py - y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * (x2 - x1);
+  const projY = y1 + t * (y2 - y1);
+  return (px - projX) * (px - projX) + (py - projY) * (py - projY);
+}
+
+function getEntityTypeLabel(type: string): string {
+  switch (type) {
+    case 'POINT': return 'Nokta (POINT)';
+    case 'LINE': return 'Çizgi (LINE)';
+    case 'LWPOLYLINE': return 'Çoklu Çizgi (LWPOLYLINE)';
+    case 'POLYLINE': return 'Çoklu Çizgi (POLYLINE)';
+    case 'SPLINE': return 'Eğri / Esnek Çizgi (SPLINE)';
+    case 'CIRCLE': return 'Daire (CIRCLE)';
+    case 'ARC': return 'Yay (ARC)';
+    case 'TEXT': return 'Yazı (TEXT)';
+    case 'MTEXT': return 'Çok Satırlı Metin (MTEXT)';
+    case '3DFACE': return '3D Yüzey (3DFACE)';
+    case 'HATCH': return 'Tarama / Alan (HATCH)';
+    case 'DIMENSION': return 'Ölçü Çizgisi (DIMENSION)';
+    case 'INSERT': return 'Blok Eklemleme (INSERT)';
+    default: return type ? `${type}` : 'Bilinmeyen Obje';
+  }
+}
 
 export interface CADLayer {
   name: string;
@@ -215,6 +244,18 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
   const [basemap, setBasemap] = useState<'none' | 'hybrid' | 'satellite' | 'esri' | 'street'>('none');
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>('dark');
 
+  // Object Inspection / Query State
+  const [isInspectMode, setIsInspectMode] = useState<boolean>(false);
+  const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
+  const [selectedEntityInfo, setSelectedEntityInfo] = useState<{
+    typeLabel: string;
+    layer: string;
+    colorHex: string;
+    details: Array<{ label: string; value: string }>;
+  } | null>(null);
+
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -399,23 +440,6 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     ctx.translate(centerX, centerY);
     ctx.scale(zoom, zoom);
 
-    // Grid background
-    ctx.strokeStyle = isLightBg ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 255, 255, 0.05)';
-    ctx.lineWidth = 1 / zoom;
-    const gridSize = Math.max(10, Math.round(spanX / 10));
-    for (let x = minX - spanX; x <= maxX + spanX; x += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo((x - midX) * fitScale, -(minY - spanY - midY) * fitScale);
-      ctx.lineTo((x - midX) * fitScale, -(maxY + spanY - midY) * fitScale);
-      ctx.stroke();
-    }
-    for (let y = minY - spanY; y <= maxY + spanY; y += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo((minX - spanX - midX) * fitScale, -(y - midY) * fitScale);
-      ctx.lineTo((maxX + spanX - midX) * fitScale, -(y - midY) * fitScale);
-      ctx.stroke();
-    }
-
     // Draw entities with their original layer/entity colors
     if (dxfData.entities) {
       dxfData.entities.forEach((entity: any) => {
@@ -554,14 +578,104 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
       });
     }
 
+    // Highlight selected entity if present
+    if (selectedEntity) {
+      ctx.save();
+      ctx.strokeStyle = '#facc15'; // bright yellow highlight
+      ctx.fillStyle = '#facc15';
+      ctx.lineWidth = Math.max(3.5 / zoom, 2);
+
+      if (selectedEntity.type === 'LINE') {
+        const v0 = selectedEntity.vertices ? selectedEntity.vertices[0] : selectedEntity.startPoint;
+        const v1 = selectedEntity.vertices ? selectedEntity.vertices[1] : selectedEntity.endPoint;
+        if (v0 && v1) {
+          const sx0 = (v0.x - midX) * fitScale;
+          const sy0 = -(v0.y - midY) * fitScale;
+          const sx1 = (v1.x - midX) * fitScale;
+          const sy1 = -(v1.y - midY) * fitScale;
+          ctx.beginPath();
+          ctx.moveTo(sx0, sy0);
+          ctx.lineTo(sx1, sy1);
+          ctx.stroke();
+
+          // Endpoint handles
+          ctx.beginPath();
+          ctx.arc(sx0, sy0, 4 / zoom, 0, 2 * Math.PI);
+          ctx.arc(sx1, sy1, 4 / zoom, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      } else if (selectedEntity.type === 'LWPOLYLINE' || selectedEntity.type === 'POLYLINE' || selectedEntity.type === 'SPLINE') {
+        if (selectedEntity.vertices && selectedEntity.vertices.length > 0) {
+          ctx.beginPath();
+          selectedEntity.vertices.forEach((v: any, i: number) => {
+            const sx = (v.x - midX) * fitScale;
+            const sy = -(v.y - midY) * fitScale;
+            if (i === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
+          });
+          if (selectedEntity.shape || selectedEntity.closed) ctx.closePath();
+          ctx.stroke();
+
+          // Vertex handles
+          selectedEntity.vertices.forEach((v: any) => {
+            const sx = (v.x - midX) * fitScale;
+            const sy = -(v.y - midY) * fitScale;
+            ctx.beginPath();
+            ctx.arc(sx, sy, 3.5 / zoom, 0, 2 * Math.PI);
+            ctx.fill();
+          });
+        }
+      } else if (selectedEntity.type === 'POINT') {
+        const pt = selectedEntity.position || (selectedEntity.vertices && selectedEntity.vertices[0]);
+        if (pt) {
+          const px = (pt.x - midX) * fitScale;
+          const py = -(pt.y - midY) * fitScale;
+          ctx.beginPath();
+          ctx.arc(px, py, 10 / zoom, 0, 2 * Math.PI);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(px, py, 4 / zoom, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      } else if (selectedEntity.type === 'CIRCLE') {
+        if (selectedEntity.center) {
+          const cx = (selectedEntity.center.x - midX) * fitScale;
+          const cy = -(selectedEntity.center.y - midY) * fitScale;
+          const r = (selectedEntity.radius || 1) * fitScale;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(cx, cy, 4 / zoom, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      } else if (selectedEntity.type === 'ARC') {
+        if (selectedEntity.center) {
+          const cx = (selectedEntity.center.x - midX) * fitScale;
+          const cy = -(selectedEntity.center.y - midY) * fitScale;
+          const r = (selectedEntity.radius || 1) * fitScale;
+          const startAngle = -(selectedEntity.endAngle || 0);
+          const endAngle = -(selectedEntity.startAngle || 0);
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, startAngle, endAngle);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(cx, cy, 4 / zoom, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
     ctx.restore();
 
-  }, [dxfData, isParsed, zoom, pan, layers, mobileTab, canvasTheme, basemap, crs]);
+  }, [dxfData, isParsed, zoom, pan, layers, mobileTab, canvasTheme, basemap, crs, selectedEntity]);
 
   // Mouse pan handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsPanning(true);
     setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -573,8 +687,252 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     }
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (mouseDownPosRef.current) {
+      const distMoved = Math.hypot(e.clientX - mouseDownPosRef.current.x, e.clientY - mouseDownPosRef.current.y);
+      if (distMoved < 6 && isInspectMode) {
+        handleCanvasInspectClick(e.clientX, e.clientY);
+      }
+    }
     setIsPanning(false);
+  };
+
+  const buildEntityInfo = (entity: any, clickX: number, clickY: number) => {
+    const layerObj = layers.find(l => l.name === entity.layer);
+    const colorVal = entity.color ?? entity.colorNumber ?? entity.trueColor ?? layerObj?.color;
+    const colorHex = getAciColor(colorVal, '#38bdf8', canvasTheme === 'light' && basemap === 'none');
+
+    let details: Array<{ label: string; value: string }> = [];
+
+    // Basic props
+    details.push({ label: 'Obje Tipi', value: getEntityTypeLabel(entity.type) });
+    details.push({ label: 'Katman (Layer)', value: entity.layer || '0 (Varsayılan)' });
+    details.push({ label: 'Renk (ACI / Hex)', value: colorVal !== undefined ? `ACI ${colorVal} (${colorHex})` : 'Katmandan (ByLayer)' });
+
+    if (entity.lineWeight || layerObj?.lineWeight) {
+      const lw = entity.lineWeight || layerObj?.lineWeight;
+      details.push({ label: 'Çizgi Kalınlığı', value: `${(lw / 100).toFixed(2)} mm` });
+    }
+
+    // Geometry details
+    if (entity.type === 'LINE') {
+      const v0 = entity.vertices ? entity.vertices[0] : entity.startPoint;
+      const v1 = entity.vertices ? entity.vertices[1] : entity.endPoint;
+      if (v0 && v1) {
+        const len = Math.hypot(v1.x - v0.x, v1.y - v0.y, (v1.z || 0) - (v0.z || 0));
+        details.push({ label: 'Başlangıç (X, Y, Z)', value: `${v0.x.toFixed(3)}, ${v0.y.toFixed(3)}, ${(v0.z || 0).toFixed(3)}` });
+        details.push({ label: 'Bitiş (X, Y, Z)', value: `${v1.x.toFixed(3)}, ${v1.y.toFixed(3)}, ${(v1.z || 0).toFixed(3)}` });
+        details.push({ label: 'Uzunluk', value: `${len.toFixed(3)} m` });
+      }
+    } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
+      if (entity.vertices && entity.vertices.length > 0) {
+        let totalLen = 0;
+        for (let i = 0; i < entity.vertices.length - 1; i++) {
+          const vA = entity.vertices[i];
+          const vB = entity.vertices[i + 1];
+          totalLen += Math.hypot(vB.x - vA.x, vB.y - vA.y, (vB.z || 0) - (vA.z || 0));
+        }
+        if (entity.shape || entity.closed) {
+          const vA = entity.vertices[entity.vertices.length - 1];
+          const vB = entity.vertices[0];
+          totalLen += Math.hypot(vB.x - vA.x, vB.y - vA.y, (vB.z || 0) - (vA.z || 0));
+        }
+        details.push({ label: 'Köşe (Nokta) Sayısı', value: `${entity.vertices.length} adet` });
+        details.push({ label: 'Kapalı Geometri (Poligon)', value: (entity.shape || entity.closed) ? 'Evet' : 'Hayır' });
+        details.push({ label: 'Toplam Uzunluk', value: `${totalLen.toFixed(3)} m` });
+      }
+    } else if (entity.type === 'POINT') {
+      const pt = entity.position || (entity.vertices && entity.vertices[0]);
+      if (pt) {
+        details.push({ label: 'Doğu (X)', value: pt.x.toFixed(3) });
+        details.push({ label: 'Kuzey (Y)', value: pt.y.toFixed(3) });
+        details.push({ label: 'Kot / Yükseklik (Z)', value: `${(pt.z || 0).toFixed(3)} m` });
+      }
+    } else if (entity.type === 'CIRCLE') {
+      if (entity.center) {
+        const r = entity.radius || 0;
+        const circ = 2 * Math.PI * r;
+        const area = Math.PI * r * r;
+        details.push({ label: 'Merkez (X, Y, Z)', value: `${entity.center.x.toFixed(3)}, ${entity.center.y.toFixed(3)}, ${(entity.center.z || 0).toFixed(3)}` });
+        details.push({ label: 'Yarıçap (R)', value: `${r.toFixed(3)} m` });
+        details.push({ label: 'Çevre', value: `${circ.toFixed(3)} m` });
+        details.push({ label: 'Alan', value: `${area.toFixed(3)} m²` });
+      }
+    } else if (entity.type === 'ARC') {
+      if (entity.center) {
+        const r = entity.radius || 0;
+        details.push({ label: 'Merkez (X, Y, Z)', value: `${entity.center.x.toFixed(3)}, ${entity.center.y.toFixed(3)}, ${(entity.center.z || 0).toFixed(3)}` });
+        details.push({ label: 'Yarıçap (R)', value: `${r.toFixed(3)} m` });
+        details.push({ label: 'Açı Aralığı', value: `${(entity.startAngle || 0).toFixed(1)}° - ${(entity.endAngle || 0).toFixed(1)}°` });
+      }
+    } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+      const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
+      let cleanText = fixTurkishDxfText(
+        String(entity.text || '')
+          .replace(/\\P/g, ' ')
+          .replace(/\\{[^}]*\}|\LW[a-zA-Z0-9]+;/g, '')
+          .replace(/[\{\}]/g, '')
+          .trim()
+      );
+      details.push({ label: 'Metin / Yazı', value: cleanText || '(Boş)' });
+      details.push({ label: 'Yazı Yüksekliği', value: `${(entity.height || entity.textHeight || 0).toFixed(3)} m` });
+      if (pt) {
+        details.push({ label: 'Konum (X, Y, Z)', value: `${pt.x.toFixed(3)}, ${pt.y.toFixed(3)}, ${(pt.z || 0).toFixed(3)}` });
+      }
+    }
+
+    if (crs !== 'NONE') {
+      const crsItem = CRS_LIST.find(c => c.code === crs);
+      if (crsItem?.def) {
+        try {
+          const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [clickX, clickY]);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            details.push({ label: 'Coğrafi Konum (Enlem, Boylam)', value: `${lat.toFixed(6)}°, ${lon.toFixed(6)}°` });
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    setSelectedEntityInfo({
+      typeLabel: getEntityTypeLabel(entity.type),
+      layer: entity.layer,
+      colorHex,
+      details
+    });
+  };
+
+  const handleCanvasInspectClick = (clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !dxfData) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = clientX - rect.left;
+    const mouseY = clientY - rect.top;
+
+    const width = rect.width;
+    const height = rect.height;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    if (dxfData.entities && dxfData.entities.length > 0) {
+       dxfData.entities.forEach((entity: any) => {
+          const layer = layers.find(l => l.name === entity.layer);
+          if (layer && !layer.visible) return;
+
+          if (entity.vertices) {
+             entity.vertices.forEach((v: any) => {
+                if (v.x < minX) minX = v.x;
+                if (v.y < minY) minY = v.y;
+                if (v.x > maxX) maxX = v.x;
+                if (v.y > maxY) maxY = v.y;
+             });
+          } else if (entity.center && entity.radius) {
+             if (entity.center.x - entity.radius < minX) minX = entity.center.x - entity.radius;
+             if (entity.center.y - entity.radius < minY) minY = entity.center.y - entity.radius;
+             if (entity.center.x + entity.radius > maxX) maxX = entity.center.x + entity.radius;
+             if (entity.center.y + entity.radius > maxY) maxY = entity.center.y + entity.radius;
+          } else if (entity.position) {
+             if (entity.position.x < minX) minX = entity.position.x;
+             if (entity.position.y < minY) minY = entity.position.y;
+             if (entity.position.x > maxX) maxX = entity.position.x;
+             if (entity.position.y > maxY) maxY = entity.position.y;
+          } else if (entity.startPoint && entity.endPoint) {
+             if (entity.startPoint.x < minX) minX = entity.startPoint.x;
+             if (entity.startPoint.y < minY) minY = entity.startPoint.y;
+             if (entity.startPoint.x > maxX) maxX = entity.startPoint.x;
+             if (entity.startPoint.y > maxY) maxY = entity.startPoint.y;
+             if (entity.endPoint.x < minX) minX = entity.endPoint.x;
+             if (entity.endPoint.y < minY) minY = entity.endPoint.y;
+             if (entity.endPoint.x > maxX) maxX = entity.endPoint.x;
+             if (entity.endPoint.y > maxY) maxY = entity.endPoint.y;
+          }
+       });
+    }
+    if (minX === Infinity) { minX = 0; minY = 0; maxX = 100; maxY = 100; }
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    const fitScale = Math.min((width * 0.85) / spanX, (height * 0.85) / spanY) || 1;
+
+    const centerX = width / 2 + pan.x;
+    const centerY = height / 2 + pan.y;
+
+    const clickWorldX = (mouseX - centerX) / (zoom * fitScale) + midX;
+    const clickWorldY = -(mouseY - centerY) / (zoom * fitScale) + midY;
+
+    const maxScreenDist = 20; // 20px threshold
+    let closestEntity: any = null;
+    let minDistScreen = Infinity;
+
+    if (dxfData.entities) {
+      dxfData.entities.forEach((entity: any) => {
+        const layer = layers.find(l => l.name === entity.layer);
+        if (layer && !layer.visible) return;
+
+        let distWorld = Infinity;
+
+        if (entity.type === 'LINE') {
+          const v0 = entity.vertices ? entity.vertices[0] : entity.startPoint;
+          const v1 = entity.vertices ? entity.vertices[1] : entity.endPoint;
+          if (v0 && v1) {
+            distWorld = Math.sqrt(distToSegmentSquared(clickWorldX, clickWorldY, v0.x, v0.y, v1.x, v1.y));
+          }
+        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
+          if (entity.vertices && entity.vertices.length > 0) {
+            for (let i = 0; i < entity.vertices.length - 1; i++) {
+              const v0 = entity.vertices[i];
+              const v1 = entity.vertices[i + 1];
+              const d = Math.sqrt(distToSegmentSquared(clickWorldX, clickWorldY, v0.x, v0.y, v1.x, v1.y));
+              if (d < distWorld) distWorld = d;
+            }
+            if (entity.shape || entity.closed) {
+              const v0 = entity.vertices[entity.vertices.length - 1];
+              const v1 = entity.vertices[0];
+              const d = Math.sqrt(distToSegmentSquared(clickWorldX, clickWorldY, v0.x, v0.y, v1.x, v1.y));
+              if (d < distWorld) distWorld = d;
+            }
+          }
+        } else if (entity.type === 'POINT') {
+          const pt = entity.position || (entity.vertices && entity.vertices[0]);
+          if (pt) {
+            distWorld = Math.hypot(clickWorldX - pt.x, clickWorldY - pt.y);
+          }
+        } else if (entity.type === 'CIRCLE') {
+          if (entity.center) {
+            const r = entity.radius || 0;
+            const dCenter = Math.hypot(clickWorldX - entity.center.x, clickWorldY - entity.center.y);
+            distWorld = Math.abs(dCenter - r);
+          }
+        } else if (entity.type === 'ARC') {
+          if (entity.center) {
+            const r = entity.radius || 0;
+            const dCenter = Math.hypot(clickWorldX - entity.center.x, clickWorldY - entity.center.y);
+            distWorld = Math.abs(dCenter - r);
+          }
+        } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+          const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
+          if (pt) {
+            distWorld = Math.hypot(clickWorldX - pt.x, clickWorldY - pt.y);
+          }
+        }
+
+        const dScreen = distWorld * fitScale * zoom;
+        if (dScreen <= maxScreenDist && dScreen < minDistScreen) {
+          minDistScreen = dScreen;
+          closestEntity = entity;
+        }
+      });
+    }
+
+    if (closestEntity) {
+      setSelectedEntity(closestEntity);
+      buildEntityInfo(closestEntity, clickWorldX, clickWorldY);
+    } else {
+      setSelectedEntity(null);
+      setSelectedEntityInfo(null);
+    }
   };
 
   // Touch pan & pinch zoom handlers
@@ -941,6 +1299,29 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                 </select>
               </div>
 
+              {/* Obje Sorgulama Button */}
+              {isParsed && (
+                <button
+                  onClick={() => {
+                    const nextMode = !isInspectMode;
+                    setIsInspectMode(nextMode);
+                    if (!nextMode) {
+                      setSelectedEntity(null);
+                      setSelectedEntityInfo(null);
+                    }
+                  }}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-sm border cursor-pointer ${
+                    isInspectMode
+                      ? 'bg-amber-500 text-slate-950 border-amber-400 animate-pulse'
+                      : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
+                  }`}
+                  title="Harita üzerindeki objelerin katman, tip ve koordinat bilgilerini sorgulayın"
+                >
+                  <MousePointerClick size={13} />
+                  <span>Obje Sorgula</span>
+                </button>
+              )}
+
               {isParsed && (
                 <button
                   onClick={() => onNavigateToDEMGenerator?.()}
@@ -1021,6 +1402,69 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             {isParsed && basemap !== 'none' && crs === 'NONE' && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-amber-500 text-slate-950 px-3 py-1 rounded-full font-bold text-[11px] shadow-lg flex items-center gap-1.5 pointer-events-none">
                 <span>💡 Uydu altlığının çiziminizle birebir eşleşmesi için sol panelden Koordinat Sistemini (CRS) seçiniz.</span>
+              </div>
+            )}
+
+            {/* Obje Sorgulama Bilgi Paneli / Overlay Card */}
+            {isInspectMode && (
+              <div className="absolute top-3 left-3 z-30 max-w-xs w-80 bg-white/95 backdrop-blur-md border border-slate-300 rounded-2xl shadow-xl overflow-hidden text-xs">
+                {/* Header */}
+                <div className="bg-slate-900 text-white px-3 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <Search size={13} className="text-amber-400" />
+                    <span>Obje Sorgulama</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setIsInspectMode(false);
+                      setSelectedEntity(null);
+                      setSelectedEntityInfo(null);
+                    }}
+                    className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    title="Kapat"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+
+                {/* Content */}
+                <div className="p-3 space-y-2.5 max-h-80 overflow-y-auto custom-scrollbar">
+                  {!selectedEntityInfo ? (
+                    <div className="text-slate-600 text-[11px] leading-relaxed flex items-start gap-2 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
+                      <Info size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                      <span>Ekranda bilgilerini görmek istediğiniz bir obje (çizgi, nokta, polyline, yazı vb.) üzerine tıklayınız.</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between p-2 rounded-xl bg-slate-100 border border-slate-200">
+                        <span className="font-bold text-slate-900 text-xs">{selectedEntityInfo.typeLabel}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3.5 h-3.5 rounded-full border border-slate-400 shadow-xs shrink-0" style={{ backgroundColor: selectedEntityInfo.colorHex }} />
+                          <span className="text-[10px] font-mono text-slate-700 font-bold">{selectedEntityInfo.layer}</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 divide-y divide-slate-100">
+                        {selectedEntityInfo.details.map((item, i) => (
+                          <div key={i} className="pt-1.5 first:pt-0 flex items-start justify-between gap-2">
+                            <span className="text-slate-500 font-medium text-[11px] shrink-0">{item.label}:</span>
+                            <span className="text-slate-900 font-semibold text-right text-[11px] break-all font-mono">{item.value}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setSelectedEntity(null);
+                          setSelectedEntityInfo(null);
+                        }}
+                        className="w-full mt-2 py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] rounded-xl border border-slate-300 transition-colors cursor-pointer"
+                      >
+                        Sorguyu Temizle
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
