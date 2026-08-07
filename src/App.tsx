@@ -140,6 +140,9 @@ export default function App() {
   const [selectedCRS, setSelectedCRS] = useState(CRS_LIST[0]);
   const [isSimulating, setIsSimulating] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [isDemLoading, setIsDemLoading] = useState(false);
+  const [demUploadProgress, setDemUploadProgress] = useState(0);
+  const [demLoadingStatus, setDemLoadingStatus] = useState('');
   const [waterDepth, setWaterDepth] = useState<Float32Array | null>(null);
   const [outflowType, setOutflowType] = useState<'free' | 'normal'>('free');
   const [showStats, setShowStats] = useState(false);
@@ -764,23 +767,59 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.name.endsWith('.tif') || file.name.endsWith('.tiff')) {
-      handleGeoTIFF(file);
-    } else {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const text = event.target?.result as string;
-        parseASCII(text);
-      };
-      reader.readAsText(file);
+    setIsDemLoading(true);
+    setDemUploadProgress(5);
+    setDemLoadingStatus('Dosya okunuyor...');
+    await new Promise(r => setTimeout(r, 20));
+
+    try {
+      if (file.name.endsWith('.tif') || file.name.endsWith('.tiff')) {
+        await handleGeoTIFF(file);
+      } else {
+        const reader = new FileReader();
+        reader.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const pct = Math.round((evt.loaded / evt.total) * 35) + 5;
+            setDemUploadProgress(pct);
+          }
+        };
+        reader.onload = async (event) => {
+          const text = event.target?.result as string;
+          await parseASCII(text);
+        };
+        reader.onerror = () => {
+          setIsDemLoading(false);
+          setDemUploadProgress(0);
+          alert("Dosya okunamadı.");
+        };
+        reader.readAsText(file);
+      }
+    } catch (err) {
+      console.error("DEM upload error:", err);
+      setIsDemLoading(false);
+      setDemUploadProgress(0);
     }
   };
 
   const handleGeoTIFF = async (file: File) => {
     try {
+      setDemUploadProgress(15);
+      setDemLoadingStatus('GeoTIFF tamponu (buffer) okunuyor...');
+      await new Promise(r => setTimeout(r, 10));
+
       const arrayBuffer = await file.arrayBuffer();
+      
+      setDemUploadProgress(30);
+      setDemLoadingStatus('TIFF görüntüsü ayrıştırılıyor...');
+      await new Promise(r => setTimeout(r, 10));
+
       const tiff = await GeoTIFF.fromArrayBuffer(arrayBuffer);
       const image = await tiff.getImage();
+      
+      setDemUploadProgress(45);
+      setDemLoadingStatus('Raster piksel matrisi çıkarılıyor...');
+      await new Promise(r => setTimeout(r, 10));
+
       const rasters = await image.readRasters();
       const data = rasters[0] as any;
       
@@ -812,6 +851,10 @@ export default function App() {
         yll = origin ? origin[1] - (height * cellSize) : coords.lat;
       }
       
+      setDemUploadProgress(65);
+      setDemLoadingStatus('Yükseklik değerleri ve NoData taranıyor...');
+      await new Promise(r => setTimeout(r, 10));
+
       const noDataVal = image.getGDALNoData() ?? -9999;
       let min = Infinity, max = -Infinity;
       let validSum = 0, validCount = 0;
@@ -834,6 +877,10 @@ export default function App() {
         max = 1;
       }
 
+      setDemUploadProgress(80);
+      setDemLoadingStatus('Eğim (Slope) matrisi hesaplanıyor...');
+      await new Promise(r => setTimeout(r, 10));
+
       const slopeInfo = calculateSlope(floatData, width, height, cellSize, yll);
       
       // Start flow accumulation calculation in background
@@ -850,6 +897,10 @@ export default function App() {
         height,
         params: { cellSize }
       });
+
+      setDemUploadProgress(95);
+      setDemLoadingStatus('Topografya haritaya yükleniyor...');
+      await new Promise(r => setTimeout(r, 10));
 
       setDem({
         data: floatData,
@@ -879,121 +930,160 @@ export default function App() {
       });
 
       setParams(prev => ({ ...prev, sourceX: Math.floor(width / 2), sourceY: Math.floor(height / 2) }));
+
+      setDemUploadProgress(100);
+      setDemLoadingStatus('Tamamlandı');
+      await new Promise(r => setTimeout(r, 200));
+      setIsDemLoading(false);
     } catch (err) {
       console.error("GeoTIFF parsing error:", err);
+      setIsDemLoading(false);
+      setDemUploadProgress(0);
       alert("GeoTIFF dosyası işlenirken hata oluştu.");
     }
   };
 
-  const parseASCII = (text: string) => {
-    const lines = text.split('\n');
-    let width = 0, height = 0, xll = 0, yll = 0, cellSize = 0, nodata = -9999;
-    let dataStartLine = 0;
+  const parseASCII = async (text: string) => {
+    try {
+      setDemUploadProgress(40);
+      setDemLoadingStatus('ASCII verisi satırlara ayrılıyor...');
+      await new Promise(r => setTimeout(r, 10));
 
-    for (let i = 0; i < 10; i++) {
-      if (!lines[i]) continue;
-      const parts = lines[i].trim().split(/\s+/);
-      const key = parts[0].toLowerCase();
-      const val = parseFloat(parts[1]);
+      const lines = text.split('\n');
+      let width = 0, height = 0, xll = 0, yll = 0, cellSize = 0, nodata = -9999;
+      let dataStartLine = 0;
 
-      if (key === 'ncols') width = val;
-      else if (key === 'nrows') height = val;
-      else if (key === 'cellsize') cellSize = val;
-      else if (key === 'nodata_value') nodata = val;
-      else if (key === 'xllcorner') xll = val;
-      else if (key === 'yllcorner') yll = val;
-      else if (key === 'xllcenter') xll = val - (cellSize > 0 ? 0.5 * cellSize : 0);
-      else if (key === 'yllcenter') yll = val - (cellSize > 0 ? 0.5 * cellSize : 0);
-      
-      if (!isNaN(val) && i > 0 && !['ncols', 'nrows', 'xllcorner', 'yllcorner', 'xllcenter', 'yllcenter', 'cellsize', 'nodata_value'].includes(key)) {
-        dataStartLine = i;
-        break;
+      for (let i = 0; i < 10; i++) {
+        if (!lines[i]) continue;
+        const parts = lines[i].trim().split(/\s+/);
+        const key = parts[0].toLowerCase();
+        const val = parseFloat(parts[1]);
+
+        if (key === 'ncols') width = val;
+        else if (key === 'nrows') height = val;
+        else if (key === 'cellsize') cellSize = val;
+        else if (key === 'nodata_value') nodata = val;
+        else if (key === 'xllcorner') xll = val;
+        else if (key === 'yllcorner') yll = val;
+        else if (key === 'xllcenter') xll = val - (cellSize > 0 ? 0.5 * cellSize : 0);
+        else if (key === 'yllcenter') yll = val - (cellSize > 0 ? 0.5 * cellSize : 0);
+        
+        if (!isNaN(val) && i > 0 && !['ncols', 'nrows', 'xllcorner', 'yllcorner', 'xllcenter', 'yllcenter', 'cellsize', 'nodata_value'].includes(key)) {
+          dataStartLine = i;
+          break;
+        }
+        if (i === 5) dataStartLine = 6;
       }
-      if (i === 5) dataStartLine = 6;
-    }
 
-    const data = new Float32Array(width * height);
-    let min = Infinity, max = -Infinity;
-    let validSum = 0, validCount = 0;
+      setDemUploadProgress(55);
+      setDemLoadingStatus('Sayısal piksel matrisi oluşturuluyor...');
+      await new Promise(r => setTimeout(r, 10));
 
-    // First pass: find min/max and identify NoData
-    for (let i = dataStartLine; i < lines.length; i++) {
-      const rowValues = lines[i].trim().split(/\s+/);
-      for (const valStr of rowValues) {
-        if (valStr === '') continue;
-        const val = parseFloat(valStr);
-        if (val !== nodata && !isNaN(val) && val > -9000) {
-          if (val < min) min = val;
-          if (val > max) max = val;
+      const data = new Float32Array(width * height);
+      let min = Infinity, max = -Infinity;
+      let validSum = 0, validCount = 0;
+
+      // First pass: find min/max and identify NoData
+      for (let i = dataStartLine; i < lines.length; i++) {
+        const rowValues = lines[i].trim().split(/\s+/);
+        for (const valStr of rowValues) {
+          if (valStr === '') continue;
+          const val = parseFloat(valStr);
+          if (val !== nodata && !isNaN(val) && val > -9000) {
+            if (val < min) min = val;
+            if (val > max) max = val;
+          }
         }
       }
-    }
 
-    if (min === Infinity) {
-      min = 0;
-      max = 1;
-    }
+      if (min === Infinity) {
+        min = 0;
+        max = 1;
+      }
 
-    // Second pass: fill data, marking NoData as NaN
-    let currentIdx = 0;
-    for (let i = dataStartLine; i < lines.length; i++) {
-      const rowValues = lines[i].trim().split(/\s+/);
-      for (const valStr of rowValues) {
-        if (valStr === '') continue;
-        const val = parseFloat(valStr);
-        if (val !== nodata && !isNaN(val) && val > -9000) {
-          data[currentIdx] = val;
-          validSum += val;
-          validCount++;
-        } else {
-          data[currentIdx] = NaN;
+      setDemUploadProgress(70);
+      setDemLoadingStatus('Yükseklik değerleri dolduruluyor...');
+      await new Promise(r => setTimeout(r, 10));
+
+      // Second pass: fill data, marking NoData as NaN
+      let currentIdx = 0;
+      for (let i = dataStartLine; i < lines.length; i++) {
+        const rowValues = lines[i].trim().split(/\s+/);
+        for (const valStr of rowValues) {
+          if (valStr === '') continue;
+          const val = parseFloat(valStr);
+          if (val !== nodata && !isNaN(val) && val > -9000) {
+            data[currentIdx] = val;
+            validSum += val;
+            validCount++;
+          } else {
+            data[currentIdx] = NaN;
+          }
+          currentIdx++;
+          if (currentIdx >= width * height) break;
         }
-        currentIdx++;
         if (currentIdx >= width * height) break;
       }
-      if (currentIdx >= width * height) break;
+
+      setDemUploadProgress(85);
+      setDemLoadingStatus('Eğim analizi yapılıyor...');
+      await new Promise(r => setTimeout(r, 10));
+
+      const slopeInfo = calculateSlope(data, width, height, cellSize, yll);
+      
+      // Start flow accumulation calculation in background
+      const flowWorker = new Worker(new URL('./workers/flow-accumulation-worker.ts', import.meta.url), { type: 'module' });
+      flowWorker.onmessage = (e) => {
+        if (e.data.accumulation) {
+          setFlowAcc(e.data.accumulation);
+          flowWorker.terminate();
+        }
+      };
+      flowWorker.postMessage({
+        dem: data,
+        width,
+        height,
+        params: { cellSize }
+      });
+
+      setDemUploadProgress(95);
+      setDemLoadingStatus('Veriler haritaya yükleniyor...');
+      await new Promise(r => setTimeout(r, 10));
+
+      setDem({
+        data,
+        slope: slopeInfo.data,
+        width,
+        height,
+        min,
+        max,
+        xll,
+        yll,
+        cellSize
+      });
+
+      setValidationReport({
+        minHeight: min,
+        maxHeight: max,
+        avgHeight: validCount > 0 ? validSum / validCount : 0,
+        maxSlope: slopeInfo.maxSlope,
+        avgSlope: slopeInfo.avgSlope,
+        isValid: max > min && cellSize > 0
+      });
+
+      setCoords({ lat: yll, lon: xll, cellSize });
+      setParams(prev => ({ ...prev, sourceX: Math.floor(width / 2), sourceY: Math.floor(height / 2) }));
+
+      setDemUploadProgress(100);
+      setDemLoadingStatus('Tamamlandı');
+      await new Promise(r => setTimeout(r, 200));
+      setIsDemLoading(false);
+    } catch (err) {
+      console.error("ASCII parsing error:", err);
+      setIsDemLoading(false);
+      setDemUploadProgress(0);
+      alert("ASCII dosyası işlenirken hata oluştu.");
     }
-
-    const slopeInfo = calculateSlope(data, width, height, cellSize, yll);
-    
-    // Start flow accumulation calculation in background
-    const flowWorker = new Worker(new URL('./workers/flow-accumulation-worker.ts', import.meta.url), { type: 'module' });
-    flowWorker.onmessage = (e) => {
-      if (e.data.accumulation) {
-        setFlowAcc(e.data.accumulation);
-        flowWorker.terminate();
-      }
-    };
-    flowWorker.postMessage({
-      dem: data,
-      width,
-      height,
-      params: { cellSize }
-    });
-
-    setDem({
-      data,
-      slope: slopeInfo.data,
-      width,
-      height,
-      min,
-      max,
-      xll,
-      yll,
-      cellSize
-    });
-
-    setValidationReport({
-      minHeight: min,
-      maxHeight: max,
-      avgHeight: validCount > 0 ? validSum / validCount : 0,
-      maxSlope: slopeInfo.maxSlope,
-      avgSlope: slopeInfo.avgSlope,
-      isValid: max > min && cellSize > 0
-    });
-
-    setCoords({ lat: yll, lon: xll, cellSize });
-    setParams(prev => ({ ...prev, sourceX: Math.floor(width / 2), sourceY: Math.floor(height / 2) }));
   };
 
   const startSimulation = () => {
@@ -1590,7 +1680,8 @@ ${floodPolygons.join('\n')}
                 viewMode, setViewMode, flowAcc, setFlowAcc, riverKml, setRiverKml, sourceKmlName, setSourceKmlName,
                 sourceWgs, setSourceWgs, areaKml, setAreaKml, areaMask, setAreaMask, stats, wgs84Bounds, demBoundaryWgs,
                 startSimulation, handleKmlUpload, handleSourceKmlUpload, handleAreaKmlUpload, handleMapClick,
-                exportToKml, handleDemUpload, CRS_LIST, MANNING_PRESETS, workerRef
+                exportToKml, handleDemUpload, CRS_LIST, MANNING_PRESETS, workerRef,
+                isDemLoading, demUploadProgress, demLoadingStatus
               }}
             />
           )}

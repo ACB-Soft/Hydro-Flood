@@ -86,6 +86,9 @@ interface AnalysisProps {
   CRS_LIST: any[];
   MANNING_PRESETS: any[];
   workerRef: React.MutableRefObject<Worker | null>;
+  isDemLoading?: boolean;
+  demUploadProgress?: number;
+  demLoadingStatus?: string;
 }
 
 const BASEMAP_OPTIONS = [
@@ -103,7 +106,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
     elevationImage, reliefImage, riverKml, sourceKmlName,
     sourceWgs, areaKml, stats, wgs84Bounds, demBoundaryWgs, startSimulation, handleSourceKmlUpload,
     handleAreaKmlUpload, handleMapClick, exportToKml, handleDemUpload, CRS_LIST,
-    setShowStats
+    setShowStats, isDemLoading = false, demUploadProgress = 0, demLoadingStatus = ''
   } = props;
 
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
@@ -424,7 +427,23 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                 {/* DEM File Selector */}
                 <div>
                   <label className="text-[10px] font-bold text-slate-700 block mb-1">Topografya Dosyası (DEM):</label>
-                  {dem ? (
+                  {isDemLoading ? (
+                    <div className="bg-cyan-50 border border-cyan-300 p-2.5 rounded-xl space-y-1.5 shadow-sm">
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-900">
+                        <div className="flex items-center gap-1.5 overflow-hidden">
+                          <RefreshCw size={13} className="animate-spin text-cyan-700 shrink-0" />
+                          <span className="text-[11px] text-slate-800 truncate">{demLoadingStatus || "Ayrıştırılıyor..."}</span>
+                        </div>
+                        <span className="font-mono text-[11px] text-cyan-800 font-extrabold shrink-0 pl-1.5">%{Math.round(demUploadProgress)}</span>
+                      </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden border border-slate-300">
+                        <div 
+                          className="bg-gradient-to-r from-cyan-600 to-emerald-500 h-full transition-all duration-150 rounded-full"
+                          style={{ width: `${Math.min(100, Math.max(0, demUploadProgress))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : dem ? (
                     <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex items-center justify-between gap-2">
                       <div className="space-y-0.5 overflow-hidden">
                         <div className="flex items-center gap-1.5">
@@ -692,27 +711,51 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                           backgroundSize: `24px 24px`
                         }} 
                       />
-                      <div className="w-14 h-14 rounded-2xl bg-white border border-slate-300 flex items-center justify-center text-slate-500 shadow-sm z-10">
-                        <FileCode size={28} className="text-cyan-700" />
-                      </div>
-                      <div className="space-y-1.5 max-w-sm z-10">
-                        <h3 className="text-sm font-bold text-slate-900">2D CAD / CBS Görüntüleyici Hazır</h3>
-                        <p className="text-xs text-slate-600 leading-relaxed">
-                          {dem ? (
-                            <>Topografya (DEM) verisi seçildi. Haritayı ve simülasyon alanını ekrana yüklemek için sol paneldeki veya aşağıdaki <strong className="text-slate-900 font-bold">'Dosyayı Aç'</strong> butonuna basınız.</>
-                          ) : (
-                            <>Sol taraftaki panelden bir topografya (DEM) dosyası seçip <strong className="text-slate-900 font-bold">'Dosyayı Aç'</strong> butonuna basarak haritanızı ekrana yükleyebilirsiniz.</>
+                      
+                      {isDemLoading ? (
+                        <div className="bg-white/95 backdrop-blur-md p-6 rounded-2xl border border-slate-300 shadow-2xl max-w-sm space-y-3.5 z-10 w-full animate-in fade-in zoom-in-95 duration-200">
+                          <div className="w-12 h-12 rounded-xl bg-cyan-100 text-cyan-800 flex items-center justify-center mx-auto shadow-inner">
+                            <RefreshCw size={24} className="animate-spin text-cyan-700" />
+                          </div>
+                          <div className="space-y-1">
+                            <h4 className="font-bold text-slate-900 text-sm">Topografya Dosyası Okunuyor</h4>
+                            <p className="text-slate-600 text-xs font-medium">{demLoadingStatus || 'Lütfen bekleyiniz...'}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden border border-slate-300">
+                              <div 
+                                className="bg-gradient-to-r from-cyan-600 to-emerald-500 h-full transition-all duration-200 rounded-full"
+                                style={{ width: `${Math.min(100, Math.max(0, demUploadProgress))}%` }}
+                              />
+                            </div>
+                            <div className="text-right font-mono text-xs font-extrabold text-cyan-800">%{Math.round(demUploadProgress)}</div>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="w-14 h-14 rounded-2xl bg-white border border-slate-300 flex items-center justify-center text-slate-500 shadow-sm z-10">
+                            <FileCode size={28} className="text-cyan-700" />
+                          </div>
+                          <div className="space-y-1.5 max-w-sm z-10">
+                            <h3 className="text-sm font-bold text-slate-900">2D CAD / CBS Görüntüleyici Hazır</h3>
+                            <p className="text-xs text-slate-600 leading-relaxed">
+                              {dem ? (
+                                <>Topografya (DEM) verisi seçildi. Haritayı ve simülasyon alanını ekrana yüklemek için sol paneldeki veya aşağıdaki <strong className="text-slate-900 font-bold">'Dosyayı Aç'</strong> butonuna basınız.</>
+                              ) : (
+                                <>Sol taraftaki panelden bir topografya (DEM) dosyası seçip <strong className="text-slate-900 font-bold">'Dosyayı Aç'</strong> butonuna basarak haritanızı ekrana yükleyebilirsiniz.</>
+                              )}
+                            </p>
+                          </div>
+                          {dem && (
+                            <button
+                              onClick={() => setIsFileOpened(true)}
+                              className="z-10 mt-1 py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer"
+                            >
+                              <Eye size={15} />
+                              <span>Dosyayı Aç (Haritada Göster)</span>
+                            </button>
                           )}
-                        </p>
-                      </div>
-                      {dem && (
-                        <button
-                          onClick={() => setIsFileOpened(true)}
-                          className="z-10 mt-1 py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer"
-                        >
-                          <Eye size={15} />
-                          <span>Dosyayı Aç (Haritada Göster)</span>
-                        </button>
+                        </>
                       )}
                     </div>
                   ) : (
@@ -764,9 +807,8 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       {/* Bottom Status Bar inside Map */}
                       <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
                         <div className="flex items-center gap-3 text-[10px]">
-                          <span><strong className="text-cyan-400">Grid:</strong> X: {params.sourceX}, Y: {params.sourceY}</span>
                           {sourceWgs && (
-                            <span><strong className="text-emerald-400">Coğrafi:</strong> {sourceWgs[0].toFixed(4)}°, {sourceWgs[1].toFixed(4)}°</span>
+                            <span><strong className="text-emerald-400">Coğrafi Koordinat:</strong> {sourceWgs[0].toFixed(5)}°, {sourceWgs[1].toFixed(5)}°</span>
                           )}
                         </div>
                         {areaKml && (
