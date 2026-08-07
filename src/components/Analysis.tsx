@@ -451,7 +451,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       <span className="px-2 py-0.5 bg-cyan-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
                         Gözat
                       </span>
-                      <input type="file" accept=".tif,.tiff,.asc" onChange={handleDemUpload} className="hidden" />
+                      <input type="file" accept=".tif,.tiff,.asc" onChange={(e) => { handleDemUpload(e); setIsFileOpened(false); }} className="hidden" />
                     </label>
                   )}
                 </div>
@@ -694,14 +694,14 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       maxZoom={24}
                       maxNativeZoom={20}
                     />
-                    {elevationImage && wgs84Bounds && (
+                    {elevationImage && wgs84Bounds && isFileOpened && (
                       <ImageOverlay url={elevationImage} bounds={wgs84Bounds} opacity={0.85} />
                     )}
                     <MapClickHandler onMapClick={handleMapClick} />
                     {riverKml && <Polyline positions={riverKml.coords} color="#3b82f6" weight={3.5} opacity={0.9} />}
                     {areaKml ? (
                       <Polygon positions={areaKml.coords} color="#10b981" weight={2.5} fillOpacity={0.25} />
-                    ) : demBoundaryWgs && demBoundaryWgs.length > 0 ? (
+                    ) : (demBoundaryWgs && demBoundaryWgs.length > 0 && isFileOpened) ? (
                       demBoundaryWgs.map((loop, idx) => (
                         <Polygon key={idx} positions={loop.map(([lon, lat]) => [lat, lon])} color="#10b981" weight={2.5} fillOpacity={0.2} />
                       ))
@@ -714,10 +714,9 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                         color="white" 
                         weight={2} 
                         fillOpacity={1} 
-                        
                       />
                     )}
-                    {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
+                    {wgs84Bounds && isFileOpened && <MapAutoCenter bounds={wgs84Bounds} />}
                   </MapContainer>
 
                   {/* Top Notification Banner inside Map */}
@@ -725,6 +724,30 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     <MapPin className="text-cyan-400 shrink-0" size={13} />
                     <span>Haritaya tıklayarak su kaynak noktasını değiştirebilirsiniz</span>
                   </div>
+
+                  {/* Top Inactive DEM Prompt Overlay if DEM selected but isFileOpened is false */}
+                  {!isFileOpened && dem && (
+                    <div className="absolute inset-0 z-[450] bg-slate-950/50 backdrop-blur-[2px] flex flex-col items-center justify-center p-4 text-center pointer-events-auto">
+                      <div className="bg-white/95 backdrop-blur-md p-4 sm:p-5 rounded-2xl border border-slate-300 shadow-2xl max-w-sm space-y-3">
+                        <div className="w-10 h-10 rounded-xl bg-cyan-100 text-cyan-800 flex items-center justify-center mx-auto">
+                          <Eye size={22} />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-slate-900 text-sm">Topografya Önizlemesi Kapalı</h4>
+                          <p className="text-slate-600 text-xs mt-1 leading-relaxed">
+                            Yüklenen DEM verisini ve yükseklik modelini haritaya yüklemek için sol paneldeki veya aşağıdaki <strong>'Dosyayı Aç'</strong> butonuna basınız.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setIsFileOpened(true)}
+                          className="w-full py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                        >
+                          <Eye size={15} />
+                          <span>Dosyayı Aç (Haritada Göster)</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Bottom Status Bar inside Map */}
                   <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
