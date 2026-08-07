@@ -11,7 +11,7 @@ import {
   generateTINDEM, 
   renderDEMToCanvas, 
   exportDEMToASC, 
-  exportDEMToCSV, 
+  exportDEMToGeoTIFF, 
   DEMResult 
 } from '../utils/demGenerator';
 import { parseDXFBuffer } from '../utils/dxfUtils';
@@ -35,12 +35,12 @@ interface DEMGeneratorProps {
 }
 
 const CELL_SIZES = [
-  { value: 0.5, label: '0.5m (Çok Yüksek)' },
-  { value: 1.0, label: '1.0m (Standart)' },
-  { value: 2.0, label: '2.0m (Önerilen)' },
-  { value: 3.0, label: '3.0m (Orta)' },
-  { value: 4.0, label: '4.0m (Hızlı)' },
-  { value: 5.0, label: '5.0m (Genel)' },
+  { value: 0.5, label: '0.5m', desc: 'Çok Yüksek' },
+  { value: 1.0, label: '1.0m', desc: 'Yüksek Detay' },
+  { value: 2.0, label: '2.0m', desc: 'Önerilen' },
+  { value: 3.0, label: '3.0m', desc: 'Orta' },
+  { value: 4.0, label: '4.0m', desc: 'Hızlı' },
+  { value: 5.0, label: '5.0m', desc: 'Genel' },
 ];
 
 const CRS_LIST = [
@@ -585,23 +585,23 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
               4. Grid Çözünürlüğü (Cell Size)
             </label>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5">
               {CELL_SIZES.map((cs) => (
                 <button
                   key={cs.value}
                   onClick={() => setCellSize(cs.value)}
-                  className={`p-2 rounded-xl border text-left transition-all ${
+                  className={`p-1.5 sm:p-2 rounded-xl border text-center transition-all cursor-pointer ${
                     cellSize === cs.value
-                      ? 'bg-cyan-100 border-cyan-500 text-cyan-900 font-bold shadow-sm'
+                      ? 'bg-cyan-100 border-cyan-600 text-cyan-900 font-bold shadow-sm'
                       : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <div className="text-xs font-bold flex items-center justify-between">
+                  <div className="text-xs font-bold flex items-center justify-center gap-1">
                     <span>{cs.value}m</span>
-                    {cellSize === cs.value && <div className="w-1.5 h-1.5 rounded-full bg-cyan-700" />}
+                    {cellSize === cs.value && <div className="w-1.5 h-1.5 rounded-full bg-cyan-700 shrink-0" />}
                   </div>
                   <div className="text-[9px] text-slate-500 truncate mt-0.5">
-                    {cs.label.split('(')[1]?.replace(')', '') || ''}
+                    {cs.desc}
                   </div>
                 </button>
               ))}
@@ -793,11 +793,12 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                   </button>
 
                   <button
-                    onClick={() => exportDEMToCSV(demResult, `DEM_points_${cellSize}m.csv`)}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                    onClick={() => exportDEMToGeoTIFF(demResult, `DEM_${cellSize}m.tif`)}
+                    className="px-3 py-1.5 bg-cyan-800 hover:bg-cyan-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                    title="GeoTIFF Coğrafi Raster Formatı (.tif)"
                   >
-                    <BarChart2 size={13} />
-                    <span>CSV Noktaları</span>
+                    <Download size={13} />
+                    <span>GeoTIFF (.tif) İndir</span>
                   </button>
 
                   <button

@@ -387,23 +387,93 @@ export function exportDEMToASC(dem: DEMResult, filename = 'dem_export.asc') {
 }
 
 /**
- * Export DEM as CSV (X, Y, Elevation)
+ * Export DEM as 32-bit Floating Point GeoTIFF (.tif)
  */
-export function exportDEMToCSV(dem: DEMResult, filename = 'dem_points.csv') {
-  const lines: string[] = ['X,Y,Elevation'];
+export function exportDEMToGeoTIFF(dem: DEMResult, filename = 'dem_export.tif') {
+  const { cols, rows, cellSize, minX, minY, grid } = dem;
+  const rasterByteLength = cols * rows * 4;
 
-  for (let r = 0; r < dem.rows; r++) {
-    const py = dem.minY + (r + 0.5) * dem.cellSize;
-    for (let c = 0; c < dem.cols; c++) {
-      const px = dem.minX + (c + 0.5) * dem.cellSize;
-      const z = dem.grid[r * dem.cols + c];
-      if (!isNaN(z)) {
-        lines.push(`${px.toFixed(3)},${py.toFixed(3)},${z.toFixed(2)}`);
-      }
+  const pixelScaleOffset = 176;
+  const tiepointOffset = 200;
+  const nodataOffset = 248;
+  const rasterDataOffset = 256;
+
+  const totalFileLength = rasterDataOffset + rasterByteLength;
+  const buffer = new ArrayBuffer(totalFileLength);
+  const view = new DataView(buffer);
+
+  // 1. TIFF Header
+  view.setUint16(0, 0x4949, false); // Little-Endian "II"
+  view.setUint16(2, 42, true);      // TIFF Magic Number
+  view.setUint32(4, 8, true);       // Offset of First IFD = 8
+
+  // 2. IFD Tag Directory
+  let offset = 8;
+  const tagCount = 13;
+  view.setUint16(offset, tagCount, true);
+  offset += 2;
+
+  const writeTag = (tagId: number, type: number, count: number, valueOrOffset: number) => {
+    view.setUint16(offset, tagId, true);
+    view.setUint16(offset + 2, type, true);
+    view.setUint32(offset + 4, count, true);
+    view.setUint32(offset + 8, valueOrOffset, true);
+    offset += 12;
+  };
+
+  // Sorted IFD Tags
+  writeTag(256, 4, 1, cols);                        // ImageWidth (LONG)
+  writeTag(257, 4, 1, rows);                        // ImageLength (LONG)
+  writeTag(258, 3, 1, 32);                          // BitsPerSample (SHORT)
+  writeTag(259, 3, 1, 1);                           // Compression: None (SHORT)
+  writeTag(262, 3, 1, 1);                           // PhotometricInterpretation: BlackIsZero (SHORT)
+  writeTag(273, 4, 1, rasterDataOffset);            // StripOffsets (LONG)
+  writeTag(277, 3, 1, 1);                           // SamplesPerPixel (SHORT)
+  writeTag(278, 4, 1, rows);                        // RowsPerStrip (LONG)
+  writeTag(279, 4, 1, rasterByteLength);            // StripByteCounts (LONG)
+  writeTag(339, 3, 1, 3);                           // SampleFormat: IEEE Floating Point (SHORT)
+  writeTag(33550, 12, 3, pixelScaleOffset);         // ModelPixelScaleTag (DOUBLE)
+  writeTag(33922, 12, 6, tiepointOffset);           // ModelTiepointTag (DOUBLE)
+  writeTag(42113, 2, 7, nodataOffset);              // GDAL_NODATA ASCII string (ASCII)
+
+  // End of IFD marker
+  view.setUint32(offset, 0, true);
+
+  // 3. Values Extra Buffers
+  // ModelPixelScaleTag: [scaleX, scaleY, scaleZ]
+  view.setFloat64(pixelScaleOffset, cellSize, true);
+  view.setFloat64(pixelScaleOffset + 8, cellSize, true);
+  view.setFloat64(pixelScaleOffset + 16, 0.0, true);
+
+  // ModelTiepointTag: [I, J, K, X, Y, Z]
+  const maxY = minY + rows * cellSize;
+  view.setFloat64(tiepointOffset, 0.0, true);
+  view.setFloat64(tiepointOffset + 8, 0.0, true);
+  view.setFloat64(tiepointOffset + 16, 0.0, true);
+  view.setFloat64(tiepointOffset + 24, minX, true);
+  view.setFloat64(tiepointOffset + 32, maxY, true);
+  view.setFloat64(tiepointOffset + 40, 0.0, true);
+
+  // GDAL_NODATA string: "-9999\0"
+  const nodataStr = "-9999\0";
+  for (let i = 0; i < nodataStr.length; i++) {
+    view.setUint8(nodataOffset + i, nodataStr.charCodeAt(i));
+  }
+
+  // 4. Write Raster Float32 Array
+  let pixelOffset = rasterDataOffset;
+  for (let tr = 0; tr < rows; tr++) {
+    const mapR = rows - 1 - tr; // Invert row index for map Y orientation
+    for (let c = 0; c < cols; c++) {
+      const val = grid[mapR * cols + c];
+      const floatVal = isNaN(val) ? -9999.0 : val;
+      view.setFloat32(pixelOffset, floatVal, true);
+      pixelOffset += 4;
     }
   }
 
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  // 5. Trigger Browser File Download
+  const blob = new Blob([buffer], { type: 'image/tiff' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
