@@ -19,7 +19,8 @@ import {
   Compass,
   Layers,
   ChevronDown,
-  Eye
+  Eye,
+  FileCode
 } from 'lucide-react';
 import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon } from 'react-leaflet';
 import { MapAutoCenter, MapClickHandler } from './MapHelpers';
@@ -681,88 +682,101 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
 
                 {/* Map View */}
                 <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner">
-                  <MapContainer 
-                    center={[sourceWgs ? sourceWgs[0] : coords.lat, sourceWgs ? sourceWgs[1] : coords.lon]} 
-                    zoom={13} 
-                    maxZoom={24}
-                    className="w-full h-full"
-                  >
-                    <TileLayer
-                      key={currentBasemap.id}
-                      url={currentBasemap.url}
-                      attribution={currentBasemap.attribution}
-                      maxZoom={24}
-                      maxNativeZoom={20}
-                    />
-                    {elevationImage && wgs84Bounds && isFileOpened && (
-                      <ImageOverlay url={elevationImage} bounds={wgs84Bounds} opacity={0.85} />
-                    )}
-                    <MapClickHandler onMapClick={handleMapClick} />
-                    {riverKml && <Polyline positions={riverKml.coords} color="#3b82f6" weight={3.5} opacity={0.9} />}
-                    {areaKml ? (
-                      <Polygon positions={areaKml.coords} color="#10b981" weight={2.5} fillOpacity={0.25} />
-                    ) : (demBoundaryWgs && demBoundaryWgs.length > 0 && isFileOpened) ? (
-                      demBoundaryWgs.map((loop, idx) => (
-                        <Polygon key={idx} positions={loop.map(([lon, lat]) => [lat, lon])} color="#10b981" weight={2.5} fillOpacity={0.2} />
-                      ))
-                    ) : null}
-                    {sourceWgs && (
-                      <CircleMarker 
-                        center={sourceWgs} 
-                        radius={8} 
-                        fillColor="#06b6d4" 
-                        color="white" 
-                        weight={2} 
-                        fillOpacity={1} 
+                  {!isFileOpened ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-3.5 p-6 text-center bg-slate-100 relative select-none">
+                      {/* Grid / Blueprint Background Effect */}
+                      <div 
+                        className="absolute inset-0 opacity-[0.04] pointer-events-none" 
+                        style={{ 
+                          backgroundImage: `linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px)`,
+                          backgroundSize: `24px 24px`
+                        }} 
                       />
-                    )}
-                    {wgs84Bounds && isFileOpened && <MapAutoCenter bounds={wgs84Bounds} />}
-                  </MapContainer>
-
-                  {/* Top Notification Banner inside Map */}
-                  <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
-                    <MapPin className="text-cyan-400 shrink-0" size={13} />
-                    <span>Haritaya tıklayarak su kaynak noktasını değiştirebilirsiniz</span>
-                  </div>
-
-                  {/* Top Inactive DEM Prompt Overlay if DEM selected but isFileOpened is false */}
-                  {!isFileOpened && dem && (
-                    <div className="absolute inset-0 z-[450] bg-slate-950/50 backdrop-blur-[2px] flex flex-col items-center justify-center p-4 text-center pointer-events-auto">
-                      <div className="bg-white/95 backdrop-blur-md p-4 sm:p-5 rounded-2xl border border-slate-300 shadow-2xl max-w-sm space-y-3">
-                        <div className="w-10 h-10 rounded-xl bg-cyan-100 text-cyan-800 flex items-center justify-center mx-auto">
-                          <Eye size={22} />
-                        </div>
-                        <div>
-                          <h4 className="font-bold text-slate-900 text-sm">Topografya Önizlemesi Kapalı</h4>
-                          <p className="text-slate-600 text-xs mt-1 leading-relaxed">
-                            Yüklenen DEM verisini ve yükseklik modelini haritaya yüklemek için sol paneldeki veya aşağıdaki <strong>'Dosyayı Aç'</strong> butonuna basınız.
-                          </p>
-                        </div>
+                      <div className="w-14 h-14 rounded-2xl bg-white border border-slate-300 flex items-center justify-center text-slate-500 shadow-sm z-10">
+                        <FileCode size={28} className="text-cyan-700" />
+                      </div>
+                      <div className="space-y-1.5 max-w-sm z-10">
+                        <h3 className="text-sm font-bold text-slate-900">2D CAD / CBS Görüntüleyici Hazır</h3>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          {dem ? (
+                            <>Topografya (DEM) verisi seçildi. Haritayı ve simülasyon alanını ekrana yüklemek için sol paneldeki veya aşağıdaki <strong className="text-slate-900 font-bold">'Dosyayı Aç'</strong> butonuna basınız.</>
+                          ) : (
+                            <>Sol taraftaki panelden bir topografya (DEM) dosyası seçip <strong className="text-slate-900 font-bold">'Dosyayı Aç'</strong> butonuna basarak haritanızı ekrana yükleyebilirsiniz.</>
+                          )}
+                        </p>
+                      </div>
+                      {dem && (
                         <button
                           onClick={() => setIsFileOpened(true)}
-                          className="w-full py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                          className="z-10 mt-1 py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer"
                         >
                           <Eye size={15} />
                           <span>Dosyayı Aç (Haritada Göster)</span>
                         </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Bottom Status Bar inside Map */}
-                  <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
-                    <div className="flex items-center gap-3 text-[10px]">
-                      <span><strong className="text-cyan-400">Grid:</strong> X: {params.sourceX}, Y: {params.sourceY}</span>
-                      {sourceWgs && (
-                        <span><strong className="text-emerald-400">Coğrafi:</strong> {sourceWgs[0].toFixed(4)}°, {sourceWgs[1].toFixed(4)}°</span>
                       )}
                     </div>
-                    {areaKml && (
-                      <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.2 rounded-full text-[9px] font-bold border border-emerald-500/30">
-                        İnceleme Alanı Aktif ({areaKml.name})
-                      </span>
-                    )}
-                  </div>
+                  ) : (
+                    <>
+                      <MapContainer 
+                        center={[sourceWgs ? sourceWgs[0] : coords.lat, sourceWgs ? sourceWgs[1] : coords.lon]} 
+                        zoom={13} 
+                        maxZoom={24}
+                        className="w-full h-full"
+                      >
+                        <TileLayer
+                          key={currentBasemap.id}
+                          url={currentBasemap.url}
+                          attribution={currentBasemap.attribution}
+                          maxZoom={24}
+                          maxNativeZoom={20}
+                        />
+                        {elevationImage && wgs84Bounds && (
+                          <ImageOverlay url={elevationImage} bounds={wgs84Bounds} opacity={0.85} />
+                        )}
+                        <MapClickHandler onMapClick={handleMapClick} />
+                        {riverKml && <Polyline positions={riverKml.coords} color="#3b82f6" weight={3.5} opacity={0.9} />}
+                        {areaKml ? (
+                          <Polygon positions={areaKml.coords} color="#10b981" weight={2.5} fillOpacity={0.25} />
+                        ) : (demBoundaryWgs && demBoundaryWgs.length > 0) ? (
+                          demBoundaryWgs.map((loop, idx) => (
+                            <Polygon key={idx} positions={loop.map(([lon, lat]) => [lat, lon])} color="#10b981" weight={2.5} fillOpacity={0.2} />
+                          ))
+                        ) : null}
+                        {sourceWgs && (
+                          <CircleMarker 
+                            center={sourceWgs} 
+                            radius={8} 
+                            fillColor="#06b6d4" 
+                            color="white" 
+                            weight={2} 
+                            fillOpacity={1} 
+                          />
+                        )}
+                        {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
+                      </MapContainer>
+
+                      {/* Top Notification Banner inside Map */}
+                      <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
+                        <MapPin className="text-cyan-400 shrink-0" size={13} />
+                        <span>Haritaya tıklayarak su kaynak noktasını değiştirebilirsiniz</span>
+                      </div>
+
+                      {/* Bottom Status Bar inside Map */}
+                      <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
+                        <div className="flex items-center gap-3 text-[10px]">
+                          <span><strong className="text-cyan-400">Grid:</strong> X: {params.sourceX}, Y: {params.sourceY}</span>
+                          {sourceWgs && (
+                            <span><strong className="text-emerald-400">Coğrafi:</strong> {sourceWgs[0].toFixed(4)}°, {sourceWgs[1].toFixed(4)}°</span>
+                          )}
+                        </div>
+                        {areaKml && (
+                          <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.2 rounded-full text-[9px] font-bold border border-emerald-500/30">
+                            İnceleme Alanı Aktif ({areaKml.name})
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
