@@ -343,7 +343,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 overflow-hidden">
         
         {/* LEFT COLUMN: Controls & Parameters (1/4 Layout = lg:col-span-3) */}
-        <div className={`lg:col-span-3 flex flex-col h-full min-h-0 space-y-2.5 overflow-hidden ${
+        <div className={`lg:col-span-3 flex flex-col h-full min-h-0 space-y-2.5 overflow-y-auto lg:overflow-hidden custom-scrollbar pb-12 lg:pb-0 ${
           mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
         }`}>
           

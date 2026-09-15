@@ -27,7 +27,7 @@ const DynamicFlood: React.FC<DynamicFloodProps> = ({ onBackToDashboard }) => {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -15 }}
       transition={{ duration: 0.3 }}
-      className="max-w-5xl mx-auto space-y-6 py-4 px-2"
+      className="max-w-5xl mx-auto space-y-6 py-4 px-2 pb-10 sm:pb-2"
     >
       {/* Hero Header Card */}
       <div className="bg-white border border-slate-300 rounded-2xl p-6 sm:p-8 shadow-sm relative overflow-hidden">
