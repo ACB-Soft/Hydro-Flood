@@ -1,23 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Play, Droplets, Map as MapIcon, Info, AlertCircle, Download, Globe, Layers, BarChart3, X, ChevronRight, ChevronLeft, FileText, MapPin, HelpCircle, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import BathtubWorker from './workers/bathtub-worker?worker';
+import BathtubWorker from './workers/bathtub-worker.ts?worker';
 import * as GeoTIFF from 'geotiff';
 import proj4 from 'proj4';
 import * as turf from '@turf/turf';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import 'jspdf-autotable';
 
-import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
 import Dashboard from './components/Dashboard';
 import Analysis from './components/Analysis';
 import About from './components/About';
 import DXFAnalysis, { CADLayer } from './components/DXFAnalysis';
 import DEMGenerator from './components/DEMGenerator';
 import DynamicFlood from './components/DynamicFlood';
-import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
 import Header from './components/Header';
 import Settings from './components/Settings';
