@@ -6,15 +6,9 @@
   --font-display: "Space Grotesk", sans-serif;
 }
 
-html, body, #root {
-  height: 100%;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-}
-
 body {
   background-color: #e2e8f0; /* slate-200 */
+  min-height: 100vh;
   overscroll-behavior: none;
   font-family: var(--font-sans);
   color: #1e293b; /* slate-800 */

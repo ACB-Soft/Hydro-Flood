@@ -306,7 +306,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
             </div>
 
             {/* Summary & Export */}
-            <div className={`lg:col-span-3 space-y-3 overflow-y-auto h-full min-h-0 custom-scrollbar pb-12 lg:pb-0 ${
+            <div className={`lg:col-span-3 space-y-3 overflow-y-auto h-full min-h-0 custom-scrollbar ${
               mobileTab === 'controls' ? 'flex flex-col' : 'hidden lg:flex lg:flex-col'
             }`}>
               <div className="bg-white rounded-2xl p-4 border border-slate-300 shadow-sm space-y-4">
@@ -405,7 +405,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 h-full min-h-0 flex-1">
             
             {/* LEFT PANEL: OPTIONS (Visible on Desktop OR when MobileTab === 'controls') */}
-            <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto custom-scrollbar pb-12 lg:pb-0 ${
+            <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto custom-scrollbar ${
               mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
             }`}>
               

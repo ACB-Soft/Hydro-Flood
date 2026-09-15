@@ -1097,7 +1097,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-full min-h-0">
         
         {/* LEFT COLUMN: Controls Panel (Visible on Desktop OR when MobileTab === 'controls') */}
-        <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto lg:overflow-hidden pb-12 lg:pb-0 ${
+        <div className={`lg:col-span-3 flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto lg:overflow-hidden ${
           mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
         }`}>
           

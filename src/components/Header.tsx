@@ -1,6 +1,5 @@
 import React from 'react';
 import { ChevronLeft } from 'lucide-react';
-import { PWAInstallButton } from './PWAInstallButton';
 
 interface HeaderProps {
   activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood';
@@ -86,7 +85,6 @@ const Header: React.FC<HeaderProps> = ({
               <span className="text-[10px] font-bold text-blue-700">%{Math.round(progress)}</span>
             </div>
           )}
-          <PWAInstallButton variant="header" />
         </div>
       </div>
     </header>

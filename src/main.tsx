@@ -12,16 +12,3 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
-if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('/sw.js', { scope: '/' })
-      .then((registration) => {
-        console.log('[HydroFlood PWA] Service Worker kayıt başarılı, scope:', registration.scope);
-      })
-      .catch((error) => {
-        console.error('[HydroFlood PWA] Service Worker kayıt hatası:', error);
-      });
-  });
-}
-

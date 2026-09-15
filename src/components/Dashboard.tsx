@@ -10,7 +10,6 @@ import {
   Activity, 
   ArrowRight
 } from 'lucide-react';
-import { PWAInstallButton } from './PWAInstallButton';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
@@ -40,7 +39,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -15 }}
       transition={{ duration: 0.3 }}
-      className="max-w-6xl mx-auto space-y-6 py-2 px-1 relative pb-10 sm:pb-2"
+      className="max-w-6xl mx-auto space-y-6 py-2 px-1 relative"
     >
       {/* Top Header & Branding Section */}
       <div className="bg-white border border-slate-300 rounded-2xl p-6 sm:p-8 shadow-sm relative overflow-hidden">
@@ -71,8 +70,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <span>%{Math.round(progress || 0)} Simülasyon Devam Ediyor</span>
               </div>
             )}
-
-            <PWAInstallButton variant="dashboard" />
 
             <button
               onClick={onOpenSettings}

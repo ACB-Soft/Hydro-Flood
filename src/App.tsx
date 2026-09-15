@@ -23,7 +23,6 @@ import Header from './components/Header';
 import Settings from './components/Settings';
 import ITwinWorkspace from './components/ITwinWorkspace';
 import { extractDemBoundaryPolygons } from './utils/demBoundary';
-import { OfflineIndicator } from './components/OfflineIndicator';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -1544,7 +1543,7 @@ ${floodPolygons.join('\n')}
   }
 
   return (
-    <div className="h-screen h-[100dvh] w-full max-w-full overflow-hidden flex flex-col bg-slate-200 text-slate-800 selection:bg-blue-500/30 selection:text-slate-900 relative">
+    <div className="h-screen h-[100dvh] w-screen overflow-hidden flex flex-col bg-slate-200 text-slate-800 selection:bg-blue-500/30 selection:text-slate-900">
       {/* Stats Modal */}
       <AnimatePresence>
         {showStats && stats && (
@@ -1649,9 +1648,7 @@ ${floodPolygons.join('\n')}
       )}
 
       <main className={`flex-1 w-full max-w-[1920px] mx-auto px-2 sm:px-4 lg:px-6 flex flex-col min-h-0 ${
-        (activeTab === 'dxf-analysis' || activeTab === 'dem-generator' || activeTab === 'analysis') 
-          ? 'pt-1 pb-10 md:py-2 overflow-hidden' 
-          : 'pt-4 pb-16 md:py-6 overflow-y-auto'
+        (activeTab === 'dxf-analysis' || activeTab === 'dem-generator' || activeTab === 'analysis') ? 'py-1 sm:py-2 overflow-hidden' : 'py-6 overflow-y-auto'
       }`}>
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
@@ -1737,7 +1734,6 @@ ${floodPolygons.join('\n')}
       </main>
 
       <Footer />
-      <OfflineIndicator />
     </div>
   );
 }
