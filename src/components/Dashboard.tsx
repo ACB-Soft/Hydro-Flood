@@ -10,6 +10,7 @@ import {
   Activity, 
   ArrowRight
 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface DashboardProps {
   onSelectMethod: (method: 'hydraulic' | 'bathtub') => void;
@@ -70,6 +71,8 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <span>%{Math.round(progress || 0)} Simülasyon Devam Ediyor</span>
               </div>
             )}
+
+            <PWAInstallButton variant="dashboard" />
 
             <button
               onClick={onOpenSettings}

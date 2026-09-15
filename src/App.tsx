@@ -23,6 +23,7 @@ import Header from './components/Header';
 import Settings from './components/Settings';
 import ITwinWorkspace from './components/ITwinWorkspace';
 import { extractDemBoundaryPolygons } from './utils/demBoundary';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -1736,6 +1737,7 @@ ${floodPolygons.join('\n')}
       </main>
 
       <Footer />
+      <OfflineIndicator />
     </div>
   );
 }
