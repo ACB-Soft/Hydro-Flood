@@ -1716,6 +1716,14 @@ ${floodPolygons.join('\n')}
               setDxfFileName={setDxfFileName}
               onTransferToSimulation={(demResult, ascText) => {
                 const file = new File([ascText], `DEM_${demResult.cellSize}m.asc`, { type: 'text/plain' });
+                
+                if (dxfCrs && dxfCrs !== 'NONE') {
+                  const matchingCrs = CRS_LIST.find(c => c.code === dxfCrs);
+                  if (matchingCrs) {
+                    setSelectedCRS(matchingCrs);
+                  }
+                }
+                
                 handleDemUpload({
                   target: {
                     files: [file]
