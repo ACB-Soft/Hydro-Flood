@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "@types/geojson": "^7946.0.16",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

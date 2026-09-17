@@ -2,8 +2,8 @@ import React from 'react';
 import { ChevronLeft } from 'lucide-react';
 
 interface HeaderProps {
-  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood' | 'one-d-analysis';
-  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood' | 'one-d-analysis') => void;
+  activeTab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'one-d-analysis';
+  setActiveTab: (tab: 'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'one-d-analysis') => void;
   currentStep: number;
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   isSimulating: boolean;
@@ -41,8 +41,8 @@ const Header: React.FC<HeaderProps> = ({
         return 'DXF Dosya Analizleri';
       case 'dem-generator':
         return 'Sayısal Yükseklik Modeli (DEM) Üretici';
-      case 'dynamic-flood':
-        return '2B Dinamik Hidrodinamik Taşkın Modeli';
+      case 'one-d-analysis':
+        return '1B Dinamik Akış Analizi';
       case 'analysis':
         if (currentStep === 5) {
           return 'Statik Simülasyon Sonucu';
