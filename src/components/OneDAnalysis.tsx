@@ -10,7 +10,9 @@ import {
   Ruler,
   Clock,
   PlayCircle,
-  CheckCircle2
+  CheckCircle2,
+  Upload,
+  SplitSquareVertical
 } from 'lucide-react';
 import { MapContainer, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -24,38 +26,53 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isSimulating, setIsSimulating] = useState(false);
   const [simulationComplete, setSimulationComplete] = useState(false);
 
-  // Step 1: Geometry
-  const [crossSectionType, setCrossSectionType] = useState<'trapezoidal' | 'rectangular' | 'triangular' | 'natural'>('trapezoidal');
-  const [bottomWidth, setBottomWidth] = useState<number>(10);
-  const [sideSlope, setSideSlope] = useState<number>(2);
+  // Step 1: Topoğrafya ve KML
+  const [demFileName, setDemFileName] = useState<string | null>(null);
+  const [centerlineFileName, setCenterlineFileName] = useState<string | null>(null);
+  const [banksFileName, setBanksFileName] = useState<string | null>(null);
 
-  // Step 2: Material
-  const [manningOption, setManningOption] = useState<string>('0.022');
-  const [customManning, setCustomManning] = useState<string>('0.035');
+  // Step 2: Enkesitler
+  const [crossSectionInterval, setCrossSectionInterval] = useState<number>(50);
+  const [sectionsGenerated, setSectionsGenerated] = useState<boolean>(false);
 
-  // Step 3: Boundary Conditions
+  // Step 3: Pürüzlülük (Manning)
+  const [manningLOB, setManningLOB] = useState<number>(0.060); // Sol Taşkın Yatağı (Left Overbank)
+  const [manningMain, setManningMain] = useState<number>(0.035); // Ana Kanal
+  const [manningROB, setManningROB] = useState<number>(0.060); // Sağ Taşkın Yatağı (Right Overbank)
+
+  // Step 4: Sınır Şartları
   const [upstreamType, setUpstreamType] = useState<'peak' | 'hydrograph'>('peak');
   const [peakFlow, setPeakFlow] = useState<number>(150);
   const [downstreamType, setDownstreamType] = useState<'critical' | 'normal' | 'fixed'>('critical');
   const [downstreamSlope, setDownstreamSlope] = useState<number>(0.001);
 
-  // Step 4: Simulation Settings
+  // Step 5: Simülasyon
   const [simDuration, setSimDuration] = useState<number>(24);
   const [routingStepType, setRoutingStepType] = useState<'auto' | 'custom'>('auto');
   const [routingStepSeconds, setRoutingStepSeconds] = useState<number>(5);
   const [reportingStepMinutes, setReportingStepMinutes] = useState<number>(1);
 
-  const handleNext = () => setStep(prev => Math.min(prev + 1, 4));
+  const handleNext = () => setStep(prev => Math.min(prev + 1, 5));
   const handlePrev = () => setStep(prev => Math.max(prev - 1, 1));
 
   const runSimulation = () => {
     setIsSimulating(true);
-    setStep(5);
+    setStep(6);
     // Fake simulation time
     setTimeout(() => {
       setIsSimulating(false);
       setSimulationComplete(true);
-    }, 3000);
+    }, 3500);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<string | null>>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setter(e.target.files[0].name);
+    }
+  };
+
+  const generateSections = () => {
+    setSectionsGenerated(true);
   };
 
   return (
@@ -65,48 +82,46 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -15 }}
       transition={{ duration: 0.3 }}
-      className="max-w-5xl mx-auto space-y-6 py-4 px-2"
+      className="w-full h-full flex flex-col min-h-0 overflow-hidden"
     >
-      {/* Header */}
-      <div className="bg-white border border-slate-300 rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="flex items-center gap-3">
-          <div className="h-12 w-12 sm:h-14 sm:w-14 bg-emerald-100 border border-emerald-300 rounded-2xl flex items-center justify-center text-emerald-700 shrink-0 shadow-sm">
-            <Activity size={28} />
+      <div className="w-full h-full flex flex-col min-h-0 space-y-2 overflow-hidden p-2">
+        {/* Top Header Card */}
+        <div className="flex items-center justify-between gap-3 bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-300 shadow-sm shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 text-blue-800 rounded-xl">
+              <SplitSquareVertical size={20} />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">1B Dinamik Akış Analizi (1D Hydrodynamic Routing)</h2>
+              <p className="text-[10px] text-slate-600 hidden sm:block">DEM, Merkez Aks ve Kıyı Çizgileri KML Tabanlı Doğal Kesit Çıkarımı</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-              1B Dinamik Akış Analizi (1D Routing)
-            </h1>
-            <p className="text-xs font-medium text-slate-600 mt-1">
-              EPA SWMM / Saint-Venant 1D Denklemleri Tabanlı Taşkın Simülatörü
-            </p>
-          </div>
+          <button
+            onClick={onBackToDashboard}
+            className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs border border-slate-300 transition-all flex items-center gap-1.5 shadow-sm shrink-0 cursor-pointer"
+          >
+            <ArrowLeft size={14} />
+            <span>Kapat</span>
+          </button>
         </div>
-        <button
-          onClick={onBackToDashboard}
-          className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl border border-slate-300 transition-all flex items-center gap-2"
-        >
-          <ArrowLeft size={16} />
-          <span>Kapat</span>
-        </button>
-      </div>
 
       {/* Stepper Wizard Indicator */}
-      {step < 5 && (
-        <div className="bg-white border border-slate-300 rounded-2xl p-4 shadow-sm flex items-center justify-between relative">
-          <div className="absolute top-1/2 left-8 right-8 h-1 bg-slate-100 -translate-y-1/2 z-0 rounded-full" />
-          <div className="absolute top-1/2 left-8 h-1 bg-emerald-500 -translate-y-1/2 z-0 rounded-full transition-all duration-500" style={{ width: `${((step - 1) / 3) * 100}%`, maxWidth: 'calc(100% - 4rem)' }} />
+      {step < 6 && (
+        <div className="bg-white border border-slate-300 rounded-2xl p-4 shadow-sm flex items-center justify-between relative overflow-x-auto">
+          <div className="absolute top-1/2 left-10 right-10 h-1 bg-slate-100 -translate-y-1/2 z-0 rounded-full min-w-[500px]" />
+          <div className="absolute top-1/2 left-10 h-1 bg-emerald-500 -translate-y-1/2 z-0 rounded-full transition-all duration-500 min-w-[500px]" style={{ width: `${((step - 1) / 4) * 100}%`, maxWidth: 'calc(100% - 5rem)' }} />
           
           {[
-            { num: 1, label: 'Geometri', icon: Ruler },
-            { num: 2, label: 'Malzeme', icon: Settings2 },
-            { num: 3, label: 'Taşkın (Sınır)', icon: Droplets },
-            { num: 4, label: 'Simülasyon', icon: Clock }
+            { num: 1, label: 'Topoğrafya & KML', icon: MapIcon },
+            { num: 2, label: 'Enkesitler', icon: Ruler },
+            { num: 3, label: 'Pürüzlülük', icon: Settings2 },
+            { num: 4, label: 'Sınır Şartları', icon: Droplets },
+            { num: 5, label: 'Simülasyon', icon: Clock }
           ].map((s) => {
             const isActive = step === s.num;
             const isCompleted = step > s.num;
             return (
-              <div key={s.num} className="relative z-10 flex flex-col items-center gap-2">
+              <div key={s.num} className="relative z-10 flex flex-col items-center gap-2 px-2">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm border-2 transition-colors ${
                   isActive ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' :
                   isCompleted ? 'bg-emerald-100 border-emerald-500 text-emerald-700' :
@@ -114,7 +129,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 }`}>
                   {isCompleted ? <CheckCircle2 size={20} /> : <s.icon size={18} />}
                 </div>
-                <span className={`text-[10px] uppercase tracking-wider font-bold ${isActive || isCompleted ? 'text-slate-800' : 'text-slate-400'}`}>
+                <span className={`text-[10px] uppercase tracking-wider font-bold whitespace-nowrap ${isActive || isCompleted ? 'text-slate-800' : 'text-slate-400'}`}>
                   {s.label}
                 </span>
               </div>
@@ -124,77 +139,83 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       )}
 
       {/* Wizard Content */}
-      <div className="bg-white border border-slate-300 rounded-2xl p-6 shadow-sm min-h-[400px]">
+      <div className="bg-white border border-slate-300 rounded-2xl p-6 shadow-sm flex-1 overflow-y-auto min-h-0">
         <AnimatePresence mode="wait">
           {step === 1 && (
             <motion.div key="step1" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
               <div className="border-b border-slate-100 pb-3 mb-4">
-                <h2 className="text-lg font-bold text-slate-800">1. Topografik ve Geometrik Girdiler</h2>
-                <p className="text-xs text-slate-500">Nehir aksını ve kanal enkesit geometrisini (Cross-Section) belirleyin.</p>
+                <h2 className="text-lg font-bold text-slate-800">1. Topografik Veriler ve Şebeke Geometrisi</h2>
+                <p className="text-xs text-slate-500">Analizin dayanağı olan yükseklik modelini ve akış güzergahını belirleyen KML dosyalarını sisteme tanıtın.</p>
               </div>
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="space-y-4">
-                  <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2"><MapIcon size={16} /> Nehir Merkez Hattı (Aks)</h3>
-                  <div className="h-48 bg-slate-100 rounded-xl border border-slate-300 overflow-hidden relative">
-                    <MapContainer center={[39.92, 32.85]} zoom={12} className="w-full h-full" zoomControl={false}>
-                      <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />
-                    </MapContainer>
-                    <div className="absolute inset-0 bg-white/40 flex items-center justify-center z-[1000] backdrop-blur-[1px]">
-                      <button className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg shadow-lg hover:bg-slate-800 transition-colors">
-                        + Harita Üzerinde Aks Çiz
-                      </button>
+                  {/* DEM Upload */}
+                  <div className={`p-4 rounded-xl border-2 border-dashed transition-colors ${demFileName ? 'bg-emerald-50 border-emerald-400' : 'bg-slate-50 border-slate-300 hover:border-emerald-400'}`}>
+                    <label className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-2">
+                      <MapIcon size={16} className={demFileName ? "text-emerald-600" : "text-slate-500"}/> 1. Sayısal Yükseklik Modeli (DEM)
+                    </label>
+                    <p className="text-[10px] text-slate-500 mb-3">Enkesit kot değerlerinin (Z) okunacağı raster veri (.tif, .asc)</p>
+                    <div className="flex items-center gap-3">
+                      <label className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-xs font-bold rounded-lg cursor-pointer hover:bg-slate-50 shadow-sm flex items-center gap-2">
+                        <Upload size={14}/> Dosya Seç
+                        <input type="file" accept=".tif,.tiff,.asc" className="hidden" onChange={(e) => handleFileUpload(e, setDemFileName)} />
+                      </label>
+                      <span className="text-xs font-semibold text-slate-600 truncate">{demFileName || 'Dosya seçilmedi'}</span>
                     </div>
                   </div>
-                  <p className="text-[10px] text-slate-500">* [CONDUITS] ve [JUNCTIONS] ağ yapısı, çizilen hat üzerinden PWA tarafından otomatik oluşturulacaktır.</p>
+
+                  {/* Centerline KML Upload */}
+                  <div className={`p-4 rounded-xl border-2 border-dashed transition-colors ${centerlineFileName ? 'bg-blue-50 border-blue-400' : 'bg-slate-50 border-slate-300 hover:border-blue-400'}`}>
+                    <label className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-2">
+                      <SplitSquareVertical size={16} className={centerlineFileName ? "text-blue-600" : "text-slate-500"}/> 2. Nehir Merkez Hattı (KML)
+                    </label>
+                    <p className="text-[10px] text-slate-500 mb-3">Suyun izleyeceği ana ekseni belirleyen çizgi verisi.</p>
+                    <div className="flex items-center gap-3">
+                      <label className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-xs font-bold rounded-lg cursor-pointer hover:bg-slate-50 shadow-sm flex items-center gap-2">
+                        <Upload size={14}/> KML Yükle
+                        <input type="file" accept=".kml" className="hidden" onChange={(e) => handleFileUpload(e, setCenterlineFileName)} />
+                      </label>
+                      <span className="text-xs font-semibold text-slate-600 truncate">{centerlineFileName || 'Dosya seçilmedi'}</span>
+                    </div>
+                  </div>
+
+                  {/* Bank Stations KML Upload */}
+                  <div className={`p-4 rounded-xl border-2 border-dashed transition-colors ${banksFileName ? 'bg-amber-50 border-amber-400' : 'bg-slate-50 border-slate-300 hover:border-amber-400'}`}>
+                    <label className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-2">
+                      <Activity size={16} className={banksFileName ? "text-amber-600" : "text-slate-500"}/> 3. Kıyı Çizgileri / Bank Stations (KML)
+                    </label>
+                    <p className="text-[10px] text-slate-500 mb-3">Ana kanal ile taşkın yatağını ayıran sağ ve sol kıyı hatları.</p>
+                    <div className="flex items-center gap-3">
+                      <label className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-xs font-bold rounded-lg cursor-pointer hover:bg-slate-50 shadow-sm flex items-center gap-2">
+                        <Upload size={14}/> KML Yükle
+                        <input type="file" accept=".kml" className="hidden" onChange={(e) => handleFileUpload(e, setBanksFileName)} />
+                      </label>
+                      <span className="text-xs font-semibold text-slate-600 truncate">{banksFileName || 'Dosya seçilmedi'}</span>
+                    </div>
+                  </div>
                 </div>
                 
-                <div className="space-y-4">
-                  <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2"><Ruler size={16} /> Enkesit Geometrisi</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { id: 'trapezoidal', label: 'Yamuk Kesit' },
-                      { id: 'rectangular', label: 'Dikdörtgen Kesit' },
-                      { id: 'triangular', label: 'Üçgen Kesit' },
-                      { id: 'natural', label: 'Doğal Kesit (DEM)' }
-                    ].map(type => (
-                      <button
-                        key={type.id}
-                        onClick={() => setCrossSectionType(type.id as any)}
-                        className={`p-3 text-xs font-bold rounded-xl border ${crossSectionType === type.id ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-emerald-300'}`}
-                      >
-                        {type.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {crossSectionType !== 'natural' && (
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-4 mt-4">
-                      {crossSectionType !== 'triangular' && (
-                        <div>
-                          <label className="text-xs font-bold text-slate-700 flex justify-between mb-1">
-                            <span>Taban Genişliği (b)</span>
-                            <span className="text-emerald-600">{bottomWidth} m</span>
-                          </label>
-                          <input type="range" min="1" max="50" step="0.5" value={bottomWidth} onChange={(e) => setBottomWidth(parseFloat(e.target.value))} className="w-full accent-emerald-600" />
-                        </div>
-                      )}
-                      {crossSectionType !== 'rectangular' && (
-                        <div>
-                          <label className="text-xs font-bold text-slate-700 flex justify-between mb-1">
-                            <span>Şev Eğimi (z)</span>
-                            <span className="text-emerald-600">1:{sideSlope}</span>
-                          </label>
-                          <input type="range" min="0.5" max="5" step="0.5" value={sideSlope} onChange={(e) => setSideSlope(parseFloat(e.target.value))} className="w-full accent-emerald-600" />
-                        </div>
-                      )}
-                    </div>
+                <div className="h-full min-h-[350px] bg-slate-100 rounded-xl border border-slate-300 overflow-hidden relative shadow-inner">
+                  <MapContainer center={[39.92, 32.85]} zoom={12} className="w-full h-full" zoomControl={false}>
+                    <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />
+                  </MapContainer>
+                  
+                  {(!demFileName || !centerlineFileName || !banksFileName) && (
+                     <div className="absolute inset-0 bg-white/60 flex flex-col items-center justify-center z-[1000] backdrop-blur-[2px] p-6 text-center">
+                       <MapIcon size={32} className="text-slate-400 mb-3" />
+                       <h3 className="text-sm font-bold text-slate-700 mb-1">Önizleme İçin Verileri Yükleyin</h3>
+                       <p className="text-[10px] text-slate-500">DEM, Merkez Hat ve Kıyı Çizgileri KML verileri yüklendiğinde ağ yapısı haritada görüntülenecektir.</p>
+                     </div>
                   )}
-
-                  {crossSectionType === 'natural' && (
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 mt-4 flex items-center justify-between">
-                      <span className="text-xs font-medium text-slate-600">Raster DEM verisinden otomatik çıkarım yapılacaktır.</span>
-                      <button className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg shadow-sm">DEM Yükle</button>
+                  {(demFileName && centerlineFileName && banksFileName) && (
+                    <div className="absolute top-4 right-4 bg-white/90 p-3 rounded-xl border border-slate-200 shadow-md z-[1000]">
+                      <h4 className="text-[10px] font-bold text-slate-800 border-b pb-1 mb-2">Harita Katmanları</h4>
+                      <div className="space-y-2 text-[10px] font-semibold text-slate-600">
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 opacity-40"></div> DEM Sınırı</div>
+                        <div className="flex items-center gap-2"><div className="w-4 h-1 bg-blue-600"></div> Merkez Hat</div>
+                        <div className="flex items-center gap-2"><div className="w-4 h-1 border-t-2 border-dashed border-red-500"></div> Kıyı Çizgileri</div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -205,96 +226,112 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
           {step === 2 && (
             <motion.div key="step2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
               <div className="border-b border-slate-100 pb-3 mb-4">
-                <h2 className="text-lg font-bold text-slate-800">2. Hidrolik Direnç (Pürüzlülük)</h2>
-                <p className="text-xs text-slate-500">Suyun akış yatağı boyunca karşılaşacağı sürtünme değerlerini (Manning n) belirleyin.</p>
+                <h2 className="text-lg font-bold text-slate-800">2. Doğal Enkesit Çıkarımı (Cross-Sections)</h2>
+                <p className="text-xs text-slate-500">Merkez eksene dik doğrultuda DEM üzerinden İstasyon-Kot (X-Z) verileri üretilecektir.</p>
               </div>
 
-              <div className="max-w-lg space-y-4">
-                <label className="text-sm font-bold text-slate-700 block">Kanal Malzemesi / Yüzey Tipi</label>
-                <select
-                  value={manningOption}
-                  onChange={(e) => setManningOption(e.target.value)}
-                  className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none cursor-pointer"
-                >
-                  <option value="0.013">Beton Kanal (n = 0.013)</option>
-                  <option value="0.022">Temiz Toprak Kanal (n = 0.022)</option>
-                  <option value="0.030">Çakıllı/Taşlı Dere Yatağı (n = 0.030)</option>
-                  <option value="0.040">Otlu/Çalılık Doğal Dere (n = 0.040)</option>
-                  <option value="custom">Özel Değer Gir...</option>
-                </select>
-
-                {manningOption === 'custom' && (
-                  <div className="pt-2">
-                    <label className="text-xs font-bold text-slate-600 block mb-1">Özel Manning (n) Değeri</label>
-                    <input
-                      type="number" step="0.001" min="0.005" max="0.2"
-                      value={customManning}
-                      onChange={(e) => setCustomManning(e.target.value)}
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-5">
+                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                  <div className="space-y-2 max-w-xs w-full">
+                    <label className="text-xs font-bold text-slate-700 block">Enkesit Üretim Aralığı (dx) [m]</label>
+                    <input 
+                      type="number" min="10" max="500" step="10" 
+                      value={crossSectionInterval} 
+                      onChange={(e) => setCrossSectionInterval(parseFloat(e.target.value))} 
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" 
                     />
+                    <p className="text-[10px] text-slate-500">Önerilen: 50m - 100m arası</p>
                   </div>
-                )}
+                  <button 
+                    onClick={generateSections}
+                    className="px-6 py-2.5 bg-blue-600 text-white font-bold text-sm rounded-xl hover:bg-blue-700 shadow-md transition-all flex items-center justify-center gap-2"
+                  >
+                    <Ruler size={16}/> Enkesitleri Çıkar
+                  </button>
+                </div>
               </div>
+
+              {sectionsGenerated && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-700">Örnek Doğal Kesit Profili (Station-Elevation)</h3>
+                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">124 Adet Kesit Üretildi</span>
+                  </div>
+                  
+                  {/* Scientific Natural Cross-Section Mock SVG */}
+                  <svg width="100%" height="220" viewBox="0 0 600 250" preserveAspectRatio="xMidYMid meet" className="bg-[#f8fafc] border border-slate-200 rounded-xl shadow-sm">
+                    {/* Grid lines */}
+                    <line x1="0" y1="50" x2="600" y2="50" stroke="#e2e8f0" strokeWidth="1"/>
+                    <line x1="0" y1="100" x2="600" y2="100" stroke="#e2e8f0" strokeWidth="1"/>
+                    <line x1="0" y1="150" x2="600" y2="150" stroke="#e2e8f0" strokeWidth="1"/>
+                    <line x1="0" y1="200" x2="600" y2="200" stroke="#e2e8f0" strokeWidth="1"/>
+                    
+                    {/* Water level placeholder */}
+                    <path d="M 100 130 L 480 130 L 450 180 L 150 180 Z" fill="#3b82f6" opacity="0.3"/>
+                    
+                    {/* Natural Terrain Path */}
+                    <path d="M 0 50 Q 100 60 150 120 C 180 160 250 190 300 190 C 350 190 420 160 450 120 Q 500 60 600 50 L 600 250 L 0 250 Z" fill="#f5f5f4" stroke="#57534e" strokeWidth="3"/>
+                    
+                    {/* Bank lines intersecting terrain */}
+                    <line x1="150" y1="20" x2="150" y2="220" stroke="#ef4444" strokeWidth="2" strokeDasharray="6 4" />
+                    <line x1="450" y1="20" x2="450" y2="220" stroke="#ef4444" strokeWidth="2" strokeDasharray="6 4" />
+                    
+                    {/* Labels & Zones */}
+                    <text x="75" y="35" fontSize="11" textAnchor="middle" fill="#57534e" fontWeight="bold">Sol Taşkın Yt.</text>
+                    <text x="300" y="35" fontSize="11" textAnchor="middle" fill="#0284c7" fontWeight="bold">Ana Kanal (Main)</text>
+                    <text x="525" y="35" fontSize="11" textAnchor="middle" fill="#57534e" fontWeight="bold">Sağ Taşkın Yt.</text>
+                    
+                    <text x="150" y="12" fontSize="9" textAnchor="middle" fill="#ef4444" fontWeight="bold">Sol Kıyı (Left Bank)</text>
+                    <text x="450" y="12" fontSize="9" textAnchor="middle" fill="#ef4444" fontWeight="bold">Sağ Kıyı (Right Bank)</text>
+                  </svg>
+                  <p className="text-[10px] text-slate-500 text-center">İçe aktarılan "Kıyı Çizgileri KML" verisi sayesinde ana kanal ve taşkın yatakları (LOB/ROB) birbirinden otomatik ayrıştırılmıştır.</p>
+                </motion.div>
+              )}
             </motion.div>
           )}
 
           {step === 3 && (
             <motion.div key="step3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
               <div className="border-b border-slate-100 pb-3 mb-4">
-                <h2 className="text-lg font-bold text-slate-800">3. Hidrolojik ve Sınır Şartları</h2>
-                <p className="text-xs text-slate-500">Suyun nereden, ne kadar girip nereden çıkacağını belirten hidrodinamik sınır şartları.</p>
+                <h2 className="text-lg font-bold text-slate-800">3. Bölgesel Hidrolik Direnç (Pürüzlülük)</h2>
+                <p className="text-xs text-slate-500">Ayrıştırılan 3 farklı bölge için sürtünme değerlerini (Manning 'n') bağımsız olarak tanımlayın.</p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                {/* Upstream */}
-                <div className="space-y-4">
-                  <h3 className="text-sm font-bold text-slate-700 border-b border-slate-200 pb-2">Menba (Giriş) Şartı</h3>
-                  <div className="flex gap-2">
-                    <button onClick={() => setUpstreamType('peak')} className={`flex-1 py-2 text-xs font-bold rounded-lg border ${upstreamType === 'peak' ? 'bg-blue-50 border-blue-500 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>Pik Debi</button>
-                    <button onClick={() => setUpstreamType('hydrograph')} className={`flex-1 py-2 text-xs font-bold rounded-lg border ${upstreamType === 'hydrograph' ? 'bg-blue-50 border-blue-500 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>Zaman Serisi (Hidrograf)</button>
-                  </div>
-
-                  {upstreamType === 'peak' ? (
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                      <label className="text-xs font-bold text-slate-700 flex justify-between mb-1">
-                        <span>Sabit / Pik Debi (Q)</span>
-                        <span className="text-blue-600">{peakFlow} m³/s</span>
-                      </label>
-                      <input type="range" min="1" max="1000" step="5" value={peakFlow} onChange={(e) => setPeakFlow(parseFloat(e.target.value))} className="w-full accent-blue-600" />
-                    </div>
-                  ) : (
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col items-center justify-center text-center gap-2 h-24">
-                      <p className="text-xs text-slate-500">CSV veya Excel formatında hidrograf tablosu yükleyin (Saat vs Debi).</p>
-                      <button className="px-3 py-1.5 bg-blue-600 text-white text-[10px] font-bold rounded-lg shadow-sm">Dosya Seç</button>
-                    </div>
-                  )}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <div className="w-10 h-1 bg-[#d6d3d1] mb-2 rounded"></div>
+                  <h3 className="text-sm font-bold text-slate-700">Sol Taşkın Yatağı (LOB)</h3>
+                  <p className="text-[10px] text-slate-500 h-8">Genellikle bitki örtüsü yoğun, yüksek pürüzlülük (n=0.05-0.10)</p>
+                  <input 
+                    type="number" step="0.005" min="0.01" max="0.2" 
+                    value={manningLOB} 
+                    onChange={(e) => setManningLOB(parseFloat(e.target.value))} 
+                    className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm font-bold text-slate-800" 
+                  />
                 </div>
 
-                {/* Downstream */}
-                <div className="space-y-4">
-                  <h3 className="text-sm font-bold text-slate-700 border-b border-slate-200 pb-2">Mansap (Çıkış) Şartı</h3>
-                  <select
-                    value={downstreamType}
-                    onChange={(e) => setDownstreamType(e.target.value as any)}
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
-                  >
-                    <option value="critical">Kritik Derinlik (Serbest Dökülme)</option>
-                    <option value="normal">Normal Derinlik (Kanal Eğimine Göre)</option>
-                    <option value="fixed">Sabit/Zamana Bağlı Su Kotu</option>
-                  </select>
+                <div className="p-5 bg-blue-50 border border-blue-200 rounded-xl space-y-3 relative shadow-sm">
+                  <div className="w-10 h-1 bg-blue-500 mb-2 rounded"></div>
+                  <h3 className="text-sm font-bold text-blue-900">Ana Kanal (Main Channel)</h3>
+                  <p className="text-[10px] text-blue-700/70 h-8">Sürekli su akışının olduğu düşük dirençli bölge (n=0.02-0.04)</p>
+                  <input 
+                    type="number" step="0.005" min="0.01" max="0.2" 
+                    value={manningMain} 
+                    onChange={(e) => setManningMain(parseFloat(e.target.value))} 
+                    className="w-full p-2 bg-white border border-blue-300 rounded-lg text-sm font-bold text-blue-900" 
+                  />
+                </div>
 
-                  {downstreamType === 'normal' && (
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                      <label className="text-xs font-bold text-slate-700 block mb-1">Mansap Kanal Eğimi (S₀)</label>
-                      <input type="number" step="0.001" min="0.0001" value={downstreamSlope} onChange={(e) => setDownstreamSlope(parseFloat(e.target.value))} className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm" />
-                    </div>
-                  )}
-                  {downstreamType === 'fixed' && (
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                      <label className="text-xs font-bold text-slate-700 block mb-1">Sabit Su Kotu (m)</label>
-                      <input type="number" defaultValue={0} className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm" />
-                    </div>
-                  )}
+                <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <div className="w-10 h-1 bg-[#d6d3d1] mb-2 rounded"></div>
+                  <h3 className="text-sm font-bold text-slate-700">Sağ Taşkın Yatağı (ROB)</h3>
+                  <p className="text-[10px] text-slate-500 h-8">Genellikle bitki örtüsü yoğun, yüksek pürüzlülük (n=0.05-0.10)</p>
+                  <input 
+                    type="number" step="0.005" min="0.01" max="0.2" 
+                    value={manningROB} 
+                    onChange={(e) => setManningROB(parseFloat(e.target.value))} 
+                    className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm font-bold text-slate-800" 
+                  />
                 </div>
               </div>
             </motion.div>
@@ -303,54 +340,122 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
           {step === 4 && (
             <motion.div key="step4" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
               <div className="border-b border-slate-100 pb-3 mb-4">
-                <h2 className="text-lg font-bold text-slate-800">4. Simülasyon Zaman Ayarları</h2>
-                <p className="text-xs text-slate-500">1D Dinamik dalga modeli çözücüsü (Routing) için zaman adımları.</p>
+                <h2 className="text-lg font-bold text-slate-800">4. Hidrolojik ve Sınır Şartları</h2>
+                <p className="text-xs text-slate-500">Diferansiyel denklemlerin çözümü için menba (giriş) ve mansap (çıkış) hidrolik şartlarını tanımlayın.</p>
               </div>
 
-              <div className="max-w-xl space-y-5">
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Toplam Simülasyon Süresi (Saat)</label>
-                  <input type="number" min="1" max="720" value={simDuration} onChange={(e) => setSimDuration(parseFloat(e.target.value))} className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold" />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Hesaplama Zaman Adımı (Routing Time Step)</label>
-                  <div className="flex gap-2 mb-2">
-                    <button onClick={() => setRoutingStepType('auto')} className={`flex-1 py-2 text-xs font-bold rounded-lg border ${routingStepType === 'auto' ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>Otomatik (Courant Kriteri)</button>
-                    <button onClick={() => setRoutingStepType('custom')} className={`flex-1 py-2 text-xs font-bold rounded-lg border ${routingStepType === 'custom' ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>Özel (Saniye)</button>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {/* Upstream */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-700 border-b border-slate-200 pb-2">Menba (Giriş) Sınır Şartı</h3>
+                  <div className="flex gap-2">
+                    <button onClick={() => setUpstreamType('peak')} className={`flex-1 py-2 text-xs font-bold rounded-lg border ${upstreamType === 'peak' ? 'bg-blue-50 border-blue-500 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>Pik Debi (Sabit)</button>
+                    <button onClick={() => setUpstreamType('hydrograph')} className={`flex-1 py-2 text-xs font-bold rounded-lg border ${upstreamType === 'hydrograph' ? 'bg-blue-50 border-blue-500 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>Akım Hidrografı (Zaman Serisi)</button>
                   </div>
-                  {routingStepType === 'custom' && (
-                    <input type="number" min="1" max="60" value={routingStepSeconds} onChange={(e) => setRoutingStepSeconds(parseFloat(e.target.value))} className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold" placeholder="Saniye cinsinden" />
-                  )}
-                  {routingStepType === 'auto' && (
-                    <p className="text-[10px] text-slate-500 bg-slate-100 p-2 rounded-lg">CFL (Courant-Friedrichs-Lewy) koşuluna göre adım saniyeleri modelin dengesini (stabilite) sağlamak adına otomatik ayarlanacaktır.</p>
+
+                  {upstreamType === 'peak' ? (
+                    <div className="p-5 bg-slate-50 rounded-xl border border-slate-200">
+                      <label className="text-xs font-bold text-slate-700 flex justify-between mb-1">
+                        <span>Sabit / Pik Debi (Q)</span>
+                        <span className="text-blue-600">{peakFlow} m³/s</span>
+                      </label>
+                      <input type="range" min="1" max="2000" step="5" value={peakFlow} onChange={(e) => setPeakFlow(parseFloat(e.target.value))} className="w-full accent-blue-600" />
+                    </div>
+                  ) : (
+                    <div className="p-5 bg-slate-50 rounded-xl border border-slate-200 flex flex-col items-center justify-center text-center gap-3 h-28">
+                      <p className="text-[10px] text-slate-500">KML hattının başlangıç noktasına uygulanacak zamana bağlı debi grafiği (CSV/Excel).</p>
+                      <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"><Upload size={14}/> Dosya Seç</button>
+                    </div>
                   )}
                 </div>
 
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Raporlama Zaman Adımı (Dakika)</label>
-                  <input type="number" min="1" max="60" value={reportingStepMinutes} onChange={(e) => setReportingStepMinutes(parseFloat(e.target.value))} className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold" />
+                {/* Downstream */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-700 border-b border-slate-200 pb-2">Mansap (Çıkış) Sınır Şartı</h3>
+                  <select
+                    value={downstreamType}
+                    onChange={(e) => setDownstreamType(e.target.value as any)}
+                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+                  >
+                    <option value="critical">Kritik Derinlik (Serbest Dökülme)</option>
+                    <option value="normal">Normal Derinlik (Enerji Eğimi ile hesaplanır)</option>
+                    <option value="fixed">Sabit Su Seviyesi (Stage)</option>
+                  </select>
+
+                  {downstreamType === 'normal' && (
+                    <div className="p-5 bg-slate-50 rounded-xl border border-slate-200">
+                      <label className="text-xs font-bold text-slate-700 block mb-1">Mansap Bölgesi Enerji / Kanal Eğimi</label>
+                      <input type="number" step="0.001" min="0.0001" value={downstreamSlope} onChange={(e) => setDownstreamSlope(parseFloat(e.target.value))} className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-sm font-bold" />
+                    </div>
+                  )}
+                  {downstreamType === 'fixed' && (
+                    <div className="p-5 bg-slate-50 rounded-xl border border-slate-200">
+                      <label className="text-xs font-bold text-slate-700 block mb-1">Deniz / Göl Su Kotu (m)</label>
+                      <input type="number" defaultValue={0} className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-sm font-bold" />
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>
           )}
 
           {step === 5 && (
-            <motion.div key="step5" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="h-64 flex flex-col items-center justify-center text-center space-y-4">
+            <motion.div key="step5" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
+              <div className="border-b border-slate-100 pb-3 mb-4">
+                <h2 className="text-lg font-bold text-slate-800">5. Sayısal Çözümleme Ayarları (Simulation Routing)</h2>
+                <p className="text-xs text-slate-500">Dinamik dalga denklemlerinin (Saint-Venant) kararlı bir şekilde (stabil) çözülebilmesi için zaman adımı konfigürasyonu.</p>
+              </div>
+
+              <div className="max-w-xl space-y-6">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Toplam Simülasyon Süresi (Saat)</label>
+                  <input type="number" min="1" max="720" value={simDuration} onChange={(e) => setSimDuration(parseFloat(e.target.value))} className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold" />
+                </div>
+
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                  <label className="text-xs font-bold text-slate-700 block mb-2">Hesaplama Zaman Adımı (Routing Time Step, dt)</label>
+                  <div className="flex gap-2 mb-3">
+                    <button onClick={() => setRoutingStepType('auto')} className={`flex-1 py-2.5 text-xs font-bold rounded-lg border transition-colors ${routingStepType === 'auto' ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>Otomatik (Courant Kriteri)</button>
+                    <button onClick={() => setRoutingStepType('custom')} className={`flex-1 py-2.5 text-xs font-bold rounded-lg border transition-colors ${routingStepType === 'custom' ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>Özel Zaman Adımı</button>
+                  </div>
+                  {routingStepType === 'custom' && (
+                    <div className="flex items-center gap-3">
+                      <input type="number" min="1" max="60" value={routingStepSeconds} onChange={(e) => setRoutingStepSeconds(parseFloat(e.target.value))} className="flex-1 p-2 bg-white border border-slate-300 rounded-lg text-sm font-semibold" placeholder="Saniye" />
+                      <span className="text-xs font-bold text-slate-600">Saniye</span>
+                    </div>
+                  )}
+                  {routingStepType === 'auto' && (
+                    <p className="text-[10px] text-slate-600 leading-relaxed"><span className="font-bold text-slate-800">CFL (Courant-Friedrichs-Lewy)</span> sayısının 1'i aşmaması şartına bağlı olarak, seçilen <span className="font-bold text-slate-700">{crossSectionInterval} metrelik</span> enkesit aralıkları (dx) ve o andaki maksimum akış hızı (V) kullanılarak dt (zaman adımı) model tarafından dinamik olarak daraltılıp genişletilecektir.</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Harita Sonuç Raporlama Sıklığı (Dakika)</label>
+                  <input type="number" min="1" max="60" value={reportingStepMinutes} onChange={(e) => setReportingStepMinutes(parseFloat(e.target.value))} className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold" />
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {step === 6 && (
+            <motion.div key="step6" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="h-[400px] flex flex-col items-center justify-center text-center space-y-4">
               {isSimulating ? (
                 <>
-                  <div className="w-16 h-16 border-4 border-slate-200 border-t-emerald-500 rounded-full animate-spin"></div>
+                  <div className="w-16 h-16 border-4 border-slate-200 border-t-emerald-500 rounded-full animate-spin mb-2"></div>
                   <h2 className="text-xl font-bold text-slate-800">1D Dinamik Dalga Çözülüyor...</h2>
-                  <p className="text-xs text-slate-500 max-w-sm">Diferansiyel momentum ve kütle denklemleri seçili ağ düğümleri (nodes) ve kanallar (conduits) üzerinde hesaplanıyor.</p>
+                  <p className="text-xs text-slate-500 max-w-md leading-relaxed">Courant stabilite kriterine göre zaman adımları optimize ediliyor.<br/>Saint-Venant Kütle ve Momentum denklemleri {crossSectionInterval}m aralıklı kesitlerde iteratif olarak hesaplanıyor.</p>
+                  <div className="w-64 h-2 bg-slate-100 rounded-full mt-4 overflow-hidden">
+                    <motion.div initial={{ width: "0%" }} animate={{ width: "100%" }} transition={{ duration: 3.5 }} className="h-full bg-emerald-500 rounded-full" />
+                  </div>
                 </>
               ) : (
                 <>
-                  <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shadow-md">
+                  <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shadow-md mb-2">
                     <CheckCircle2 size={32} />
                   </div>
-                  <h2 className="text-xl font-bold text-slate-800">Analiz Tamamlandı!</h2>
-                  <p className="text-xs text-slate-500 mb-4">Sonuçlar başarıyla hesaplandı. Profiller ve su kütle değişimleri hazır.</p>
-                  <button onClick={() => setStep(1)} className="px-6 py-2 bg-slate-800 text-white font-bold text-sm rounded-xl hover:bg-slate-700 transition-colors">Yeni Analiz Başlat</button>
+                  <h2 className="text-xl font-bold text-slate-800">1B Hidrodinamik Analiz Tamamlandı</h2>
+                  <p className="text-xs text-slate-500 mb-6 max-w-md">Profil grafikleri, su seviyesi değişimleri ve akış hızları hesaplandı. Sonuçları detaylı rapor veya harita sekmesinden inceleyebilirsiniz.</p>
+                  <button onClick={() => setStep(1)} className="px-6 py-2.5 bg-slate-800 text-white font-bold text-sm rounded-xl hover:bg-slate-700 transition-colors shadow-md">Yeni Simülasyon Kurgula</button>
                 </>
               )}
             </motion.div>
@@ -359,28 +464,28 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       </div>
 
       {/* Navigation Buttons */}
-      {step < 5 && (
-        <div className="flex items-center justify-between pt-2">
+      {step < 6 && (
+        <div className="flex items-center justify-between p-3 bg-white border border-slate-300 rounded-2xl shadow-sm shrink-0">
           {step > 1 ? (
-            <button onClick={handlePrev} className="px-5 py-3 bg-white hover:bg-slate-50 text-slate-700 font-bold text-sm rounded-xl border border-slate-300 shadow-sm transition-all flex items-center gap-2">
-              <ArrowLeft size={16} /> Önceki Adım
+            <button onClick={handlePrev} className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl border border-slate-300 shadow-sm transition-all flex items-center gap-2">
+              <ArrowLeft size={14} /> Önceki Adım
             </button>
           ) : <div></div>}
 
-          {step < 4 ? (
-            <button onClick={handleNext} className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl border border-emerald-500 shadow-sm transition-all flex items-center gap-2">
-              Sonraki Adım <ArrowRight size={16} />
+          {step < 5 ? (
+            <button onClick={handleNext} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center gap-2">
+              Sonraki Adım <ArrowRight size={14} />
             </button>
           ) : (
-            <button onClick={runSimulation} className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm rounded-xl shadow-lg transition-all flex items-center gap-2">
-              <PlayCircle size={18} /> Dinamik Simülasyonu Başlat
+            <button onClick={runSimulation} className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-2">
+              <PlayCircle size={16} /> Simülasyonu Başlat
             </button>
           )}
         </div>
       )}
+      </div>
     </motion.div>
   );
 };
 
 export default OneDAnalysis;
-
