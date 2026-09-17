@@ -11,6 +11,26 @@ export interface ProfilePoint {
 export interface CrossSection {
   station: number;
   profile: ProfilePoint[];
+  centerCoord?: [number, number]; // [lat, lon]
+  cutLine?: [[number, number], [number, number]]; // [[latLeft, lonLeft], [latRight, lonRight]]
+  minElevation: number;
+  maxElevation: number;
+  bankLeftX: number;
+  bankRightX: number;
+}
+
+export interface RoutingResult {
+  station: number;
+  waterElevation: number;
+  maxDepth: number;
+  area: number;
+  velocity: number;
+  wettedPerimeter: number;
+  topWidth: number;
+  froudeNumber: number;
+  isOverbank: boolean;
+  energyElevation: number;
+  bedElevation: number;
 }
 
 export async function parseKML(file: File): Promise<Feature<LineString>> {
@@ -39,6 +59,29 @@ export async function parseKML(file: File): Promise<Feature<LineString>> {
   }
   
   return turf.lineString(coords);
+}
+
+export async function parseKMLCoordinates(file: File): Promise<[number, number][]> {
+  const text = await file.text();
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(text, 'text/xml');
+  const coordinatesNode = xml.getElementsByTagName('coordinates')[0];
+  
+  if (!coordinatesNode || !coordinatesNode.textContent) {
+    return [];
+  }
+  
+  const coordsText = coordinatesNode.textContent.trim();
+  const coordPairs = coordsText.split(/\s+/);
+  const coords: [number, number][] = [];
+  
+  for (const pair of coordPairs) {
+    const [lon, lat] = pair.split(',').map(Number);
+    if (!isNaN(lon) && !isNaN(lat)) {
+      coords.push([lat, lon]); // Leaflet format: [lat, lon]
+    }
+  }
+  return coords;
 }
 
 export async function loadDEM(file: File) {
@@ -118,7 +161,31 @@ export async function generateCrossSections(
       profile.push({ x: dist + halfWidth, z, type });
     }
     
-    sections.push({ station: Math.round(d), profile });
+    const [centerLon, centerLat] = pt.geometry.coordinates;
+    const ptLeft = turf.destination(pt, halfWidth, angleLeft, { units: 'meters' });
+    const ptRight = turf.destination(pt, halfWidth, angleRight, { units: 'meters' });
+    const cutLine: [[number, number], [number, number]] = [
+      [ptLeft.geometry.coordinates[1], ptLeft.geometry.coordinates[0]],
+      [ptRight.geometry.coordinates[1], ptRight.geometry.coordinates[0]]
+    ];
+
+    const bankLeftX = halfWidth - (sectionWidth * 0.2);
+    const bankRightX = halfWidth + (sectionWidth * 0.2);
+
+    const elevations = profile.map(p => p.z);
+    const minElevation = Math.min(...elevations);
+    const maxElevation = Math.max(...elevations);
+
+    sections.push({
+      station: Math.round(d),
+      profile,
+      centerCoord: [centerLat, centerLon],
+      cutLine,
+      minElevation,
+      maxElevation,
+      bankLeftX,
+      bankRightX
+    });
   }
   
   return sections;
@@ -131,9 +198,9 @@ export function computeNormalDepth(
   nLOB: number,
   nROB: number,
   S0: number
-) {
-  const minZ = Math.min(...section.profile.map(p => p.z));
-  const maxZ = Math.max(...section.profile.map(p => p.z));
+): Omit<RoutingResult, 'station'> {
+  const minZ = section.minElevation;
+  const maxZ = section.maxElevation;
   
   let wl = minZ + 0.05;
   const tolerance = 0.1;
@@ -142,6 +209,9 @@ export function computeNormalDepth(
   let finalQ = 0;
   let finalArea = 0;
   let finalVel = 0;
+  let finalPerimeter = 0;
+  let finalTopWidth = 0;
+  let finalOverbank = false;
   
   for (let i = 0; i < maxIter; i++) {
     if (wl > maxZ) break;
@@ -149,6 +219,8 @@ export function computeNormalDepth(
     let areaMAIN = 0, pMAIN = 0;
     let areaLOB = 0, pLOB = 0;
     let areaROB = 0, pROB = 0;
+    let topWidth = 0;
+    let overbankDetected = false;
     
     for (let j = 0; j < section.profile.length - 1; j++) {
       const p1 = section.profile[j];
@@ -166,9 +238,19 @@ export function computeNormalDepth(
         const dz = Math.abs(z1 - z2);
         const wetP = Math.sqrt(dx*dx + dz*dz);
         
-        if (p1.type === 'MAIN') { areaMAIN += a; pMAIN += wetP; }
-        else if (p1.type === 'LOB') { areaLOB += a; pLOB += wetP; }
-        else { areaROB += a; pROB += wetP; }
+        if (p1.type === 'MAIN') {
+          areaMAIN += a;
+          pMAIN += wetP;
+        } else if (p1.type === 'LOB') {
+          areaLOB += a;
+          pLOB += wetP;
+          if (a > 0.05) overbankDetected = true;
+        } else {
+          areaROB += a;
+          pROB += wetP;
+          if (a > 0.05) overbankDetected = true;
+        }
+        topWidth += dx;
       }
     }
     
@@ -182,12 +264,15 @@ export function computeNormalDepth(
     const kROB = computeK(areaROB, pROB, nROB);
     
     const K_total = kMAIN + kLOB + kROB;
-    const Q_calc = K_total * Math.sqrt(S0);
+    const Q_calc = K_total * Math.sqrt(Math.max(0.0001, S0));
     
     if (Math.abs(Q_calc - Q) < tolerance) {
       finalQ = Q_calc;
       finalArea = areaMAIN + areaLOB + areaROB;
+      finalPerimeter = pMAIN + pLOB + pROB;
+      finalTopWidth = topWidth;
       finalVel = finalArea > 0 ? Q_calc / finalArea : 0;
+      finalOverbank = overbankDetected;
       break;
     }
     
@@ -195,15 +280,34 @@ export function computeNormalDepth(
       wl += 0.05;
     } else {
       wl -= 0.01;
-      if (Math.abs(Q_calc - Q) < tolerance * 10) break;
+      if (Math.abs(Q_calc - Q) < tolerance * 10) {
+        finalQ = Q_calc;
+        finalArea = areaMAIN + areaLOB + areaROB;
+        finalPerimeter = pMAIN + pLOB + pROB;
+        finalTopWidth = topWidth;
+        finalVel = finalArea > 0 ? Q_calc / finalArea : 0;
+        finalOverbank = overbankDetected;
+        break;
+      }
     }
   }
+
+  const hydraulicDepth = finalTopWidth > 0 ? finalArea / finalTopWidth : Math.max(0.1, wl - minZ);
+  const froudeNumber = hydraulicDepth > 0 ? finalVel / Math.sqrt(9.81 * hydraulicDepth) : 0;
+  const velocityHead = (finalVel * finalVel) / (2 * 9.81);
+  const energyElevation = wl + velocityHead;
   
   return {
     waterElevation: wl,
-    maxDepth: wl - minZ,
+    maxDepth: Math.max(0, wl - minZ),
     area: finalArea,
-    velocity: finalVel
+    velocity: finalVel,
+    wettedPerimeter: finalPerimeter,
+    topWidth: finalTopWidth,
+    froudeNumber,
+    isOverbank: finalOverbank,
+    energyElevation,
+    bedElevation: minZ
   };
 }
 
@@ -214,9 +318,7 @@ export function runRouting(
   nLOB: number,
   nROB: number,
   S0: number
-) {
-  // Solve normal depth explicitly at each section for the peak flow
-  // (Proxy for 1D Diffusive routing visualization)
+): RoutingResult[] {
   return sections.map(sec => {
     const res = computeNormalDepth(sec, peakFlow, nMain, nLOB, nROB, S0);
     return {
