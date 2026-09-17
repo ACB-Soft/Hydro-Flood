@@ -17,6 +17,7 @@ import About from './components/About';
 import DXFAnalysis, { CADLayer } from './components/DXFAnalysis';
 import DEMGenerator from './components/DEMGenerator';
 import DynamicFlood from './components/DynamicFlood';
+import OneDAnalysis from './components/OneDAnalysis';
 import { MapAutoCenter, MapClickHandler } from './components/MapHelpers';
 import Footer from './components/Footer';
 import Header from './components/Header';
@@ -116,7 +117,7 @@ const MANNING_PRESETS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analysis' | 'about' | 'settings' | 'dxf-analysis' | 'dem-generator' | 'dynamic-flood' | 'one-d-analysis'>('dashboard');
   const [dxfSubTab, setDxfSubTab] = useState<'viewer' | 'converter'>('viewer');
   const [dxfData, setDxfData] = useState<any>(null);
   const [dxfLayers, setDxfLayers] = useState<CADLayer[]>([]);
@@ -1663,6 +1664,7 @@ ${floodPolygons.join('\n')}
               onOpenDXFAnalysis={() => setActiveTab('dxf-analysis')}
               onOpenDEMGenerator={() => setActiveTab('dem-generator')}
               onOpenDynamicFlood={() => setActiveTab('dynamic-flood')}
+              onOpenOneDAnalysis={() => setActiveTab('one-d-analysis')}
               isSimulating={isSimulating}
               progress={progress}
             />
@@ -1737,6 +1739,9 @@ ${floodPolygons.join('\n')}
           )}
           {activeTab === 'dynamic-flood' && (
             <DynamicFlood onBackToDashboard={() => setActiveTab('dashboard')} />
+          )}
+          {activeTab === 'one-d-analysis' && (
+            <OneDAnalysis onBackToDashboard={() => setActiveTab('dashboard')} />
           )}
         </AnimatePresence>
       </main>

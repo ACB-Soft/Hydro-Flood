@@ -18,6 +18,7 @@ interface DashboardProps {
   onOpenDXFAnalysis: () => void;
   onOpenDEMGenerator?: () => void;
   onOpenDynamicFlood?: () => void;
+  onOpenOneDAnalysis?: () => void;
   isSimulating?: boolean;
   progress?: number;
 }
@@ -29,6 +30,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   onOpenDXFAnalysis,
   onOpenDEMGenerator,
   onOpenDynamicFlood,
+  onOpenOneDAnalysis,
   isSimulating,
   progress,
 }) => {
@@ -213,6 +215,36 @@ const Dashboard: React.FC<DashboardProps> = ({
               className="w-full py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs sm:text-sm rounded-xl border border-cyan-600 shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
             >
               <span>DEM Üretici Aç</span>
+              <ArrowRight size={16} />
+            </button>
+          </div>
+          
+          {/* 5. 1D Dinamik Akış Analizi */}
+          <div className="bg-white border border-slate-300 hover:border-emerald-500 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all space-y-4 flex flex-col justify-between group">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="p-3 bg-emerald-100 rounded-xl text-emerald-800 border border-emerald-200 shrink-0">
+                  <Activity size={24} />
+                </div>
+                <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                  Channel Flow
+                </span>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 group-hover:text-emerald-700 transition-colors">
+                  1B Dinamik Akış Analizi
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed mt-1">
+                  Manning denklemi ile açık kanal fiziği. Kesit, eğim, debi parametrelerine göre normal derinlik, akış hızı ve Froude sayısı hesaplayıcısı.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => onOpenOneDAnalysis && onOpenOneDAnalysis()}
+              className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl border border-emerald-500 shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <span>1B Analiz Modülünü Aç</span>
               <ArrowRight size={16} />
             </button>
           </div>
