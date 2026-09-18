@@ -36,7 +36,9 @@ import {
   X,
   Sparkles,
   ArrowUpDown,
-  BookOpen
+  BookOpen,
+  Navigation,
+  Wand2
 } from 'lucide-react';
 import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -50,6 +52,9 @@ import {
   parseKMLBankLines,
   calibrateSectionsWithBankLines,
   calculateDownstreamSlopeFromDEM,
+  detectThalwegCenterline,
+  coordsToKMLFile,
+  ThalwegDetectionResult,
   BankLineItem,
   BankLinesParseResult,
   CrossSection, 
@@ -148,6 +153,13 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   // File Inputs
   const [demFile, setDemFile] = useState<File | null>(null);
   const [centerlineFile, setCenterlineFile] = useState<File | null>(null);
+  const [originalCenterlineFile, setOriginalCenterlineFile] = useState<File | null>(null);
+  const [originalCenterlineCoords, setOriginalCenterlineCoords] = useState<[number, number][]>([]);
+  const [detectedThalwegCoords, setDetectedThalwegCoords] = useState<[number, number][]>([]);
+  const [thalwegResult, setThalwegResult] = useState<ThalwegDetectionResult | null>(null);
+  const [isDetectingThalweg, setIsDetectingThalweg] = useState<boolean>(false);
+  const [useDetectedThalweg, setUseDetectedThalweg] = useState<boolean>(false);
+  const [showOriginalCenterline, setShowOriginalCenterline] = useState<boolean>(true);
   const [banksFile, setBanksFile] = useState<File | null>(null);
   const [centerlineCoords, setCenterlineCoords] = useState<[number, number][]>([]);
   const [bankCoords, setBankCoords] = useState<[number, number][]>([]);
@@ -259,24 +271,109 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       if (lon > maxLon) maxLon = lon;
     });
 
+    if (detectedThalwegCoords.length > 0) {
+      allPoints.push(...detectedThalwegCoords);
+    }
     return [
       [minLat - 0.002, minLon - 0.002],
       [maxLat + 0.002, maxLon + 0.002]
     ];
-  }, [centerlineCoords, leftBankCoords, rightBankCoords, sections, structures]);
+  }, [centerlineCoords, detectedThalwegCoords, leftBankCoords, rightBankCoords, sections, structures]);
 
   // Handle Centerline KML Upload
   const handleCenterlineUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setCenterlineFile(file);
+      setOriginalCenterlineFile(file);
+      setDetectedThalwegCoords([]);
+      setThalwegResult(null);
+      setUseDetectedThalweg(false);
       try {
         const coords = await parseKMLCoordinates(file);
         setCenterlineCoords(coords);
+        setOriginalCenterlineCoords(coords);
       } catch (err) {
         console.error("KML koordinatları okunamadı:", err);
       }
     }
+  };
+
+  // Detect True River Thalweg (Yatak Tabanı) from DEM
+  const handleDetectThalwegCenterline = async (searchCorridorWidth: number = 60) => {
+    if (!demFile) {
+      alert("Lütfen önce bir DEM (GeoTIFF) dosyası yükleyin.");
+      return;
+    }
+    const targetFile = originalCenterlineFile || centerlineFile;
+    if (!targetFile) {
+      alert("Lütfen önce bir Nehir Merkez Aksı (KML) yükleyin.");
+      return;
+    }
+
+    setIsDetectingThalweg(true);
+    try {
+      const result = await detectThalwegCenterline(
+        demFile,
+        targetFile,
+        searchCorridorWidth,
+        10, // 10m spacing
+        selectedCRS.def
+      );
+
+      setThalwegResult(result);
+      setDetectedThalwegCoords(result.adjustedCoords);
+
+      // Automatically construct KML File object from detected coordinates
+      const thalwegFile = coordsToKMLFile(
+        result.adjustedCoords,
+        `dem_talveg_${targetFile.name.replace('.kml', '')}.kml`
+      );
+
+      // Switch active centerline to the detected thalweg
+      setCenterlineFile(thalwegFile);
+      setCenterlineCoords(result.adjustedCoords);
+      setUseDetectedThalweg(true);
+
+    } catch (err: any) {
+      console.error("DEM Thalweg tespiti hatası:", err);
+      alert("DEM verisinden dere ekseni tespit edilirken bir hata oluştu: " + (err.message || err));
+    } finally {
+      setIsDetectingThalweg(false);
+    }
+  };
+
+  // Toggle between original KML centerline and DEM detected Thalweg centerline
+  const handleToggleCenterlineSource = (useThalweg: boolean) => {
+    if (useThalweg && thalwegResult && detectedThalwegCoords.length > 0) {
+      const targetFile = originalCenterlineFile || centerlineFile;
+      const fileName = targetFile ? `dem_talveg_${targetFile.name.replace('.kml', '')}.kml` : 'dem_talveg_eksen.kml';
+      const thalwegFile = coordsToKMLFile(detectedThalwegCoords, fileName);
+      setCenterlineFile(thalwegFile);
+      setCenterlineCoords(detectedThalwegCoords);
+      setUseDetectedThalweg(true);
+    } else if (!useThalweg && originalCenterlineFile && originalCenterlineCoords.length > 0) {
+      setCenterlineFile(originalCenterlineFile);
+      setCenterlineCoords(originalCenterlineCoords);
+      setUseDetectedThalweg(false);
+    }
+  };
+
+  // Download detected thalweg centerline as KML
+  const handleDownloadThalwegKML = () => {
+    if (!detectedThalwegCoords || detectedThalwegCoords.length === 0) return;
+    const targetFile = originalCenterlineFile || centerlineFile;
+    const fileName = targetFile ? `dem_talveg_${targetFile.name.replace('.kml', '')}.kml` : 'dem_talveg_eksen.kml';
+    const kmlFile = coordsToKMLFile(detectedThalwegCoords, fileName);
+    
+    const url = URL.createObjectURL(kmlFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // Handle Bank Stations KML Upload (Fixed: Both Left & Right Banks parsed & calibrated)
@@ -1629,13 +1726,13 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           onClick={() => setShowCenterlineLayer(!showCenterlineLayer)}
                           className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
                             showCenterlineLayer 
-                              ? 'bg-indigo-700 text-white shadow-xs' 
+                              ? (useDetectedThalweg ? 'bg-cyan-700 text-white shadow-xs' : 'bg-indigo-700 text-white shadow-xs')
                               : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                           }`}
-                          title="Nehir talveg / merkez hattı"
+                          title="Nehir talveg / merkez hattı (Orijinal KML veya DEM Thalweg)"
                         >
-                          <span>〰️</span>
-                          <span>Nehir Aksı</span>
+                          <span>{useDetectedThalweg ? '🌊' : '〰️'}</span>
+                          <span>{useDetectedThalweg ? 'DEM Thalweg Aksı' : 'Nehir Aksı'}</span>
                         </button>
 
                         {(leftBankCoords.length > 0 || rightBankCoords.length > 0 || bankCoords.length > 0) && (
@@ -1802,11 +1899,47 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </React.Fragment>
                       ))}
 
-                      {/* 4. Stream Centerline */}
-                      {showCenterlineLayer && centerlineCoords.length > 0 && (
-                        <Polyline positions={centerlineCoords} color="#2563eb" weight={3.5} opacity={0.85}>
-                          <Tooltip sticky>Nehir Merkez Aksı</Tooltip>
-                        </Polyline>
+                      {/* 4. Stream Centerline & Detected Thalweg */}
+                      {showCenterlineLayer && (
+                        <>
+                          {/* If Thalweg was detected and user is using it, show original as dashed line for visual comparison */}
+                          {thalwegResult && originalCenterlineCoords.length > 0 && useDetectedThalweg && (
+                            <Polyline
+                              positions={originalCenterlineCoords}
+                              color="#64748b"
+                              weight={2}
+                              dashArray="4, 4"
+                              opacity={0.65}
+                            >
+                              <Tooltip sticky>
+                                <span className="text-slate-700 font-bold">Orijinal KML Aksı</span>
+                              </Tooltip>
+                            </Polyline>
+                          )}
+
+                          {/* Active River Centerline */}
+                          {centerlineCoords.length > 0 && (
+                            <Polyline
+                              positions={centerlineCoords}
+                              color={useDetectedThalweg ? '#0891b2' : '#2563eb'}
+                              weight={useDetectedThalweg ? 4 : 3.5}
+                              opacity={0.9}
+                            >
+                              <Tooltip sticky>
+                                <div className="text-xs">
+                                  <span className="font-bold block text-cyan-900">
+                                    {useDetectedThalweg ? '🌊 DEM Yatak Tabanı (Thalweg) Aksı' : '〰️ Nehir Merkez Aksı'}
+                                  </span>
+                                  {useDetectedThalweg && thalwegResult && (
+                                    <span className="text-[10px] text-slate-600">
+                                      Ort. Kayma: {thalwegResult.totalShiftDistance} m | Taban Farkı: -{thalwegResult.elevationGain} m
+                                    </span>
+                                  )}
+                                </div>
+                              </Tooltip>
+                            </Polyline>
+                          )}
+                        </>
                       )}
 
                       {/* 5. Natural Banks (Sol ve Sağ Kıyı Hatları) */}
@@ -2300,24 +2433,147 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                 {/* River Centerline KML Input */}
                 <div>
-                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                    Nehir Merkez Hattı (KML):
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] font-bold text-slate-700">
+                      Nehir Merkez Hattı (KML):
+                    </label>
+                    {centerlineFile && demFile && (
+                      <button
+                        type="button"
+                        onClick={() => handleDetectThalwegCenterline(60)}
+                        disabled={isDetectingThalweg}
+                        className="text-[10px] font-bold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 bg-cyan-50 hover:bg-cyan-100 px-1.5 py-0.5 rounded-md border border-cyan-200 cursor-pointer transition-colors"
+                        title="DEM verisini tarayarak en düşük kota sahip gerçek yatak tabanını (thalweg) otomatik tespit eder"
+                      >
+                        {isDetectingThalweg ? (
+                          <>
+                            <RefreshCw size={11} className="animate-spin text-cyan-700" />
+                            <span>DEM Taranıyor...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 size={11} className="text-cyan-700" />
+                            <span>DEM'den Gerçek Ekseni Bul</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+
                   {centerlineFile ? (
-                    <div className="bg-blue-50 border border-blue-200 p-2 rounded-xl flex items-center justify-between gap-2">
-                      <div className="space-y-0.5 overflow-hidden">
-                        <div className="flex items-center gap-1.5">
-                          <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
-                          <span className="font-bold text-slate-900 text-xs truncate">{centerlineFile.name}</span>
+                    <div className="bg-blue-50 border border-blue-200 p-2.5 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="space-y-0.5 overflow-hidden">
+                          <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
+                            <span className="font-bold text-slate-900 text-xs truncate">
+                              {useDetectedThalweg ? '🌊 ' + centerlineFile.name : centerlineFile.name}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-blue-700 truncate flex items-center gap-1.5">
+                            <span>{centerlineCoords.length} Nokta Akış Aksı</span>
+                            {useDetectedThalweg && (
+                              <span className="bg-cyan-200/80 text-cyan-950 font-bold px-1.5 py-0.2 rounded text-[9px]">
+                                DEM Thalweg Aktif
+                              </span>
+                            )}
+                          </p>
                         </div>
-                        <p className="text-[10px] text-blue-700 truncate">
-                          {centerlineCoords.length} Nokta Akış Aksı
-                        </p>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 transition-all shadow-sm">
+                            Değiştir
+                            <input type="file" accept=".kml" onChange={handleCenterlineUpload} className="hidden" />
+                          </label>
+                        </div>
                       </div>
-                      <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all shadow-sm">
-                        Değiştir
-                        <input type="file" accept=".kml" onChange={handleCenterlineUpload} className="hidden" />
-                      </label>
+
+                      {/* DEM Thalweg Detection Status & Switch Card */}
+                      {thalwegResult && (
+                        <div className="bg-white/95 border border-cyan-200 rounded-lg p-2 text-[10px] space-y-1.5 shadow-2xs">
+                          <div className="flex items-center justify-between border-b border-cyan-100 pb-1">
+                            <span className="font-bold text-cyan-900 flex items-center gap-1">
+                              <Sparkles size={11} className="text-cyan-600" />
+                              DEM Yatak Tabanı (Thalweg) Tespiti
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={handleDownloadThalwegKML}
+                                className="px-1.5 py-0.5 bg-cyan-100 hover:bg-cyan-200 text-cyan-900 rounded font-bold cursor-pointer transition-colors text-[9px]"
+                                title="Tespit edilen gerçek ekseni KML olarak indir"
+                              >
+                                📥 KML İndir
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-1 text-center py-0.5">
+                            <div className="bg-slate-50 p-1 rounded border border-slate-200/60">
+                              <span className="text-slate-500 block text-[9px]">Ortalama Kayma</span>
+                              <span className="font-bold text-slate-800 text-[11px]">
+                                {thalwegResult.totalShiftDistance} m
+                              </span>
+                            </div>
+                            <div className="bg-slate-50 p-1 rounded border border-slate-200/60">
+                              <span className="text-slate-500 block text-[9px]">Maks. Taban Farkı</span>
+                              <span className="font-bold text-slate-800 text-[11px]">
+                                {thalwegResult.maxShiftDistance} m
+                              </span>
+                            </div>
+                            <div className="bg-cyan-50/70 p-1 rounded border border-cyan-200/60">
+                              <span className="text-cyan-700 block text-[9px]">Taban Derinleşmesi</span>
+                              <span className="font-bold text-cyan-900 text-[11px]">
+                                {thalwegResult.elevationGain > 0 ? `-${thalwegResult.elevationGain} m` : '0 m'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                            <span className="text-slate-600 text-[9px]">Kullanılan Eksen:</span>
+                            <div className="inline-flex rounded-md shadow-2xs border border-slate-200 overflow-hidden text-[9px] font-bold">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleCenterlineSource(false)}
+                                className={`px-2 py-0.5 cursor-pointer transition-colors ${
+                                  !useDetectedThalweg
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-white text-slate-700 hover:bg-slate-50'
+                                }`}
+                              >
+                                Orijinal KML
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleCenterlineSource(true)}
+                                className={`px-2 py-0.5 cursor-pointer transition-colors ${
+                                  useDetectedThalweg
+                                    ? 'bg-cyan-700 text-white'
+                                    : 'bg-white text-slate-700 hover:bg-slate-50'
+                                }`}
+                              >
+                                DEM Thalweg (Önerilen)
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Bilgilendirme ve Hızlı Buton (Eğer henüz çalıştırılmadıysa) */}
+                      {!thalwegResult && demFile && (
+                        <div className="pt-1 border-t border-blue-200/70 flex items-center justify-between">
+                          <span className="text-[9px] text-blue-700">
+                            KML ekseni civarındaki en derin kotlar tespit edilsin mi?
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleDetectThalwegCenterline(60)}
+                            disabled={isDetectingThalweg}
+                            className="px-2 py-0.5 bg-cyan-700 hover:bg-cyan-800 text-white rounded font-bold text-[9px] cursor-pointer shadow-xs transition-colors shrink-0"
+                          >
+                            {isDetectingThalweg ? 'Taranıyor...' : 'Ekseni Düzelt'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">

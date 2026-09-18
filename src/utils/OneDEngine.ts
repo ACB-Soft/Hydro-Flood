@@ -457,7 +457,7 @@ export async function loadDEM(file: File) {
   return { bbox, width, height, data };
 }
 
-function getElevation(dem: any, lon: number, lat: number, crsDef?: string): number {
+export function getElevation(dem: any, lon: number, lat: number, crsDef?: string): number {
   const { bbox, width, height, data } = dem;
   let targetX = lon;
   let targetY = lat;
@@ -485,6 +485,208 @@ function getElevation(dem: any, lon: number, lat: number, crsDef?: string): numb
   const val = data[py * width + px];
   if (val < -10000 || val > 10000) return NaN; // nodata filter
   return val;
+}
+
+export interface ThalwegDetectionResult {
+  originalCoords: [number, number][]; // [lat, lon]
+  adjustedCoords: [number, number][]; // [lat, lon] (Thalweg points detected from DEM)
+  totalShiftDistance: number;         // Average lateral shift in meters
+  maxShiftDistance: number;           // Max lateral shift in meters
+  elevationGain: number;              // Average bed depth gained (drop in elevation, e.g. 1.25m deeper)
+  pointsSampled: number;
+  pointsShifted: number;
+  method: string;
+}
+
+/**
+ * Detects the true river thalweg (deepest channel axis) from DEM within a lateral corridor around the initial KML axis.
+ * Performs orthogonal cross-swaths along the line to find local minimum elevation points and applies Savitzky-Golay / moving window smoothing.
+ */
+export async function detectThalwegCenterline(
+  demFile: File,
+  centerlineFile: File,
+  searchCorridorWidth: number = 60, // Total corridor width in meters (e.g. 60m = +/- 30m)
+  sampleInterval: number = 10,       // Distance between thalweg probing points in meters
+  crsDef?: string
+): Promise<ThalwegDetectionResult> {
+  const dem = await loadDEM(demFile);
+  const centerline = await parseKML(centerlineFile);
+  const totalLength = turf.length(centerline, { units: 'meters' });
+
+  if (totalLength < 5) {
+    throw new Error("Nehir aksı çok kısa.");
+  }
+
+  const halfCorridor = Math.max(5, searchCorridorWidth / 2);
+  const lateralStep = 1.5; // Probe DEM every 1.5m across the perpendicular transect
+
+  const rawThalwegPoints: {
+    origCoord: [number, number]; // [lat, lon]
+    thalwegCoord: [number, number]; // [lat, lon]
+    origElev: number;
+    minElev: number;
+    shiftDist: number;
+    distanceAlong: number;
+  }[] = [];
+
+  const actualStep = Math.max(5, sampleInterval);
+
+  for (let d = 0; d <= totalLength; d += actualStep) {
+    const pt = turf.along(centerline, d, { units: 'meters' });
+    const ptNext = turf.along(centerline, Math.min(d + 1, totalLength), { units: 'meters' });
+    const bearing = turf.bearing(pt, ptNext);
+
+    const angleLeft = bearing - 90;
+    const angleRight = bearing + 90;
+
+    const [origLon, origLat] = pt.geometry.coordinates;
+    const origZ = getElevation(dem, origLon, origLat, crsDef);
+
+    let lowestZ = isNaN(origZ) ? 999999 : origZ;
+    let bestLon = origLon;
+    let bestLat = origLat;
+    let bestOffset = 0; // meters from center (+ = right, - = left)
+
+    // Scan laterally perpendicular to river axis
+    for (let offset = -halfCorridor; offset <= halfCorridor; offset += lateralStep) {
+      let probePt;
+      if (offset < 0) {
+        probePt = turf.destination(pt, Math.abs(offset), angleLeft, { units: 'meters' });
+      } else if (offset > 0) {
+        probePt = turf.destination(pt, offset, angleRight, { units: 'meters' });
+      } else {
+        probePt = pt;
+      }
+
+      const [pLon, pLat] = probePt.geometry.coordinates;
+      const z = getElevation(dem, pLon, pLat, crsDef);
+
+      if (!isNaN(z)) {
+        // We look for deeper points than current lowest
+        if (z < lowestZ) {
+          lowestZ = z;
+          bestLon = pLon;
+          bestLat = pLat;
+          bestOffset = offset;
+        }
+      }
+    }
+
+    const shiftDist = Math.abs(bestOffset);
+    rawThalwegPoints.push({
+      origCoord: [origLat, origLon],
+      thalwegCoord: [bestLat, bestLon],
+      origElev: isNaN(origZ) ? lowestZ : origZ,
+      minElev: lowestZ,
+      shiftDist,
+      distanceAlong: d
+    });
+  }
+
+  // Ensure last point of line is included
+  if (rawThalwegPoints.length > 0 && rawThalwegPoints[rawThalwegPoints.length - 1].distanceAlong < totalLength - 2) {
+    const ptEnd = turf.along(centerline, totalLength, { units: 'meters' });
+    const [eLon, eLat] = ptEnd.geometry.coordinates;
+    const eZ = getElevation(dem, eLon, eLat, crsDef);
+    rawThalwegPoints.push({
+      origCoord: [eLat, eLon],
+      thalwegCoord: [eLat, eLon],
+      origElev: isNaN(eZ) ? 0 : eZ,
+      minElev: isNaN(eZ) ? 0 : eZ,
+      shiftDist: 0,
+      distanceAlong: totalLength
+    });
+  }
+
+  // Hydrodynamic line smoothing: River thalwegs do not zigzag abruptly.
+  // Apply a 5-point moving window smoothing to the detected coordinates
+  const smoothedCoords: [number, number][] = [];
+  const windowRadius = 2; // window of 5 points
+
+  for (let i = 0; i < rawThalwegPoints.length; i++) {
+    let sumLat = 0;
+    let sumLon = 0;
+    let count = 0;
+
+    for (let w = -windowRadius; w <= windowRadius; w++) {
+      const idx = i + w;
+      if (idx >= 0 && idx < rawThalwegPoints.length) {
+        const weight = windowRadius + 1 - Math.abs(w); // Triangular smoothing weight
+        sumLat += rawThalwegPoints[idx].thalwegCoord[0] * weight;
+        sumLon += rawThalwegPoints[idx].thalwegCoord[1] * weight;
+        count += weight;
+      }
+    }
+
+    smoothedCoords.push([sumLat / count, sumLon / count]);
+  }
+
+  // Calculate statistics
+  let totalShift = 0;
+  let maxShift = 0;
+  let totalElevGain = 0;
+  let validElevGainCount = 0;
+  let shiftedCount = 0;
+
+  for (let i = 0; i < rawThalwegPoints.length; i++) {
+    const item = rawThalwegPoints[i];
+    totalShift += item.shiftDist;
+    if (item.shiftDist > maxShift) maxShift = item.shiftDist;
+    if (item.shiftDist > 1.0) shiftedCount++;
+
+    const deltaElev = item.origElev - item.minElev;
+    if (deltaElev > 0 && deltaElev < 50) {
+      totalElevGain += deltaElev;
+      validElevGainCount++;
+    }
+  }
+
+  const avgShift = rawThalwegPoints.length > 0 ? totalShift / rawThalwegPoints.length : 0;
+  const avgElevGain = validElevGainCount > 0 ? totalElevGain / validElevGainCount : 0;
+
+  return {
+    originalCoords: rawThalwegPoints.map(p => p.origCoord),
+    adjustedCoords: smoothedCoords,
+    totalShiftDistance: Number(avgShift.toFixed(2)),
+    maxShiftDistance: Number(maxShift.toFixed(2)),
+    elevationGain: Number(avgElevGain.toFixed(2)),
+    pointsSampled: rawThalwegPoints.length,
+    pointsShifted: shiftedCount,
+    method: `DEM taban taraması (±${halfCorridor}m koridor, ${lateralStep}m adım) ve hidrodinamik yumuşatma uygulandı.`
+  };
+}
+
+/**
+ * Converts a list of Leaflet [lat, lon] coordinates into a KML string and File object.
+ */
+export function coordsToKMLFile(coords: [number, number][], fileName: string = 'dem_tespit_dere_ekseni.kml'): File {
+  const coordString = coords.map(([lat, lon]) => `${lon.toFixed(7)},${lat.toFixed(7)},0`).join(' ');
+  const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${fileName.replace('.kml', '')}</name>
+    <description>DEM Yatak Tabanı (Thalweg) Taraması ile Düzeltilmiş Dere Ekseni</description>
+    <Style id="thalwegStyle">
+      <LineStyle>
+        <color>ff00aaff</color>
+        <width>4</width>
+      </LineStyle>
+    </Style>
+    <Placemark>
+      <name>Gerçek Dere Ekseni (Thalweg)</name>
+      <styleUrl>#thalwegStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          ${coordString}
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+
+  const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+  return new File([blob], fileName, { type: 'application/vnd.google-earth.kml+xml' });
 }
 
 export async function generateCrossSections(
