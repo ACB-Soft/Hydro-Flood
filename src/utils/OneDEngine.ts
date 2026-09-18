@@ -108,27 +108,340 @@ export async function parseKML(file: File): Promise<Feature<LineString>> {
   return turf.lineString(coords);
 }
 
+export interface BankLineItem {
+  id: string;
+  name: string;
+  side: 'left' | 'right';
+  coords: [number, number][]; // [lat, lon] Leaflet format
+}
+
+export interface BankLinesParseResult {
+  leftBank?: BankLineItem;
+  rightBank?: BankLineItem;
+  allLines: BankLineItem[];
+  totalPoints: number;
+}
+
 export async function parseKMLCoordinates(file: File): Promise<[number, number][]> {
   const text = await file.text();
   const parser = new DOMParser();
   const xml = parser.parseFromString(text, 'text/xml');
-  const coordinatesNode = xml.getElementsByTagName('coordinates')[0];
+  const coordinatesNodes = Array.from(xml.getElementsByTagName('coordinates'));
   
-  if (!coordinatesNode || !coordinatesNode.textContent) {
+  if (coordinatesNodes.length === 0) {
     return [];
   }
   
-  const coordsText = coordinatesNode.textContent.trim();
-  const coordPairs = coordsText.split(/\s+/);
   const coords: [number, number][] = [];
-  
-  for (const pair of coordPairs) {
-    const [lon, lat] = pair.split(',').map(Number);
-    if (!isNaN(lon) && !isNaN(lat)) {
-      coords.push([lat, lon]); // Leaflet format: [lat, lon]
+  for (const node of coordinatesNodes) {
+    if (!node.textContent) continue;
+    const coordPairs = node.textContent.trim().split(/\s+/);
+    for (const pair of coordPairs) {
+      const [lon, lat] = pair.split(',').map(Number);
+      if (!isNaN(lon) && !isNaN(lat)) {
+        coords.push([lat, lon]);
+      }
     }
   }
   return coords;
+}
+
+export async function parseKMLBankLines(
+  file: File, 
+  centerlineCoords?: [number, number][]
+): Promise<BankLinesParseResult> {
+  const text = await file.text();
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(text, 'text/xml');
+  
+  // Extract lines from Placemarks to retain line names (e.g. 'Sol Kıyı', 'Sağ Kıyı', 'Left Bank', etc.)
+  const placemarks = Array.from(xml.getElementsByTagName('Placemark'));
+  const rawLines: { name: string; coords: [number, number][] }[] = [];
+
+  if (placemarks.length > 0) {
+    for (let i = 0; i < placemarks.length; i++) {
+      const pm = placemarks[i];
+      const nameNode = pm.getElementsByTagName('name')[0];
+      const name = nameNode?.textContent?.trim() || `Kıyı Çizgisi ${i + 1}`;
+      
+      const coordNodes = Array.from(pm.getElementsByTagName('coordinates'));
+      for (const cn of coordNodes) {
+        if (!cn.textContent) continue;
+        const coordPairs = cn.textContent.trim().split(/\s+/);
+        const pts: [number, number][] = [];
+        for (const pair of coordPairs) {
+          const [lon, lat] = pair.split(',').map(Number);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            pts.push([lat, lon]);
+          }
+        }
+        if (pts.length >= 2) {
+          rawLines.push({ name, coords: pts });
+        }
+      }
+    }
+  }
+
+  // Fallback: If no placemarks yielded lines, search all <coordinates> elements directly
+  if (rawLines.length === 0) {
+    const allCoordNodes = Array.from(xml.getElementsByTagName('coordinates'));
+    for (let i = 0; i < allCoordNodes.length; i++) {
+      const cn = allCoordNodes[i];
+      if (!cn.textContent) continue;
+      const coordPairs = cn.textContent.trim().split(/\s+/);
+      const pts: [number, number][] = [];
+      for (const pair of coordPairs) {
+        const [lon, lat] = pair.split(',').map(Number);
+        if (!isNaN(lat) && !isNaN(lon)) {
+          pts.push([lat, lon]);
+        }
+      }
+      if (pts.length >= 2) {
+        rawLines.push({ name: `Kıyı Çizgisi ${i + 1}`, coords: pts });
+      }
+    }
+  }
+
+  if (rawLines.length === 0) {
+    throw new Error("KML dosyasında kıyı çizgisi (LineString koordinatları) bulunamadı.");
+  }
+
+  // Classify each line as 'left' or 'right'
+  const classified: BankLineItem[] = [];
+  let leftItem: BankLineItem | undefined;
+  let rightItem: BankLineItem | undefined;
+
+  // 1st Pass: Check name conventions (Turkish & English)
+  for (let i = 0; i < rawLines.length; i++) {
+    const r = rawLines[i];
+    const lower = r.name.toLocaleLowerCase('tr-TR');
+    
+    if (/(sol|left|lob|\blb\b|sol_sahil|sol_kiyi)/i.test(lower) && !leftItem) {
+      leftItem = { id: `bank_left_${i}`, name: r.name, side: 'left', coords: r.coords };
+      classified.push(leftItem);
+    } else if (/(sa[gğ]|right|rob|\brb\b|sag_sahil|sag_kiyi)/i.test(lower) && !rightItem) {
+      rightItem = { id: `bank_right_${i}`, name: r.name, side: 'right', coords: r.coords };
+      classified.push(rightItem);
+    }
+  }
+
+  // 2nd Pass: Centerline cross-product lateral detection if not found by name
+  const unassigned = rawLines.filter(r => !classified.some(c => c.coords === r.coords));
+  if (unassigned.length > 0 && centerlineCoords && centerlineCoords.length >= 2) {
+    const clLine = turf.lineString(centerlineCoords.map(([lat, lon]) => [lon, lat]));
+
+    for (const r of unassigned) {
+      if (leftItem && rightItem) break;
+      let leftScore = 0;
+      let rightScore = 0;
+      const sampleIndices = [0, Math.floor(r.coords.length / 2), r.coords.length - 1];
+
+      for (const idx of sampleIndices) {
+        const pt = r.coords[idx];
+        const turfPt = turf.point([pt[1], pt[0]]);
+        const snapped = turf.nearestPointOnLine(clLine, turfPt);
+        const snappedIndex = snapped.properties?.index || 0;
+        const pA = centerlineCoords[snappedIndex];
+        const pB = centerlineCoords[Math.min(centerlineCoords.length - 1, snappedIndex + 1)];
+        if (pA && pB) {
+          const dx = pB[1] - pA[1];
+          const dy = pB[0] - pA[0];
+          const px = pt[1] - pA[1];
+          const py = pt[0] - pA[0];
+          const crossProduct = dx * py - dy * px;
+          if (crossProduct > 0) leftScore++;
+          else if (crossProduct < 0) rightScore++;
+        }
+      }
+
+      const side: 'left' | 'right' = leftScore >= rightScore ? 'left' : 'right';
+      if (side === 'left' && !leftItem) {
+        leftItem = { id: `bank_left_${classified.length}`, name: r.name || 'Sol Kıyı', side: 'left', coords: r.coords };
+        classified.push(leftItem);
+      } else if (side === 'right' && !rightItem) {
+        rightItem = { id: `bank_right_${classified.length}`, name: r.name || 'Sağ Kıyı', side: 'right', coords: r.coords };
+        classified.push(rightItem);
+      } else if (!leftItem) {
+        leftItem = { id: `bank_left_${classified.length}`, name: r.name || 'Sol Kıyı', side: 'left', coords: r.coords };
+        classified.push(leftItem);
+      } else if (!rightItem) {
+        rightItem = { id: `bank_right_${classified.length}`, name: r.name || 'Sağ Kıyı', side: 'right', coords: r.coords };
+        classified.push(rightItem);
+      }
+    }
+  }
+
+  // 3rd Pass: If still not assigned and we have multiple lines
+  if (!leftItem && rawLines.length > 0) {
+    leftItem = { id: 'bank_left_0', name: rawLines[0].name || 'Sol Kıyı', side: 'left', coords: rawLines[0].coords };
+    classified.push(leftItem);
+  }
+  if (!rightItem && rawLines.length > 1) {
+    const second = rawLines.find(r => r !== rawLines[0]) || rawLines[1];
+    rightItem = { id: 'bank_right_1', name: second.name || 'Sağ Kıyı', side: 'right', coords: second.coords };
+    classified.push(rightItem);
+  }
+
+  const allLines: BankLineItem[] = [
+    ...(leftItem ? [leftItem] : []),
+    ...(rightItem ? [rightItem] : [])
+  ];
+
+  const totalPoints = allLines.reduce((acc, l) => acc + l.coords.length, 0);
+
+  return {
+    leftBank: leftItem,
+    rightBank: rightItem,
+    allLines,
+    totalPoints
+  };
+}
+
+export function calibrateSectionsWithBankLines(
+  sections: CrossSection[],
+  leftBankCoords?: [number, number][],
+  rightBankCoords?: [number, number][]
+): CrossSection[] {
+  if (sections.length === 0 || (!leftBankCoords && !rightBankCoords)) {
+    return sections;
+  }
+
+  let leftGeo: Feature<LineString> | null = null;
+  if (leftBankCoords && leftBankCoords.length >= 2) {
+    leftGeo = turf.lineString(leftBankCoords.map(([lat, lon]) => [lon, lat]));
+  }
+
+  let rightGeo: Feature<LineString> | null = null;
+  if (rightBankCoords && rightBankCoords.length >= 2) {
+    rightGeo = turf.lineString(rightBankCoords.map(([lat, lon]) => [lon, lat]));
+  }
+
+  return sections.map(sec => {
+    if (!sec.cutLine) return sec;
+    const [ptL, ptR] = sec.cutLine; // [lat, lon]
+    const cutGeo = turf.lineString([[ptL[1], ptL[0]], [ptR[1], ptR[0]]]);
+    const cutStartPt = turf.point([ptL[1], ptL[0]]);
+
+    let newBankLeftX = sec.bankLeftX;
+    let newBankRightX = sec.bankRightX;
+
+    if (leftGeo) {
+      const intersectL = turf.lineIntersect(cutGeo, leftGeo);
+      if (intersectL.features.length > 0) {
+        const intPt = intersectL.features[0];
+        const dist = turf.distance(cutStartPt, intPt, { units: 'meters' });
+        if (dist > 0 && dist < sec.profile[sec.profile.length - 1].x) {
+          newBankLeftX = dist;
+        }
+      }
+    }
+
+    if (rightGeo) {
+      const intersectR = turf.lineIntersect(cutGeo, rightGeo);
+      if (intersectR.features.length > 0) {
+        const intPt = intersectR.features[0];
+        const dist = turf.distance(cutStartPt, intPt, { units: 'meters' });
+        if (dist > newBankLeftX && dist <= sec.profile[sec.profile.length - 1].x) {
+          newBankRightX = dist;
+        }
+      }
+    }
+
+    // Re-assign profile point types (LOB, MAIN, ROB)
+    const newProfile = sec.profile.map(p => {
+      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
+      if (p.x < newBankLeftX) type = 'LOB';
+      else if (p.x > newBankRightX) type = 'ROB';
+      return { ...p, type };
+    });
+
+    return {
+      ...sec,
+      bankLeftX: Number(newBankLeftX.toFixed(2)),
+      bankRightX: Number(newBankRightX.toFixed(2)),
+      profile: newProfile
+    };
+  });
+}
+
+export function calculateDownstreamSlopeFromDEM(
+  sections: CrossSection[]
+): {
+  slope: number;
+  percent: number;
+  method: string;
+  deltaZ: number;
+  reachLength: number;
+  upstreamZ: number;
+  downstreamZ: number;
+} {
+  if (sections.length < 2) {
+    return {
+      slope: 0.001,
+      percent: 0.1,
+      method: 'Varsayılan sabit eğim (kesit yetersiz)',
+      deltaZ: 0,
+      reachLength: 0,
+      upstreamZ: 0,
+      downstreamZ: 0
+    };
+  }
+
+  const sStart = sections[0];
+  const sEnd = sections[sections.length - 1];
+  const totalDist = Math.abs(sEnd.station - sStart.station);
+  
+  // Check elevation trend to determine downstream end
+  const startIsUpstream = sStart.minElevation >= sEnd.minElevation;
+  const dsEndSec = startIsUpstream ? sEnd : sStart;
+  
+  // Target downstream reach length: last 150m - 800m or 25% of river reach
+  const targetDsLength = Math.max(150, Math.min(800, totalDist * 0.25));
+  
+  let dsStartSec = dsEndSec;
+  if (startIsUpstream) {
+    for (let i = sections.length - 2; i >= 0; i--) {
+      const d = Math.abs(sections[i].station - dsEndSec.station);
+      dsStartSec = sections[i];
+      if (d >= targetDsLength) break;
+    }
+  } else {
+    for (let i = 1; i < sections.length; i++) {
+      const d = Math.abs(sections[i].station - dsEndSec.station);
+      dsStartSec = sections[i];
+      if (d >= targetDsLength) break;
+    }
+  }
+
+  const dsDeltaZ = dsStartSec.minElevation - dsEndSec.minElevation;
+  const dsDist = Math.abs(dsStartSec.station - dsEndSec.station);
+
+  let rawSlope = 0.001;
+  let method = '';
+
+  if (dsDeltaZ > 0.05 && dsDist > 10) {
+    rawSlope = dsDeltaZ / dsDist;
+    method = `Mansap son ${Math.round(dsDist)} m yatak taban kot farkından (ΔZ = ${dsDeltaZ.toFixed(2)} m) hesaplandı.`;
+  } else {
+    // If downstream local bed has adverse slope or ponding, use overall river bed slope
+    const overallDeltaZ = Math.abs(sStart.minElevation - sEnd.minElevation);
+    rawSlope = overallDeltaZ / Math.max(1, totalDist);
+    method = `Toplam akarsu menzili ortalama taban kot farkından (ΔZ = ${overallDeltaZ.toFixed(2)} m, L = ${Math.round(totalDist)} m) hesaplandı.`;
+  }
+
+  const boundedSlope = Math.max(0.0001, Math.min(0.15, rawSlope));
+  const finalSlope = Number(boundedSlope.toFixed(5));
+  const percent = Number((finalSlope * 100).toFixed(3));
+
+  return {
+    slope: finalSlope,
+    percent,
+    method,
+    deltaZ: dsDeltaZ > 0 ? dsDeltaZ : Math.abs(sStart.minElevation - sEnd.minElevation),
+    reachLength: dsDist > 10 ? dsDist : totalDist,
+    upstreamZ: Number(dsStartSec.minElevation.toFixed(2)),
+    downstreamZ: Number(dsEndSec.minElevation.toFixed(2))
+  };
 }
 
 export async function loadDEM(file: File) {

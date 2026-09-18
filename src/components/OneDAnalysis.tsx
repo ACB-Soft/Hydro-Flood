@@ -33,7 +33,10 @@ import {
   ShieldCheck,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  Sparkles,
+  ArrowUpDown,
+  BookOpen
 } from 'lucide-react';
 import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -44,6 +47,11 @@ import {
   runRouting, 
   parseKMLCoordinates, 
   parseKMLStructures,
+  parseKMLBankLines,
+  calibrateSectionsWithBankLines,
+  calculateDownstreamSlopeFromDEM,
+  BankLineItem,
+  BankLinesParseResult,
   CrossSection, 
   RoutingResult,
   HydraulicStructure,
@@ -52,6 +60,7 @@ import {
 } from '../utils/OneDEngine';
 import { CRS_LIST, CRSItem } from '../utils/crsList';
 import { MapAutoCenter } from './MapHelpers';
+import ManningLibraryModal from './ManningLibraryModal';
 
 interface OneDAnalysisProps {
   onBackToDashboard: () => void;
@@ -142,6 +151,29 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [banksFile, setBanksFile] = useState<File | null>(null);
   const [centerlineCoords, setCenterlineCoords] = useState<[number, number][]>([]);
   const [bankCoords, setBankCoords] = useState<[number, number][]>([]);
+  const [leftBankCoords, setLeftBankCoords] = useState<[number, number][]>([]);
+  const [rightBankCoords, setRightBankCoords] = useState<[number, number][]>([]);
+  const [bankLinesInfo, setBankLinesInfo] = useState<{
+    leftName?: string;
+    rightName?: string;
+    totalLines: number;
+    totalPoints: number;
+  } | null>(null);
+  const [showBankLinesLayer, setShowBankLinesLayer] = useState<boolean>(true);
+
+  // Manning Library Modal State
+  const [isManningModalOpen, setIsManningModalOpen] = useState<boolean>(false);
+
+  // DEM Downstream Bed Slope Calculation Info
+  const [slopeCalculationInfo, setSlopeCalculationInfo] = useState<{
+    slope: number;
+    percent: number;
+    method: string;
+    deltaZ: number;
+    reachLength: number;
+    upstreamZ?: number;
+    downstreamZ?: number;
+  } | null>(null);
 
   // Cross-Section Settings & Manual KML
   const [crossSectionMode, setCrossSectionMode] = useState<'auto' | 'manual'>('auto');
@@ -192,11 +224,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
 
-  // Compute map bounds from centerline or cross-sections
+  // Compute map bounds from centerline, bank lines, or cross-sections
   const mapBounds = useMemo<[[number, number], [number, number]] | null>(() => {
     const allPoints: [number, number][] = [];
     if (centerlineCoords.length > 0) {
       allPoints.push(...centerlineCoords);
+    }
+    if (leftBankCoords.length > 0) {
+      allPoints.push(...leftBankCoords);
+    }
+    if (rightBankCoords.length > 0) {
+      allPoints.push(...rightBankCoords);
     }
     if (sections.length > 0) {
       sections.forEach(s => {
@@ -225,7 +263,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       [minLat - 0.002, minLon - 0.002],
       [maxLat + 0.002, maxLon + 0.002]
     ];
-  }, [centerlineCoords, sections]);
+  }, [centerlineCoords, leftBankCoords, rightBankCoords, sections, structures]);
 
   // Handle Centerline KML Upload
   const handleCenterlineUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -241,18 +279,66 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
   };
 
-  // Handle Bank Stations KML Upload
+  // Handle Bank Stations KML Upload (Fixed: Both Left & Right Banks parsed & calibrated)
   const handleBanksUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setBanksFile(file);
       try {
-        const coords = await parseKMLCoordinates(file);
-        setBankCoords(coords);
-      } catch (err) {
+        const parsed = await parseKMLBankLines(file, centerlineCoords);
+        const lCoords = parsed.leftBank?.coords || [];
+        const rCoords = parsed.rightBank?.coords || [];
+        
+        setLeftBankCoords(lCoords);
+        setRightBankCoords(rCoords);
+        setBankCoords(lCoords.length > 0 ? lCoords : rCoords);
+        setBankLinesInfo({
+          leftName: parsed.leftBank?.name || (lCoords.length > 0 ? 'Sol Kıyı' : undefined),
+          rightName: parsed.rightBank?.name || (rCoords.length > 0 ? 'Sağ Kıyı' : undefined),
+          totalLines: parsed.allLines.length,
+          totalPoints: parsed.totalPoints
+        });
+
+        // Automatically calibrate existing cross sections with true bank lines!
+        if (sections.length > 0 && (lCoords.length > 0 || rCoords.length > 0)) {
+          const calibrated = calibrateSectionsWithBankLines(sections, lCoords, rCoords);
+          setSections(calibrated);
+        }
+      } catch (err: any) {
         console.error("Kıyı KML koordinatları okunamadı:", err);
+        alert("Kıyı çizgileri KML dosyası okunamadı: " + err.message);
       }
     }
+  };
+
+  // Swap Left & Right bank lines
+  const handleSwapBankLines = () => {
+    const tempL = [...leftBankCoords];
+    const tempR = [...rightBankCoords];
+    setLeftBankCoords(tempR);
+    setRightBankCoords(tempL);
+    if (bankLinesInfo) {
+      setBankLinesInfo({
+        ...bankLinesInfo,
+        leftName: bankLinesInfo.rightName || 'Sol Kıyı',
+        rightName: bankLinesInfo.leftName || 'Sağ Kıyı'
+      });
+    }
+    if (sections.length > 0) {
+      const calibrated = calibrateSectionsWithBankLines(sections, tempR, tempL);
+      setSections(calibrated);
+    }
+  };
+
+  // Manual Trigger: Compute Downstream Slope from DEM Cross-Sections
+  const handleCalculateSlopeFromDEM = () => {
+    if (sections.length < 2) {
+      alert("Mansap eğimi hesaplamak için en az 2 enkesit gereklidir. Lütfen önce enkesitleri üretin.");
+      return;
+    }
+    const res = calculateDownstreamSlopeFromDEM(sections);
+    setDownstreamSlope(res.slope);
+    setSlopeCalculationInfo(res);
   };
 
   // Handle Manual Cross Sections KML Upload
@@ -266,13 +352,24 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       }
       setIsExtracting(true);
       try {
-        const data = await parseManualCrossSections(demFile, file, selectedCRS.def);
+        let data = await parseManualCrossSections(demFile, file, selectedCRS.def);
         if (data.length === 0) {
           alert("KML dosyasında geçerli enkesit çizgileri bulunamadı.");
         } else {
+          // Calibrate with bank lines if available
+          if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
+            data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
+          }
           setSections(data);
           setSelectedSectionIdx(0);
           setIsFileOpened(true);
+
+          // Auto-calculate downstream slope from DEM
+          if (data.length >= 2) {
+            const slopeCalc = calculateDownstreamSlopeFromDEM(data);
+            setDownstreamSlope(slopeCalc.slope);
+            setSlopeCalculationInfo(slopeCalc);
+          }
         }
       } catch (err: any) {
         console.error(err);
@@ -296,10 +393,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       }
       setIsExtracting(true);
       try {
-        const data = await parseManualCrossSections(demFile, manualKmlFile, selectedCRS.def);
+        let data = await parseManualCrossSections(demFile, manualKmlFile, selectedCRS.def);
+        if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
+          data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
+        }
         setSections(data);
         setSelectedSectionIdx(0);
         setIsFileOpened(true);
+
+        // Auto-calculate downstream slope from DEM
+        if (data.length >= 2) {
+          const slopeCalc = calculateDownstreamSlopeFromDEM(data);
+          setDownstreamSlope(slopeCalc.slope);
+          setSlopeCalculationInfo(slopeCalc);
+        }
       } catch (err: any) {
         console.error(err);
         alert("Manuel enkesit ayrıştırma hatası: " + err.message);
@@ -315,7 +422,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
     setIsExtracting(true);
     try {
-      const data = await generateCrossSections(
+      let data = await generateCrossSections(
         demFile,
         centerlineFile,
         banksFile,
@@ -324,9 +431,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         sectionWidth,
         selectedCRS.def
       );
+      if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
+        data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
+      }
       setSections(data);
       setSelectedSectionIdx(0);
       setIsFileOpened(true);
+
+      // Auto-calculate downstream slope from DEM
+      if (data.length >= 2) {
+        const slopeCalc = calculateDownstreamSlopeFromDEM(data);
+        setDownstreamSlope(slopeCalc.slope);
+        setSlopeCalculationInfo(slopeCalc);
+      }
     } catch (err: any) {
       console.error(err);
       alert("Enkesit çıkarımı sırasında hata oluştu: " + err.message);
@@ -1521,6 +1638,21 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           <span>Nehir Aksı</span>
                         </button>
 
+                        {(leftBankCoords.length > 0 || rightBankCoords.length > 0 || bankCoords.length > 0) && (
+                          <button
+                            onClick={() => setShowBankLinesLayer(!showBankLinesLayer)}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                              showBankLinesLayer 
+                                ? 'bg-emerald-700 text-white shadow-xs' 
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                            title="Doğal kıyı hatları (Sol ve Sağ Kıyı)"
+                          >
+                            <span>🌿</span>
+                            <span>Kıyı Çizgileri</span>
+                          </button>
+                        )}
+
                         <button
                           onClick={() => setShowTransectLines(!showTransectLines)}
                           className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
@@ -1677,9 +1809,29 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </Polyline>
                       )}
 
-                      {/* 5. Natural Banks */}
-                      {bankCoords.length > 0 && (
-                        <Polyline positions={bankCoords} color="#94a3b8" weight={1.5} dashArray="3, 3" opacity={0.7} />
+                      {/* 5. Natural Banks (Sol ve Sağ Kıyı Hatları) */}
+                      {showBankLinesLayer && (
+                        <>
+                          {leftBankCoords.length > 0 && (
+                            <Polyline positions={leftBankCoords} color="#10b981" weight={2.5} dashArray="4, 4" opacity={0.9}>
+                              <Tooltip sticky>
+                                <span className="font-bold text-emerald-800">🌿 {bankLinesInfo?.leftName || 'Sol Kıyı (LOB)'}</span>
+                              </Tooltip>
+                            </Polyline>
+                          )}
+                          {rightBankCoords.length > 0 && (
+                            <Polyline positions={rightBankCoords} color="#f59e0b" weight={2.5} dashArray="4, 4" opacity={0.9}>
+                              <Tooltip sticky>
+                                <span className="font-bold text-amber-800">🌾 {bankLinesInfo?.rightName || 'Sağ Kıyı (ROB)'}</span>
+                              </Tooltip>
+                            </Polyline>
+                          )}
+                          {leftBankCoords.length === 0 && rightBankCoords.length === 0 && bankCoords.length > 0 && (
+                            <Polyline positions={bankCoords} color="#10b981" weight={2} dashArray="3, 3" opacity={0.8}>
+                              <Tooltip sticky>Doğal Kıyı Hattı</Tooltip>
+                            </Polyline>
+                          )}
+                        </>
                       )}
 
                       {/* 6. Transect Cut Lines */}
@@ -2189,18 +2341,50 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     Kıyı Çizgileri / Bank Stations (KML):
                   </label>
                   {banksFile ? (
-                    <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl flex items-center justify-between gap-2">
-                      <div className="space-y-0.5 overflow-hidden">
-                        <div className="flex items-center gap-1.5">
-                          <CheckCircle2 size={13} className="text-amber-600 shrink-0" />
-                          <span className="font-bold text-slate-900 text-xs truncate">{banksFile.name}</span>
+                    <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="space-y-0.5 overflow-hidden">
+                          <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={13} className="text-amber-600 shrink-0" />
+                            <span className="font-bold text-slate-900 text-xs truncate">{banksFile.name}</span>
+                          </div>
+                          <p className="text-[10px] text-amber-700 truncate">
+                            {bankLinesInfo?.totalLines || 0} Hat ({bankLinesInfo?.totalPoints || 0} Koordinat)
+                          </p>
                         </div>
-                        <p className="text-[10px] text-amber-700 truncate">Sağ & Sol Kıyı Hatları</p>
+                        <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all shadow-xs">
+                          Değiştir
+                          <input type="file" accept=".kml" onChange={handleBanksUpload} className="hidden" />
+                        </label>
                       </div>
-                      <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all shadow-sm">
-                        Değiştir
-                        <input type="file" accept=".kml" onChange={handleBanksUpload} className="hidden" />
-                      </label>
+
+                      {/* Sol ve Sağ Sahil Durumu */}
+                      <div className="grid grid-cols-2 gap-1.5 text-[10px] pt-1 border-t border-amber-200/60">
+                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-emerald-200">
+                          <span className="font-bold text-emerald-800">🌿 {bankLinesInfo?.leftName || 'Sol Kıyı'}</span>
+                          <span className="font-bold text-emerald-700">{leftBankCoords.length} nokta</span>
+                        </div>
+                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-amber-200">
+                          <span className="font-bold text-amber-800">🌾 {bankLinesInfo?.rightName || 'Sağ Kıyı'}</span>
+                          <span className="font-bold text-amber-700">{rightBankCoords.length} nokta</span>
+                        </div>
+                      </div>
+
+                      {/* Swap button if both exist */}
+                      {leftBankCoords.length > 0 && rightBankCoords.length > 0 && (
+                        <div className="flex items-center justify-between pt-1">
+                          <button
+                            type="button"
+                            onClick={handleSwapBankLines}
+                            className="text-[10px] text-amber-900 hover:text-amber-950 font-bold bg-amber-100/80 hover:bg-amber-200 px-2 py-0.5 rounded-lg border border-amber-300 flex items-center gap-1 cursor-pointer transition-all"
+                            title="Sol ve sağ kıyı atamalarını yer değiştir"
+                          >
+                            <ArrowUpDown size={10} />
+                            <span>Sol ⇄ Sağ Sahili Değiştir</span>
+                          </button>
+                          <span className="text-[9px] text-amber-700 font-medium italic">Enkesitlere uygulandı</span>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
@@ -2381,6 +2565,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     <Droplets size={14} className="text-cyan-700" />
                     <span>3. Manning Pürüzlülüğü (n)</span>
                   </h2>
+                  <button
+                    type="button"
+                    onClick={() => setIsManningModalOpen(true)}
+                    className="px-2 py-0.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 rounded-lg text-[10px] font-bold border border-cyan-300 transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                    title="Chow ve HEC-RAS standartlarında pürüzlülük kütüphanesini aç"
+                  >
+                    <Sparkles size={11} className="text-cyan-700" />
+                    <span>Kütüphaneden Seç</span>
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2">
@@ -2421,6 +2614,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     />
                   </div>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsManningModalOpen(true)}
+                  className="w-full py-1.5 px-2 bg-gradient-to-r from-cyan-700 to-blue-800 hover:from-cyan-800 hover:to-blue-900 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <BookOpen size={13} />
+                  <span>Pürüzlülük Kütüphanesini Aç (DSİ / Chow / HEC-RAS)</span>
+                </button>
               </section>
 
               {/* 4. HİDROLOJİK SINIR ŞARTLARI & DEBİ HİDROGRAFI */}
@@ -2577,21 +2779,21 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-[10px] font-bold text-slate-700 block">Mansap Eğim (S₀):</label>
-                      {detectedBedSlope !== null && (
-                        <button
-                          type="button"
-                          onClick={() => setDownstreamSlope(detectedBedSlope)}
-                          className="text-[9px] text-cyan-700 hover:text-cyan-900 font-bold underline cursor-pointer"
-                          title="Kesit taban kotlarından hesaplanan ortalama eğimi uygula"
-                        >
-                          DEM: %{(detectedBedSlope * 100).toFixed(2)}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={handleCalculateSlopeFromDEM}
+                        disabled={sections.length < 2}
+                        className="text-[9px] text-cyan-700 hover:text-cyan-900 font-bold flex items-center gap-0.5 cursor-pointer disabled:opacity-40"
+                        title="DEM enkesit taban kotlarından mansap eğimini otomatik hesapla"
+                      >
+                        <RefreshCw size={8} />
+                        <span>DEM Otomatik</span>
+                      </button>
                     </div>
                     <input
                       type="number"
-                      step="0.0005"
-                      min="0.0001"
+                      step="0.0001"
+                      min="0.00001"
                       value={downstreamSlope}
                       onChange={(e) => setDownstreamSlope(Number(e.target.value))}
                       className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800"
@@ -2608,6 +2810,36 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800"
                     />
                   </div>
+                </div>
+
+                {/* DEM Taban Eğimi Otomatik Bilgi Kartı */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1 mt-1 text-[10px]">
+                  <div className="flex items-center justify-between font-bold text-slate-800">
+                    <span className="flex items-center gap-1">
+                      <TrendingUp size={12} className="text-cyan-700" />
+                      <span>DEM Yatak Eğimi Analizi</span>
+                    </span>
+                    {slopeCalculationInfo ? (
+                      <span className="text-cyan-800 font-black">
+                        %{slopeCalculationInfo.percent.toFixed(2)} ({slopeCalculationInfo.slope.toFixed(4)} m/m)
+                      </span>
+                    ) : detectedBedSlope !== null ? (
+                      <span className="text-cyan-800 font-black">
+                        %{(detectedBedSlope * 100).toFixed(2)} ({detectedBedSlope.toFixed(4)} m/m)
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 font-normal">Bekleniyor</span>
+                    )}
+                  </div>
+                  {slopeCalculationInfo ? (
+                    <p className="text-[9px] text-slate-600 leading-tight">
+                      {slopeCalculationInfo.method}
+                    </p>
+                  ) : (
+                    <p className="text-[9px] text-slate-500 leading-tight">
+                      Enkesitler DEM'den çıkarıldığında mansap eğimi otomatik olarak hesaplanır.
+                    </p>
+                  )}
                 </div>
               </section>
 
@@ -3483,6 +3715,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
           </div>
         </div>
       )}
+
+      {/* Manning Pürüzlülük Kütüphanesi Modalı */}
+      <ManningLibraryModal
+        isOpen={isManningModalOpen}
+        onClose={() => setIsManningModalOpen(false)}
+        onApply={(nLob, nMain, nRob) => {
+          setManningLOB(nLob);
+          setManningMain(nMain);
+          setManningROB(nRob);
+        }}
+        currentLOB={manningLOB}
+        currentMain={manningMain}
+        currentROB={manningROB}
+      />
     </div>
   );
 };
