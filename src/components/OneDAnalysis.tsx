@@ -38,7 +38,9 @@ import {
   ArrowUpDown,
   BookOpen,
   Navigation,
-  Wand2
+  Wand2,
+  ListFilter,
+  RotateCcw
 } from 'lucide-react';
 import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -66,6 +68,7 @@ import {
 import { CRS_LIST, CRSItem } from '../utils/crsList';
 import { MapAutoCenter } from './MapHelpers';
 import ManningLibraryModal from './ManningLibraryModal';
+import { CrossSectionManagerModal } from './CrossSectionManagerModal';
 
 interface OneDAnalysisProps {
   onBackToDashboard: () => void;
@@ -193,6 +196,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [crossSectionInterval, setCrossSectionInterval] = useState<number>(50);
   const [sectionWidth, setSectionWidth] = useState<number>(200);
   const [sections, setSections] = useState<CrossSection[]>([]);
+  const [originalSections, setOriginalSections] = useState<CrossSection[]>([]);
+  const [deletedSectionsList, setDeletedSectionsList] = useState<CrossSection[]>([]);
+  const [isSectionManagerModalOpen, setIsSectionManagerModalOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number>(0);
 
@@ -495,6 +501,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
           data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
         }
         setSections(data);
+        setOriginalSections(data);
+        setDeletedSectionsList([]);
         setSelectedSectionIdx(0);
         setIsFileOpened(true);
 
@@ -532,6 +540,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
       }
       setSections(data);
+      setOriginalSections(data);
+      setDeletedSectionsList([]);
       setSelectedSectionIdx(0);
       setIsFileOpened(true);
 
@@ -546,6 +556,85 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       alert("Enkesit çıkarımı sırasında hata oluştu: " + err.message);
     } finally {
       setIsExtracting(false);
+    }
+  };
+
+  // Section Deletion & Management Methods
+  const handleDeleteSection = (indexOrStation: number) => {
+    let targetIdx = -1;
+    if (indexOrStation >= 0 && indexOrStation < sections.length) {
+      targetIdx = indexOrStation;
+    } else {
+      targetIdx = sections.findIndex(s => s.station === indexOrStation);
+    }
+    if (targetIdx === -1 || !sections[targetIdx]) return;
+
+    const deleted = sections[targetIdx];
+    const newSections = sections.filter((_, i) => i !== targetIdx);
+    setSections(newSections);
+    setDeletedSectionsList(prev => [deleted, ...prev.filter(d => d.station !== deleted.station)]);
+
+    if (selectedSectionIdx >= newSections.length) {
+      setSelectedSectionIdx(Math.max(0, newSections.length - 1));
+    }
+
+    if (newSections.length >= 2) {
+      const slopeCalc = calculateDownstreamSlopeFromDEM(newSections);
+      setDownstreamSlope(slopeCalc.slope);
+      setSlopeCalculationInfo(slopeCalc);
+    }
+  };
+
+  const handleBulkDeleteSections = (stationsToDelete: number[]) => {
+    if (stationsToDelete.length === 0) return;
+    const stationsSet = new Set(stationsToDelete);
+    const toDelete = sections.filter(s => stationsSet.has(s.station));
+    const newSections = sections.filter(s => !stationsSet.has(s.station));
+
+    setSections(newSections);
+    setDeletedSectionsList(prev => [...toDelete, ...prev.filter(d => !stationsSet.has(d.station))]);
+    setSelectedSectionIdx(0);
+
+    if (newSections.length >= 2) {
+      const slopeCalc = calculateDownstreamSlopeFromDEM(newSections);
+      setDownstreamSlope(slopeCalc.slope);
+      setSlopeCalculationInfo(slopeCalc);
+    }
+  };
+
+  const handleRestoreSection = (station: number) => {
+    const toRestore = deletedSectionsList.find(s => s.station === station);
+    if (!toRestore) return;
+
+    const newSections = [...sections, toRestore].sort((a, b) => a.station - b.station);
+    setSections(newSections);
+    setDeletedSectionsList(prev => prev.filter(s => s.station !== station));
+
+    if (newSections.length >= 2) {
+      const slopeCalc = calculateDownstreamSlopeFromDEM(newSections);
+      setDownstreamSlope(slopeCalc.slope);
+      setSlopeCalculationInfo(slopeCalc);
+    }
+  };
+
+  const handleRestoreAllDeletedSections = () => {
+    if (originalSections.length > 0) {
+      setSections([...originalSections]);
+      setDeletedSectionsList([]);
+      if (originalSections.length >= 2) {
+        const slopeCalc = calculateDownstreamSlopeFromDEM(originalSections);
+        setDownstreamSlope(slopeCalc.slope);
+        setSlopeCalculationInfo(slopeCalc);
+      }
+    } else if (deletedSectionsList.length > 0) {
+      const newSections = [...sections, ...deletedSectionsList].sort((a, b) => a.station - b.station);
+      setSections(newSections);
+      setDeletedSectionsList([]);
+      if (newSections.length >= 2) {
+        const slopeCalc = calculateDownstreamSlopeFromDEM(newSections);
+        setDownstreamSlope(slopeCalc.slope);
+        setSlopeCalculationInfo(slopeCalc);
+      }
     }
   };
 
@@ -1971,21 +2060,59 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       {showTransectLines && sections.map((sec, idx) => {
                         if (!sec.cutLine) return null;
                         const isSelected = idx === selectedSectionIdx;
+                        const secResult = simResults.find(r => r.station === sec.station);
                         return (
                           <Polyline
-                            key={`cutline-${idx}`}
+                            key={`cutline-${sec.station}-${idx}`}
                             positions={sec.cutLine}
                             color={isSelected ? '#f59e0b' : '#64748b'}
-                            weight={isSelected ? 3 : 1.2}
+                            weight={isSelected ? 3.5 : 1.5}
                             dashArray="3, 3"
-                            opacity={0.75}
+                            opacity={0.85}
                             eventHandlers={{
                               click: () => setSelectedSectionIdx(idx)
                             }}
                           >
-                            <Tooltip direction="top">
-                              <span>Kesit Km {(sec.station / 1000).toFixed(3)}</span>
-                            </Tooltip>
+                            <Popup>
+                              <div className="p-1 space-y-1.5 min-w-[170px]">
+                                <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+                                  <span className="font-bold text-xs text-slate-800">
+                                    Kesit Km {(sec.station / 1000).toFixed(3)}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 font-mono">
+                                    {sec.station.toFixed(0)}m
+                                  </span>
+                                </div>
+                                {secResult && (
+                                  <div className="text-[10px] text-slate-600 space-y-0.5 bg-slate-50 p-1 rounded">
+                                    <div>Su Kotu: <strong>{secResult.waterElevation.toFixed(2)} m</strong></div>
+                                    <div>Maks Derinlik: <strong>{secResult.maxDepth.toFixed(2)} m</strong></div>
+                                    <div>Akım Hızı: <strong>{secResult.velocity.toFixed(2)} m/s</strong></div>
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedSectionIdx(idx);
+                                      setResultTab('section');
+                                    }}
+                                    className="flex-1 px-1.5 py-1 bg-cyan-700 hover:bg-cyan-800 text-white rounded text-[10px] font-bold cursor-pointer transition-colors"
+                                  >
+                                    Enkesiti Gör
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteSection(idx)}
+                                    className="px-1.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold flex items-center gap-0.5 cursor-pointer transition-colors"
+                                    title="Bu enkesiti sil"
+                                  >
+                                    <Trash2 size={10} />
+                                    <span>Sil</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </Popup>
                           </Polyline>
                         );
                       })}
@@ -2812,6 +2939,52 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     </button>
                   </div>
                 )}
+
+                {/* Section Management Quick Toolbar */}
+                {sections.length > 0 && (
+                  <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="font-bold text-slate-700 flex items-center gap-1">
+                        <Layers size={11} className="text-cyan-700" />
+                        <span>Model Enkesitleri:</span>
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-cyan-900 bg-cyan-100/80 px-1.5 py-0.2 rounded text-[9px]">
+                          {sections.length} Aktif
+                        </span>
+                        {deletedSectionsList.length > 0 && (
+                          <span className="font-bold text-red-700 bg-red-100/80 px-1.5 py-0.2 rounded text-[9px]">
+                            {deletedSectionsList.length} Silindi
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsSectionManagerModalOpen(true)}
+                        className="flex-1 py-1.5 px-2 bg-slate-900 hover:bg-slate-800 text-cyan-300 rounded-xl text-[11px] font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Enkesit listesini aç, filtrele, tek tek veya toplu olarak sil"
+                      >
+                        <ListFilter size={13} className="text-cyan-400" />
+                        <span>Kesitleri Yönet & Sil ({sections.length})</span>
+                      </button>
+
+                      {deletedSectionsList.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleRestoreAllDeletedSections}
+                          className="py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                          title={`${deletedSectionsList.length} adet silinen kesiti modele geri yükle`}
+                        >
+                          <RotateCcw size={11} />
+                          <span>Geri Al</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </section>
 
               {/* 3. MANNING PÜRÜZLÜLÜK KATSAYILARI */}
@@ -3291,17 +3464,37 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     </div>
 
                     {sections.length > 0 && rightPanelTab === 'section' && (
-                      <select
-                        value={selectedSectionIdx}
-                        onChange={(e) => setSelectedSectionIdx(Number(e.target.value))}
-                        className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 shadow-sm"
-                      >
-                        {sections.map((s, idx) => (
-                          <option key={idx} value={idx}>
-                            Kesit Km {(s.station / 1000).toFixed(3)}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <select
+                          value={selectedSectionIdx}
+                          onChange={(e) => setSelectedSectionIdx(Number(e.target.value))}
+                          className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 shadow-sm"
+                        >
+                          {sections.map((s, idx) => (
+                            <option key={idx} value={idx}>
+                              Kesit Km {(s.station / 1000).toFixed(3)} ({s.station.toFixed(0)}m)
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSection(selectedSectionIdx)}
+                          className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                          title="Seçili bu enkesiti modelden sil"
+                        >
+                          <Trash2 size={12} />
+                          <span>Kesiti Sil</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsSectionManagerModalOpen(true)}
+                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                          title="Tüm kesitleri yönet, ara ve toplu sil"
+                        >
+                          <ListFilter size={12} />
+                          <span>Yönet ({sections.length})</span>
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -3407,7 +3600,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             const isSelected = idx === selectedSectionIdx;
                             return (
                               <Polyline
-                                key={idx}
+                                key={`${sec.station}-${idx}`}
                                 positions={sec.cutLine}
                                 color={isSelected ? '#06b6d4' : '#10b981'}
                                 weight={isSelected ? 4 : 2}
@@ -3415,7 +3608,46 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 eventHandlers={{
                                   click: () => setSelectedSectionIdx(idx)
                                 }}
-                              />
+                              >
+                                <Popup>
+                                  <div className="p-1 space-y-1.5 min-w-[160px]">
+                                    <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+                                      <span className="font-bold text-xs text-slate-800">
+                                        Kesit Km {(sec.station / 1000).toFixed(3)}
+                                      </span>
+                                      <span className="text-[10px] text-slate-500 font-mono">
+                                        {sec.station.toFixed(0)}m
+                                      </span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-600 space-y-0.5">
+                                      <div>Min Kot: <strong>{sec.minElevation.toFixed(2)} m</strong></div>
+                                      <div>Maks Kot: <strong>{sec.maxElevation.toFixed(2)} m</strong></div>
+                                      <div>Nokta Sayısı: <strong>{sec.profile.length}</strong></div>
+                                    </div>
+                                    <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedSectionIdx(idx);
+                                          setRightPanelTab('section');
+                                        }}
+                                        className="flex-1 px-1.5 py-1 bg-cyan-700 hover:bg-cyan-800 text-white rounded text-[10px] font-bold cursor-pointer transition-colors"
+                                      >
+                                        Profili Gör
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteSection(idx)}
+                                        className="px-1.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold flex items-center gap-0.5 cursor-pointer transition-colors"
+                                        title="Bu enkesiti modelden sil"
+                                      >
+                                        <Trash2 size={10} />
+                                        <span>Sil</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </Popup>
+                              </Polyline>
                             );
                           })}
 
@@ -3574,9 +3806,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               );
                             })()}
                           </div>
-                          <span className="text-slate-500 text-[11px]">
-                            Taban: <strong className="text-slate-800 font-mono">{currentActiveSection.minElevation.toFixed(2)}m</strong> | Tepe: {currentActiveSection.maxElevation.toFixed(2)}m
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-500 text-[11px]">
+                              Taban: <strong className="text-slate-800 font-mono">{currentActiveSection.minElevation.toFixed(2)}m</strong> | Tepe: {currentActiveSection.maxElevation.toFixed(2)}m
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSection(selectedSectionIdx)}
+                              className="px-2 py-0.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-md text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Bu kesiti modelden sil"
+                            >
+                              <Trash2 size={11} />
+                              <span>Sil</span>
+                            </button>
+                          </div>
                         </div>
 
                         <div className="flex-1 w-full my-2 flex items-center justify-center">
@@ -3984,6 +4227,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         currentLOB={manningLOB}
         currentMain={manningMain}
         currentROB={manningROB}
+      />
+
+      {/* Enkesit Yönetim & Silme Modalı */}
+      <CrossSectionManagerModal
+        isOpen={isSectionManagerModalOpen}
+        onClose={() => setIsSectionManagerModalOpen(false)}
+        sections={sections}
+        deletedSections={deletedSectionsList}
+        selectedSectionIdx={selectedSectionIdx}
+        onSelectSection={(idx) => setSelectedSectionIdx(idx)}
+        onDeleteSection={(station) => handleDeleteSection(station)}
+        onBulkDeleteSections={(stations) => handleBulkDeleteSections(stations)}
+        onRestoreSection={(station) => handleRestoreSection(station)}
+        onRestoreAll={handleRestoreAllDeletedSections}
       />
     </div>
   );
