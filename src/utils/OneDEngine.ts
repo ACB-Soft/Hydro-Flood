@@ -32,6 +32,12 @@ export interface RoutingResult {
   isOverbank: boolean;
   energyElevation: number;
   bedElevation: number;
+  waterLeftX: number;
+  waterRightX: number;
+  overbankAreaLOB: number;
+  overbankAreaROB: number;
+  bankLeftZ: number;
+  bankRightZ: number;
   structureEffect?: {
     structureName: string;
     flowState: 'free' | 'pressure' | 'overtopping';
@@ -191,9 +197,9 @@ export async function generateCrossSections(
     const angleLeft = bearing - 90;
     const angleRight = bearing + 90;
     
-    const profile: ProfilePoint[] = [];
     const halfWidth = sectionWidth / 2;
     const resolution = 2; // sample DEM every 2 meters
+    const rawSamples: { x: number; z: number }[] = [];
     
     for (let dist = -halfWidth; dist <= halfWidth; dist += resolution) {
       let samplePt;
@@ -206,16 +212,60 @@ export async function generateCrossSections(
       }
       
       const [lon, lat] = samplePt.geometry.coordinates;
-      let z = getElevation(dem, lon, lat, crsDef);
-      if (isNaN(z)) z = 0;
-      
-      // Determine zone (LOB, MAIN, ROB)
-      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
-      if (dist < -sectionWidth * 0.2) type = 'LOB';
-      else if (dist > sectionWidth * 0.2) type = 'ROB';
-      
-      profile.push({ x: dist + halfWidth, z, type });
+      const z = getElevation(dem, lon, lat, crsDef);
+      rawSamples.push({ x: dist + halfWidth, z });
     }
+
+    // Clean any NaN elevations by linear interpolation or nearest valid
+    const validElevs = rawSamples.filter(s => !isNaN(s.z)).map(s => s.z);
+    const avgValid = validElevs.length > 0 ? validElevs.reduce((a, b) => a + b, 0) / validElevs.length : 100;
+
+    for (let i = 0; i < rawSamples.length; i++) {
+      if (isNaN(rawSamples[i].z)) {
+        // Find nearest valid left and right
+        let leftZ: number | null = null;
+        for (let l = i - 1; l >= 0; l--) {
+          if (!isNaN(rawSamples[l].z)) { leftZ = rawSamples[l].z; break; }
+        }
+        let rightZ: number | null = null;
+        for (let r = i + 1; r < rawSamples.length; r++) {
+          if (!isNaN(rawSamples[r].z)) { rightZ = rawSamples[r].z; break; }
+        }
+        if (leftZ !== null && rightZ !== null) {
+          rawSamples[i].z = (leftZ + rightZ) / 2;
+        } else if (leftZ !== null) {
+          rawSamples[i].z = leftZ;
+        } else if (rightZ !== null) {
+          rawSamples[i].z = rightZ;
+        } else {
+          rawSamples[i].z = avgValid;
+        }
+      }
+    }
+
+    // Identify Talveg (deepest point)
+    let minIdx = 0;
+    let minZ = rawSamples[0].z;
+    for (let i = 0; i < rawSamples.length; i++) {
+      if (rawSamples[i].z < minZ) {
+        minZ = rawSamples[i].z;
+        minIdx = i;
+      }
+    }
+    const talvegX = rawSamples[minIdx].x;
+
+    // Define main channel banks around the talveg
+    // Main channel typically spans 15-35m around the talveg for natural streams
+    const channelHalfW = Math.min(sectionWidth * 0.2, Math.max(10, sectionWidth * 0.08));
+    const bankLeftX = Math.max(rawSamples[1].x, talvegX - channelHalfW);
+    const bankRightX = Math.min(rawSamples[rawSamples.length - 2].x, talvegX + channelHalfW);
+
+    const profile: ProfilePoint[] = rawSamples.map(s => {
+      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
+      if (s.x < bankLeftX) type = 'LOB';
+      else if (s.x > bankRightX) type = 'ROB';
+      return { x: s.x, z: s.z, type };
+    });
     
     const [centerLon, centerLat] = pt.geometry.coordinates;
     const ptLeft = turf.destination(pt, halfWidth, angleLeft, { units: 'meters' });
@@ -224,9 +274,6 @@ export async function generateCrossSections(
       [ptLeft.geometry.coordinates[1], ptLeft.geometry.coordinates[0]],
       [ptRight.geometry.coordinates[1], ptRight.geometry.coordinates[0]]
     ];
-
-    const bankLeftX = halfWidth - (sectionWidth * 0.2);
-    const bankRightX = halfWidth + (sectionWidth * 0.2);
 
     const elevations = profile.map(p => p.z);
     const minElevation = Math.min(...elevations);
@@ -293,19 +340,41 @@ export async function parseManualCrossSections(
       }
     }
 
-    const profile: ProfilePoint[] = [];
+    const rawSamples: { x: number; z: number }[] = [];
     for (let d = 0; d <= lineLen; d += resolution) {
       const pt = turf.along(line, d, { units: 'meters' });
       const [lon, lat] = pt.geometry.coordinates;
-      let z = getElevation(dem, lon, lat, crsDef);
-      if (isNaN(z)) z = 0;
-
-      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
-      if (d < lineLen * 0.25) type = 'LOB';
-      else if (d > lineLen * 0.75) type = 'ROB';
-
-      profile.push({ x: d, z, type });
+      const z = getElevation(dem, lon, lat, crsDef);
+      rawSamples.push({ x: d, z });
     }
+
+    // Clean NaN elevations
+    const validElevs = rawSamples.filter(s => !isNaN(s.z)).map(s => s.z);
+    const avgValid = validElevs.length > 0 ? validElevs.reduce((a, b) => a + b, 0) / validElevs.length : 100;
+    for (let j = 0; j < rawSamples.length; j++) {
+      if (isNaN(rawSamples[j].z)) rawSamples[j].z = avgValid;
+    }
+
+    // Find Talveg
+    let minIdx = 0;
+    let minZ = rawSamples[0].z;
+    for (let j = 0; j < rawSamples.length; j++) {
+      if (rawSamples[j].z < minZ) {
+        minZ = rawSamples[j].z;
+        minIdx = j;
+      }
+    }
+    const talvegX = rawSamples[minIdx].x;
+    const channelHalfW = Math.min(lineLen * 0.25, Math.max(8, lineLen * 0.12));
+    const bankLeftX = Math.max(rawSamples[1].x, talvegX - channelHalfW);
+    const bankRightX = Math.min(rawSamples[rawSamples.length - 2].x, talvegX + channelHalfW);
+
+    const profile: ProfilePoint[] = rawSamples.map(s => {
+      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
+      if (s.x < bankLeftX) type = 'LOB';
+      else if (s.x > bankRightX) type = 'ROB';
+      return { x: s.x, z: s.z, type };
+    });
 
     const elevations = profile.map(p => p.z);
     const minElevation = elevations.length > 0 ? Math.min(...elevations) : 0;
@@ -324,8 +393,8 @@ export async function parseManualCrossSections(
       ],
       minElevation,
       maxElevation,
-      bankLeftX: lineLen * 0.25,
-      bankRightX: lineLen * 0.75
+      bankLeftX,
+      bankRightX
     });
 
     cumulativeStation += 50;
@@ -343,115 +412,233 @@ export function computeNormalDepth(
   nROB: number,
   S0: number
 ): Omit<RoutingResult, 'station'> {
-  const minZ = section.minElevation;
-  const maxZ = section.maxElevation;
-  
-  let wl = minZ + 0.05;
-  const tolerance = 0.1;
-  const maxIter = 500;
-  
-  let finalQ = 0;
-  let finalArea = 0;
-  let finalVel = 0;
-  let finalPerimeter = 0;
-  let finalTopWidth = 0;
-  let finalOverbank = false;
-  
-  for (let i = 0; i < maxIter; i++) {
-    if (wl > maxZ) break;
-    
-    let areaMAIN = 0, pMAIN = 0;
-    let areaLOB = 0, pLOB = 0;
-    let areaROB = 0, pROB = 0;
-    let topWidth = 0;
-    let overbankDetected = false;
-    
-    for (let j = 0; j < section.profile.length - 1; j++) {
-      const p1 = section.profile[j];
-      const p2 = section.profile[j+1];
-      
-      const z1 = p1.z;
-      const z2 = p2.z;
-      
-      if (wl > z1 || wl > z2) {
-        const dx = p2.x - p1.x;
-        const h1 = Math.max(0, wl - z1);
-        const h2 = Math.max(0, wl - z2);
-        
-        const a = (h1 + h2) / 2 * dx;
-        const dz = Math.abs(z1 - z2);
-        const wetP = Math.sqrt(dx*dx + dz*dz);
-        
-        if (p1.type === 'MAIN') {
-          areaMAIN += a;
-          pMAIN += wetP;
-        } else if (p1.type === 'LOB') {
-          areaLOB += a;
-          pLOB += wetP;
-          if (a > 0.05) overbankDetected = true;
-        } else {
-          areaROB += a;
-          pROB += wetP;
-          if (a > 0.05) overbankDetected = true;
-        }
-        topWidth += dx;
+  const profile = section.profile;
+  if (!profile || profile.length < 2) {
+    return {
+      waterElevation: 0,
+      maxDepth: 0,
+      area: 0,
+      velocity: 0,
+      wettedPerimeter: 0,
+      topWidth: 0,
+      froudeNumber: 0,
+      isOverbank: false,
+      energyElevation: 0,
+      bedElevation: 0,
+      waterLeftX: 0,
+      waterRightX: 0,
+      overbankAreaLOB: 0,
+      overbankAreaROB: 0,
+      bankLeftZ: 0,
+      bankRightZ: 0
+    };
+  }
+
+  // 1. Locate Talveg (deepest bed elevation)
+  let minIdx = 0;
+  let minZ = profile[0].z;
+  for (let i = 0; i < profile.length; i++) {
+    if (profile[i].z < minZ) {
+      minZ = profile[i].z;
+      minIdx = i;
+    }
+  }
+  const talvegX = profile[minIdx].x;
+
+  // 2. Validate Bank Stations
+  let bLeftX = section.bankLeftX;
+  let bRightX = section.bankRightX;
+  if (bLeftX >= talvegX || bRightX <= talvegX || isNaN(bLeftX) || isNaN(bRightX)) {
+    const totalW = profile[profile.length - 1].x - profile[0].x;
+    const channelHalfW = Math.min(25, Math.max(6, totalW * 0.12));
+    bLeftX = Math.max(profile[0].x + 0.5, talvegX - channelHalfW);
+    bRightX = Math.min(profile[profile.length - 1].x - 0.5, talvegX + channelHalfW);
+  }
+
+  // Helper to interpolate elevation at any station X along the cross section
+  const getElevationAtX = (xVal: number): number => {
+    if (xVal <= profile[0].x) return profile[0].z;
+    if (xVal >= profile[profile.length - 1].x) return profile[profile.length - 1].z;
+    for (let k = 0; k < profile.length - 1; k++) {
+      const p1 = profile[k];
+      const p2 = profile[k + 1];
+      if (xVal >= p1.x && xVal <= p2.x) {
+        const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+        return p1.z + frac * (p2.z - p1.z);
       }
     }
-    
+    return minZ;
+  };
+
+  const bankLeftZ = getElevationAtX(bLeftX);
+  const bankRightZ = getElevationAtX(bRightX);
+  const bankMinZ = Math.min(bankLeftZ, bankRightZ);
+
+  // 3. Exact Hydraulic Geometry Solver for candidate water level WSE
+  const evaluateGeometry = (WSE: number) => {
+    if (WSE <= minZ) {
+      return {
+        areaMAIN: 0, pMAIN: 0, wMAIN: 0,
+        areaLOB: 0, pLOB: 0, wLOB: 0,
+        areaROB: 0, pROB: 0, wROB: 0,
+        totalArea: 0, totalP: 0, totalW: 0,
+        waterLeftX: talvegX, waterRightX: talvegX,
+        Q_calc: 0
+      };
+    }
+
+    // Hydrologically connected flow boundary tracing outward from talveg:
+    // Left boundary:
+    let leftWetX = talvegX;
+    for (let i = minIdx; i > 0; i--) {
+      const curr = profile[i];
+      const prev = profile[i - 1];
+      if (prev.z >= WSE) {
+        const frac = (WSE - curr.z) / Math.max(1e-6, prev.z - curr.z);
+        leftWetX = curr.x - frac * (curr.x - prev.x);
+        break;
+      } else {
+        leftWetX = prev.x;
+      }
+    }
+
+    // Right boundary:
+    let rightWetX = talvegX;
+    for (let i = minIdx; i < profile.length - 1; i++) {
+      const curr = profile[i];
+      const next = profile[i + 1];
+      if (next.z >= WSE) {
+        const frac = (WSE - curr.z) / Math.max(1e-6, next.z - curr.z);
+        rightWetX = curr.x + frac * (next.x - curr.x);
+        break;
+      } else {
+        rightWetX = next.x;
+      }
+    }
+
+    // Subdivided flow geometry
+    let areaMAIN = 0, pMAIN = 0, wMAIN = 0;
+    let areaLOB = 0, pLOB = 0, wLOB = 0;
+    let areaROB = 0, pROB = 0, wROB = 0;
+
+    for (let i = 0; i < profile.length - 1; i++) {
+      const p1 = profile[i];
+      const p2 = profile[i + 1];
+
+      const segX1 = Math.max(p1.x, leftWetX);
+      const segX2 = Math.min(p2.x, rightWetX);
+      if (segX2 <= segX1) continue; // No submerged water in this segment
+
+      const zSeg1 = p1.z + ((segX1 - p1.x) / Math.max(1e-6, p2.x - p1.x)) * (p2.z - p1.z);
+      const zSeg2 = p1.z + ((segX2 - p1.x) / Math.max(1e-6, p2.x - p1.x)) * (p2.z - p1.z);
+
+      const h1 = Math.max(0, WSE - zSeg1);
+      const h2 = Math.max(0, WSE - zSeg2);
+      const dx = segX2 - segX1;
+      const dz = zSeg2 - zSeg1;
+      const a = ((h1 + h2) / 2) * dx;
+      const p = Math.sqrt(dx * dx + dz * dz);
+
+      const midX = (segX1 + segX2) / 2;
+      if (midX < bLeftX) {
+        areaLOB += a;
+        pLOB += p;
+        wLOB += dx;
+      } else if (midX > bRightX) {
+        areaROB += a;
+        pROB += p;
+        wROB += dx;
+      } else {
+        areaMAIN += a;
+        pMAIN += p;
+        wMAIN += dx;
+      }
+    }
+
+    // Manning Conveyance K = (1/n) * A * R^(2/3)
     const computeK = (A: number, P: number, n: number) => {
-      if (A <= 0 || P <= 0) return 0;
-      return (1/n) * A * Math.pow(A/P, 2/3);
+      if (A <= 0 || P <= 0 || n <= 0) return 0;
+      return (1 / n) * A * Math.pow(A / P, 2 / 3);
     };
-    
-    const kMAIN = computeK(areaMAIN, pMAIN, nMain);
+
+    const kMain = computeK(areaMAIN, pMAIN, nMain);
     const kLOB = computeK(areaLOB, pLOB, nLOB);
     const kROB = computeK(areaROB, pROB, nROB);
-    
-    const K_total = kMAIN + kLOB + kROB;
-    const Q_calc = K_total * Math.sqrt(Math.max(0.0001, S0));
-    
-    if (Math.abs(Q_calc - Q) < tolerance) {
-      finalQ = Q_calc;
-      finalArea = areaMAIN + areaLOB + areaROB;
-      finalPerimeter = pMAIN + pLOB + pROB;
-      finalTopWidth = topWidth;
-      finalVel = finalArea > 0 ? Q_calc / finalArea : 0;
-      finalOverbank = overbankDetected;
+    const K_total = kMain + kLOB + kROB;
+
+    const effSlope = Math.max(0.00005, S0);
+    const Q_calc = K_total * Math.sqrt(effSlope);
+
+    return {
+      areaMAIN, pMAIN, wMAIN,
+      areaLOB, pLOB, wLOB,
+      areaROB, pROB, wROB,
+      totalArea: areaMAIN + areaLOB + areaROB,
+      totalP: pMAIN + pLOB + pROB,
+      totalW: wMAIN + wLOB + wROB,
+      waterLeftX: leftWetX,
+      waterRightX: rightWetX,
+      Q_calc
+    };
+  };
+
+  // 4. Guaranteed Monotonic Bisection Search for WSE
+  let lowWSE = minZ + 0.001;
+  let highWSE = minZ + 2.0;
+
+  // Bracket upper bound until Q_calc exceeds requested Q
+  const maxAllowableZ = Math.max(...profile.map(p => p.z)) + 25;
+  while (evaluateGeometry(highWSE).Q_calc < Q && highWSE < maxAllowableZ) {
+    highWSE += 2.0;
+  }
+
+  let finalGeom = evaluateGeometry(highWSE);
+  let bestWSE = highWSE;
+
+  for (let iter = 0; iter < 65; iter++) {
+    const midWSE = (lowWSE + highWSE) / 2;
+    const geom = evaluateGeometry(midWSE);
+    bestWSE = midWSE;
+    finalGeom = geom;
+
+    if (Math.abs(geom.Q_calc - Q) < 0.005 || (highWSE - lowWSE) < 0.0005) {
       break;
     }
-    
-    if (Q_calc < Q) {
-      wl += 0.05;
+
+    if (geom.Q_calc < Q) {
+      lowWSE = midWSE;
     } else {
-      wl -= 0.01;
-      if (Math.abs(Q_calc - Q) < tolerance * 10) {
-        finalQ = Q_calc;
-        finalArea = areaMAIN + areaLOB + areaROB;
-        finalPerimeter = pMAIN + pLOB + pROB;
-        finalTopWidth = topWidth;
-        finalVel = finalArea > 0 ? Q_calc / finalArea : 0;
-        finalOverbank = overbankDetected;
-        break;
-      }
+      highWSE = midWSE;
     }
   }
 
-  const hydraulicDepth = finalTopWidth > 0 ? finalArea / finalTopWidth : Math.max(0.1, wl - minZ);
+  const finalArea = finalGeom.totalArea;
+  const finalVel = finalArea > 0 ? Q / finalArea : 0;
+  const hydraulicDepth = finalGeom.totalW > 0 ? finalArea / finalGeom.totalW : Math.max(0.1, bestWSE - minZ);
   const froudeNumber = hydraulicDepth > 0 ? finalVel / Math.sqrt(9.81 * hydraulicDepth) : 0;
   const velocityHead = (finalVel * finalVel) / (2 * 9.81);
-  const energyElevation = wl + velocityHead;
-  
+  const energyElevation = bestWSE + velocityHead;
+
+  // Overbank flood occurs ONLY IF water breaches the bank crest AND discharges onto the floodplain
+  const isOverbank = bestWSE > bankMinZ && (finalGeom.areaLOB > 0.05 || finalGeom.areaROB > 0.05);
+
   return {
-    waterElevation: wl,
-    maxDepth: Math.max(0, wl - minZ),
+    waterElevation: bestWSE,
+    maxDepth: Math.max(0, bestWSE - minZ),
     area: finalArea,
     velocity: finalVel,
-    wettedPerimeter: finalPerimeter,
-    topWidth: finalTopWidth,
+    wettedPerimeter: finalGeom.totalP,
+    topWidth: finalGeom.totalW,
     froudeNumber,
-    isOverbank: finalOverbank,
+    isOverbank,
     energyElevation,
-    bedElevation: minZ
+    bedElevation: minZ,
+    waterLeftX: finalGeom.waterLeftX,
+    waterRightX: finalGeom.waterRightX,
+    overbankAreaLOB: finalGeom.areaLOB,
+    overbankAreaROB: finalGeom.areaROB,
+    bankLeftZ,
+    bankRightZ
   };
 }
 
@@ -689,14 +876,38 @@ export function runRouting(
           finalResults[i].maxDepth = finalResults[i].waterElevation - finalResults[i].bedElevation;
           finalResults[i].energyElevation += addedWSE * 0.9;
           
-          // If water elevation exceeds left or right bank, mark as overbank
-          const secProfile = sections[i].profile;
-          const leftBankPt = secProfile.find(p => p.x >= sections[i].bankLeftX);
-          const rightBankPt = secProfile.find(p => p.x >= sections[i].bankRightX);
-          const bankMinZ = Math.min(leftBankPt?.z || Infinity, rightBankPt?.z || Infinity);
-          if (finalResults[i].waterElevation > bankMinZ) {
-            finalResults[i].isOverbank = true;
+          const profile = sections[i].profile;
+          const newWSE = finalResults[i].waterElevation;
+          let minZ = profile[0].z, minIdx = 0;
+          for (let pIdx = 0; pIdx < profile.length; pIdx++) {
+            if (profile[pIdx].z < minZ) { minZ = profile[pIdx].z; minIdx = pIdx; }
           }
+          let leftWet = profile[minIdx].x;
+          for (let k = minIdx; k > 0; k--) {
+            if (profile[k - 1].z >= newWSE) {
+              const frac = (newWSE - profile[k].z) / Math.max(1e-6, profile[k - 1].z - profile[k].z);
+              leftWet = profile[k].x - frac * (profile[k].x - profile[k - 1].x);
+              break;
+            } else {
+              leftWet = profile[k - 1].x;
+            }
+          }
+          let rightWet = profile[minIdx].x;
+          for (let k = minIdx; k < profile.length - 1; k++) {
+            if (profile[k + 1].z >= newWSE) {
+              const frac = (newWSE - profile[k].z) / Math.max(1e-6, profile[k + 1].z - profile[k].z);
+              rightWet = profile[k].x + frac * (profile[k + 1].x - profile[k].x);
+              break;
+            } else {
+              rightWet = profile[k + 1].x;
+            }
+          }
+          finalResults[i].waterLeftX = leftWet;
+          finalResults[i].waterRightX = rightWet;
+          finalResults[i].topWidth = Math.max(0.5, rightWet - leftWet);
+
+          const bankMin = Math.min(finalResults[i].bankLeftZ, finalResults[i].bankRightZ);
+          finalResults[i].isOverbank = newWSE > bankMin;
 
           finalResults[i].structureEffect = {
             structureName: struct.name,

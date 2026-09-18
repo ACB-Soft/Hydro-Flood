@@ -165,6 +165,18 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [hydrographData, setHydrographData] = useState<HydrographPoint[]>([]);
   const [hydrographFileName, setHydrographFileName] = useState<string | null>(null);
 
+  // Computed topographic bed slope from cross sections
+  const detectedBedSlope = useMemo(() => {
+    if (sections.length < 2) return null;
+    const sStart = sections[0];
+    const sEnd = sections[sections.length - 1];
+    const dStat = Math.abs(sEnd.station - sStart.station);
+    if (dStat <= 0) return null;
+    const dZ = Math.abs(sStart.minElevation - sEnd.minElevation);
+    const s = dZ / dStat;
+    return Math.max(0.0001, Math.min(0.2, Number(s.toFixed(5))));
+  }, [sections]);
+
   // Simulation State & Results
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [simResults, setSimResults] = useState<RoutingResult[]>([]);
@@ -613,21 +625,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       const x1 = profile[profile.length - 1].x;
       const spanX = Math.max(1, x1 - x0);
 
-      const wl = res.waterElevation;
-      const wetPoints = profile.filter(p => p.z <= wl);
+      // Use exact hydraulic water contact boundaries from solver (avoids far-away DEM depression artifacts)
+      const wetMinX = (res.waterLeftX !== undefined && !isNaN(res.waterLeftX))
+        ? res.waterLeftX
+        : Math.max(x0, (sec.bankLeftX + sec.bankRightX) / 2 - (res.topWidth || 5) / 2);
 
-      let wetMinX: number;
-      let wetMaxX: number;
-
-      if (wetPoints.length > 0) {
-        wetMinX = Math.min(...wetPoints.map(p => p.x));
-        wetMaxX = Math.max(...wetPoints.map(p => p.x));
-      } else {
-        const midX = (sec.bankLeftX + sec.bankRightX) / 2;
-        const halfW = Math.max(1, (res.topWidth || 5) / 2);
-        wetMinX = Math.max(x0, midX - halfW);
-        wetMaxX = Math.min(x1, midX + halfW);
-      }
+      const wetMaxX = (res.waterRightX !== undefined && !isNaN(res.waterRightX))
+        ? res.waterRightX
+        : Math.min(x1, (sec.bankLeftX + sec.bankRightX) / 2 + (res.topWidth || 5) / 2);
 
       const rLeft = Math.max(0, Math.min(1, (wetMinX - x0) / spanX));
       const rRight = Math.max(0, Math.min(1, (wetMaxX - x0) / spanX));
@@ -673,13 +678,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       avgWidth: number;
       avgVelocity: number;
       areaM2: number;
+      isOverbank: boolean;
       fillColor: string;
       strokeColor: string;
       depthLabel: string;
     }
 
     const reachPolygons: ReachPolygon[] = [];
-    let totalFloodAreaM2 = 0;
+    let totalWaterAreaM2 = 0;
+    let totalOverbankAreaM2 = 0;
 
     for (let i = 0; i < sectionExtents.length - 1; i++) {
       const s1 = sectionExtents[i];
@@ -699,24 +706,35 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       const avgVelocity = (s1.velocity + s2.velocity) / 2;
       const dx = Math.abs(s2.station - s1.station);
       const reachArea = avgWidth * dx;
-      totalFloodAreaM2 += reachArea;
+      totalWaterAreaM2 += reachArea;
 
-      let fillColor = '#38bdf8';
+      const isReachOverbank = s1.isOverbank || s2.isOverbank;
+      if (isReachOverbank) {
+        totalOverbankAreaM2 += reachArea;
+      }
+
+      let fillColor = '#0ea5e9';
       let strokeColor = '#0284c7';
-      let depthLabel = '0.0 - 0.5 m (Sığ Taşkın)';
+      let depthLabel = `0.0 - ${avgDepth.toFixed(1)} m (Kanal İçi Akış - Emniyetli)`;
 
-      if (avgDepth >= 3.0) {
-        fillColor = '#1e3a8a';
-        strokeColor = '#0f172a';
-        depthLabel = '> 3.0 m (Kritik Taşkın)';
-      } else if (avgDepth >= 1.5) {
-        fillColor = '#0369a1';
-        strokeColor = '#1e3a8a';
-        depthLabel = '1.5 - 3.0 m (Derin Taşkın)';
-      } else if (avgDepth >= 0.5) {
-        fillColor = '#0284c7';
-        strokeColor = '#0369a1';
-        depthLabel = '0.5 - 1.5 m (Orta Taşkın)';
+      if (isReachOverbank) {
+        if (avgDepth >= 3.0) {
+          fillColor = '#1e3a8a';
+          strokeColor = '#0f172a';
+          depthLabel = '> 3.0 m (Kritik Taşkın)';
+        } else if (avgDepth >= 1.5) {
+          fillColor = '#0369a1';
+          strokeColor = '#1e3a8a';
+          depthLabel = '1.5 - 3.0 m (Derin Taşkın)';
+        } else if (avgDepth >= 0.5) {
+          fillColor = '#0284c7';
+          strokeColor = '#0369a1';
+          depthLabel = '0.5 - 1.5 m (Orta Taşkın)';
+        } else {
+          fillColor = '#38bdf8';
+          strokeColor = '#0284c7';
+          depthLabel = '0.0 - 0.5 m (Sığ Taşkın)';
+        }
       }
 
       reachPolygons.push({
@@ -729,6 +747,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         avgWidth,
         avgVelocity,
         areaM2: reachArea,
+        isOverbank: isReachOverbank,
         fillColor,
         strokeColor,
         depthLabel
@@ -743,6 +762,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     ];
 
     const totalLengthM = Math.abs(sectionExtents[sectionExtents.length - 1].station - sectionExtents[0].station);
+    const totalWaterAreaHa = totalWaterAreaM2 / 10000;
+    const totalOverbankAreaHa = totalOverbankAreaM2 / 10000;
+    // If overbank flooding occurred, total flood area is the overbank inundated area; otherwise canal flow area
+    const totalFloodAreaM2 = totalOverbankAreaM2 > 0 ? totalOverbankAreaM2 : totalWaterAreaM2;
     const totalFloodAreaHa = totalFloodAreaM2 / 10000;
     const avgWidthTotal = totalLengthM > 0 ? totalFloodAreaM2 / totalLengthM : 0;
     const maxWidthTotal = Math.max(...sectionExtents.map(s => s.wettedWidth));
@@ -768,6 +791,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       rightBankLine,
       totalFloodAreaM2,
       totalFloodAreaHa,
+      totalWaterAreaM2,
+      totalWaterAreaHa,
+      totalOverbankAreaM2,
+      totalOverbankAreaHa,
       avgWidthTotal,
       maxWidthTotal,
       totalLengthM,
@@ -1345,11 +1372,18 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                             const groundPath = `M 30 250 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 670 250 Z`;
 
-                            const wetProfile = sec.profile.filter(p => p.z <= wl);
+                            const wLeftX = (currentActiveResult.waterLeftX !== undefined && !isNaN(currentActiveResult.waterLeftX))
+                              ? currentActiveResult.waterLeftX
+                              : minX;
+                            const wRightX = (currentActiveResult.waterRightX !== undefined && !isNaN(currentActiveResult.waterRightX))
+                              ? currentActiveResult.waterRightX
+                              : maxX;
+
+                            const wetProfile = sec.profile.filter(p => p.x >= wLeftX - 0.1 && p.x <= wRightX + 0.1 && p.z <= wl);
                             let waterSvg = null;
-                            if (wetProfile.length > 1) {
-                              const firstWetX = mapX(wetProfile[0].x);
-                              const lastWetX = mapX(wetProfile[wetProfile.length - 1].x);
+                            if (wRightX > wLeftX) {
+                              const firstWetX = mapX(wLeftX);
+                              const lastWetX = mapX(wRightX);
                               const waterTopY = mapZ(wl);
 
                               const waterPath = `M ${firstWetX} ${waterTopY} ` +
@@ -1358,8 +1392,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                               waterSvg = (
                                 <>
-                                  <path d={waterPath} fill="#0284c7" fillOpacity="0.4" />
-                                  <line x1={firstWetX} y1={waterTopY} x2={lastWetX} y2={waterTopY} stroke="#0284c7" strokeWidth="2.5" />
+                                  <path d={waterPath} fill={currentActiveResult.isOverbank ? "#ef4444" : "#0284c7"} fillOpacity="0.4" />
+                                  <line x1={firstWetX} y1={waterTopY} x2={lastWetX} y2={waterTopY} stroke={currentActiveResult.isOverbank ? "#dc2626" : "#0284c7"} strokeWidth="2.5" />
                                 </>
                               );
                             }
@@ -1797,8 +1831,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="bg-cyan-50/80 border border-cyan-200 p-3 rounded-xl col-span-2">
                     <p className="text-[10px] font-bold text-cyan-800 uppercase flex items-center justify-between">
-                      <span>Toplam Taşkın Yayılım Alanı</span>
-                      <span className="text-[9px] bg-cyan-200/80 text-cyan-900 px-1.5 py-0.5 rounded-full font-bold">1B Model</span>
+                      <span>{floodMapData && floodMapData.totalOverbankAreaM2 > 0 ? 'Taşkın Yayılım Alanı (Yatak Dışı İhlal)' : 'Toplam Su Yüzeyi Alanı (Kanal İçi)'}</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                        floodMapData && floodMapData.totalOverbankAreaM2 > 0 ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        {floodMapData && floodMapData.totalOverbankAreaM2 > 0 ? 'Taşkın Var' : 'Yatak İçi Emniyetli'}
+                      </span>
                     </p>
                     <div className="flex items-baseline gap-2 mt-1">
                       <p className="text-lg font-display font-bold text-slate-900">
@@ -1808,6 +1846,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         ({floodMapData ? floodMapData.totalFloodAreaHa.toFixed(2) : '0.00'} ha)
                       </p>
                     </div>
+                    {floodMapData && floodMapData.totalOverbankAreaM2 > 0 && (
+                      <p className="text-[10px] text-slate-600 mt-1 border-t border-cyan-200/60 pt-1 flex justify-between">
+                        <span>Toplam Islak Yüzey (Kanal dahil):</span>
+                        <strong className="text-slate-800">{Math.round(floodMapData.totalWaterAreaM2).toLocaleString()} m² ({floodMapData.totalWaterAreaHa.toFixed(2)} ha)</strong>
+                      </p>
+                    )}
                   </div>
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
@@ -2531,7 +2575,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Mansap Eğim (S₀):</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[10px] font-bold text-slate-700 block">Mansap Eğim (S₀):</label>
+                      {detectedBedSlope !== null && (
+                        <button
+                          type="button"
+                          onClick={() => setDownstreamSlope(detectedBedSlope)}
+                          className="text-[9px] text-cyan-700 hover:text-cyan-900 font-bold underline cursor-pointer"
+                          title="Kesit taban kotlarından hesaplanan ortalama eğimi uygula"
+                        >
+                          DEM: %{(detectedBedSlope * 100).toFixed(2)}
+                        </button>
+                      )}
+                    </div>
                     <input
                       type="number"
                       step="0.0005"
