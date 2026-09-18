@@ -18,6 +18,7 @@ import {
   Sliders,
   Check,
   Compass,
+  Globe,
   Layers,
   Eye,
   FileCode,
@@ -34,7 +35,7 @@ import {
   ChevronUp,
   X
 } from 'lucide-react';
-import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as XLSX from 'xlsx';
 import { 
@@ -121,6 +122,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
+
+  // Flood Inundation Map Layer Toggles
+  const [showFloodPolygons, setShowFloodPolygons] = useState<boolean>(true);
+  const [showFloodBoundary, setShowFloodBoundary] = useState<boolean>(true);
+  const [showWettedWidths, setShowWettedWidths] = useState<boolean>(true);
+  const [showCenterlineLayer, setShowCenterlineLayer] = useState<boolean>(true);
+  const [showTransectLines, setShowTransectLines] = useState<boolean>(false);
+  const [showStructuresLayer, setShowStructuresLayer] = useState<boolean>(true);
 
   // Coordinate System (CRS) Selection (defaults to TUREF / TM36 (3°) EPSG:5256)
   const [selectedCRS, setSelectedCRS] = useState<CRSItem>(
@@ -565,6 +574,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         setStructureResults(structRes);
         setIsSimulating(false);
         setIsResultPage(true);
+        setResultTab('map'); // Statik simülasyondaki gibi doğrudan Taşkın Yayılım Haritasını aç
         setMobileTab('preview');
       } catch (err: any) {
         console.error(err);
@@ -573,6 +583,197 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       }
     }, 1200);
   };
+
+  // 1D Flood Inundation Polygons & Extents Computation
+  const floodMapData = useMemo(() => {
+    if (sections.length === 0 || simResults.length === 0) return null;
+
+    interface SectionExtent {
+      station: number;
+      cutLine: [[number, number], [number, number]];
+      wetLeftCoord: [number, number];
+      wetRightCoord: [number, number];
+      wettedWidth: number;
+      waterElevation: number;
+      maxDepth: number;
+      velocity: number;
+      isOverbank: boolean;
+      idx: number;
+    }
+
+    const sectionExtents: SectionExtent[] = [];
+
+    for (let i = 0; i < sections.length; i++) {
+      const sec = sections[i];
+      const res = simResults[i];
+      if (!sec.cutLine || !res || sec.profile.length < 2) continue;
+
+      const profile = sec.profile;
+      const x0 = profile[0].x;
+      const x1 = profile[profile.length - 1].x;
+      const spanX = Math.max(1, x1 - x0);
+
+      const wl = res.waterElevation;
+      const wetPoints = profile.filter(p => p.z <= wl);
+
+      let wetMinX: number;
+      let wetMaxX: number;
+
+      if (wetPoints.length > 0) {
+        wetMinX = Math.min(...wetPoints.map(p => p.x));
+        wetMaxX = Math.max(...wetPoints.map(p => p.x));
+      } else {
+        const midX = (sec.bankLeftX + sec.bankRightX) / 2;
+        const halfW = Math.max(1, (res.topWidth || 5) / 2);
+        wetMinX = Math.max(x0, midX - halfW);
+        wetMaxX = Math.min(x1, midX + halfW);
+      }
+
+      const rLeft = Math.max(0, Math.min(1, (wetMinX - x0) / spanX));
+      const rRight = Math.max(0, Math.min(1, (wetMaxX - x0) / spanX));
+
+      const lat0 = sec.cutLine[0][0];
+      const lon0 = sec.cutLine[0][1];
+      const lat1 = sec.cutLine[1][0];
+      const lon1 = sec.cutLine[1][1];
+
+      const wetLeftCoord: [number, number] = [
+        lat0 + rLeft * (lat1 - lat0),
+        lon0 + rLeft * (lon1 - lon0)
+      ];
+
+      const wetRightCoord: [number, number] = [
+        lat0 + rRight * (lat1 - lat0),
+        lon0 + rRight * (lon1 - lon0)
+      ];
+
+      sectionExtents.push({
+        station: sec.station,
+        cutLine: sec.cutLine,
+        wetLeftCoord,
+        wetRightCoord,
+        wettedWidth: Math.max(0.5, wetMaxX - wetMinX),
+        waterElevation: res.waterElevation,
+        maxDepth: res.maxDepth,
+        velocity: res.velocity,
+        isOverbank: res.isOverbank,
+        idx: i
+      });
+    }
+
+    if (sectionExtents.length < 2) return null;
+
+    interface ReachPolygon {
+      id: number;
+      coords: [number, number][];
+      stationFrom: number;
+      stationTo: number;
+      avgDepth: number;
+      avgWse: number;
+      avgWidth: number;
+      avgVelocity: number;
+      areaM2: number;
+      fillColor: string;
+      strokeColor: string;
+      depthLabel: string;
+    }
+
+    const reachPolygons: ReachPolygon[] = [];
+    let totalFloodAreaM2 = 0;
+
+    for (let i = 0; i < sectionExtents.length - 1; i++) {
+      const s1 = sectionExtents[i];
+      const s2 = sectionExtents[i + 1];
+
+      // Quadrilateral polygon: s1.left -> s2.left -> s2.right -> s1.right
+      const coords: [number, number][] = [
+        s1.wetLeftCoord,
+        s2.wetLeftCoord,
+        s2.wetRightCoord,
+        s1.wetRightCoord
+      ];
+
+      const avgDepth = (s1.maxDepth + s2.maxDepth) / 2;
+      const avgWse = (s1.waterElevation + s2.waterElevation) / 2;
+      const avgWidth = (s1.wettedWidth + s2.wettedWidth) / 2;
+      const avgVelocity = (s1.velocity + s2.velocity) / 2;
+      const dx = Math.abs(s2.station - s1.station);
+      const reachArea = avgWidth * dx;
+      totalFloodAreaM2 += reachArea;
+
+      let fillColor = '#38bdf8';
+      let strokeColor = '#0284c7';
+      let depthLabel = '0.0 - 0.5 m (Sığ Taşkın)';
+
+      if (avgDepth >= 3.0) {
+        fillColor = '#1e3a8a';
+        strokeColor = '#0f172a';
+        depthLabel = '> 3.0 m (Kritik Taşkın)';
+      } else if (avgDepth >= 1.5) {
+        fillColor = '#0369a1';
+        strokeColor = '#1e3a8a';
+        depthLabel = '1.5 - 3.0 m (Derin Taşkın)';
+      } else if (avgDepth >= 0.5) {
+        fillColor = '#0284c7';
+        strokeColor = '#0369a1';
+        depthLabel = '0.5 - 1.5 m (Orta Taşkın)';
+      }
+
+      reachPolygons.push({
+        id: i,
+        coords,
+        stationFrom: s1.station,
+        stationTo: s2.station,
+        avgDepth,
+        avgWse,
+        avgWidth,
+        avgVelocity,
+        areaM2: reachArea,
+        fillColor,
+        strokeColor,
+        depthLabel
+      });
+    }
+
+    const leftBankLine: [number, number][] = sectionExtents.map(s => s.wetLeftCoord);
+    const rightBankLine: [number, number][] = sectionExtents.map(s => s.wetRightCoord);
+    const fullFloodPolygon: [number, number][] = [
+      ...leftBankLine,
+      ...rightBankLine.slice().reverse()
+    ];
+
+    const totalLengthM = Math.abs(sectionExtents[sectionExtents.length - 1].station - sectionExtents[0].station);
+    const totalFloodAreaHa = totalFloodAreaM2 / 10000;
+    const avgWidthTotal = totalLengthM > 0 ? totalFloodAreaM2 / totalLengthM : 0;
+    const maxWidthTotal = Math.max(...sectionExtents.map(s => s.wettedWidth));
+
+    let minLat = Infinity, maxLat = -Infinity;
+    let minLon = Infinity, maxLon = -Infinity;
+    fullFloodPolygon.forEach(([lat, lon]) => {
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+    });
+
+    const floodBounds: [[number, number], [number, number]] = (minLat !== Infinity)
+      ? [[minLat - 0.0015, minLon - 0.0015], [maxLat + 0.0015, maxLon + 0.0015]]
+      : [[39.9, 32.8], [40.0, 32.9]];
+
+    return {
+      sectionExtents,
+      reachPolygons,
+      fullFloodPolygon,
+      leftBankLine,
+      rightBankLine,
+      totalFloodAreaM2,
+      totalFloodAreaHa,
+      avgWidthTotal,
+      maxWidthTotal,
+      totalLengthM,
+      floodBounds
+    };
+  }, [sections, simResults]);
 
   // Export Results to CSV
   const exportToCSV = () => {
@@ -596,39 +797,196 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     document.body.removeChild(link);
   };
 
-  // Export Results to KML
+  // Export Results to GeoJSON (CBS ve GIS yazılımları için)
+  const exportToGeoJSON = () => {
+    if (!floodMapData || floodMapData.reachPolygons.length === 0) {
+      alert("Dışa aktarılacak taşkın yayılım verisi bulunamadı.");
+      return;
+    }
+
+    const features: any[] = [];
+
+    // 1. Full Inundation Boundary Polygon Feature
+    features.push({
+      type: "Feature",
+      properties: {
+        name: `1B Taşkın Yayılım Sınırı (Q=${peakFlow} m³/s)`,
+        totalAreaM2: Math.round(floodMapData.totalFloodAreaM2),
+        totalAreaHa: Number(floodMapData.totalFloodAreaHa.toFixed(2)),
+        maxDepth: Number(maxDepthVal.toFixed(2)),
+        reachLengthKm: Number((floodMapData.totalLengthM / 1000).toFixed(3)),
+        peakFlow: peakFlow
+      },
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            ...floodMapData.fullFloodPolygon.map(([lat, lon]) => [lon, lat]),
+            [floodMapData.fullFloodPolygon[0][1], floodMapData.fullFloodPolygon[0][0]]
+          ]
+        ]
+      }
+    });
+
+    // 2. Individual Reach Polygons with Depth Categories
+    floodMapData.reachPolygons.forEach((reach) => {
+      features.push({
+        type: "Feature",
+        properties: {
+          reachId: reach.id + 1,
+          stationFrom: reach.stationFrom,
+          stationTo: reach.stationTo,
+          avgDepth: Number(reach.avgDepth.toFixed(2)),
+          avgWSE: Number(reach.avgWse.toFixed(2)),
+          avgWidth: Number(reach.avgWidth.toFixed(1)),
+          avgVelocity: Number(reach.avgVelocity.toFixed(2)),
+          areaM2: Math.round(reach.areaM2),
+          depthCategory: reach.depthLabel
+        },
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              ...reach.coords.map(([lat, lon]) => [lon, lat]),
+              [reach.coords[0][1], reach.coords[0][0]]
+            ]
+          ]
+        }
+      });
+    });
+
+    const geojson = {
+      type: "FeatureCollection",
+      features
+    };
+
+    const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: "application/geo+json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `1B_Taskin_Yayilim_Haritasi_Q${peakFlow}.geojson`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Export Results to KML (Google Earth 3B Poligonları ve Enkesitler)
   const exportToKML = () => {
     if (sections.length === 0) return;
     let kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
-    <name>1B Hidrodinamik Taşkın Enkesitleri</name>
+    <name>1B Hidrodinamik Taşkın Yayılım Haritası (Q=${peakFlow} m³/s)</name>
     <Style id="riverLine">
       <LineStyle><color>ffffaa00</color><width>4</width></LineStyle>
+    </Style>
+    <Style id="floodPolyShallow">
+      <LineStyle><color>ffc78402</color><width>1</width></LineStyle>
+      <PolyStyle><color>80f8bd38</color><fill>1</fill><outline>1</outline></PolyStyle>
+    </Style>
+    <Style id="floodPolyMedium">
+      <LineStyle><color>ffa16903</color><width>1</width></LineStyle>
+      <PolyStyle><color>99c78402</color><fill>1</fill><outline>1</outline></PolyStyle>
+    </Style>
+    <Style id="floodPolyDeep">
+      <LineStyle><color>ff8a3a1e</color><width>1.5</width></LineStyle>
+      <PolyStyle><color>b3a16903</color><fill>1</fill><outline>1</outline></PolyStyle>
+    </Style>
+    <Style id="floodPolyCritical">
+      <LineStyle><color>ff2a170f</color><width>2</width></LineStyle>
+      <PolyStyle><color>cc8a3a1e</color><fill>1</fill><outline>1</outline></PolyStyle>
+    </Style>
+    <Style id="hazardBoundary">
+      <LineStyle><color>ff0000ff</color><width>3</width></LineStyle>
     </Style>
     <Style id="transectNorm">
       <LineStyle><color>ff00ff00</color><width>2</width></LineStyle>
     </Style>
     <Style id="transectFlood">
-      <LineStyle><color>ff0000ff</color><width>3</width></LineStyle>
+      <LineStyle><color>ff0055ff</color><width>3</width></LineStyle>
     </Style>`;
 
     // Add Centerline
     if (centerlineCoords.length > 0) {
       kmlContent += `
-    <Placemark>
-      <name>Nehir Merkez Aksı</name>
-      <styleUrl>#riverLine</styleUrl>
-      <LineString>
-        <tessellate>1</tessellate>
-        <coordinates>
-          ${centerlineCoords.map(([lat, lon]) => `${lon},${lat},0`).join(' ')}
-        </coordinates>
-      </LineString>
-    </Placemark>`;
+    <Folder>
+      <name>Nehir Aksı</name>
+      <Placemark>
+        <name>Nehir Merkez Aksı</name>
+        <styleUrl>#riverLine</styleUrl>
+        <LineString>
+          <tessellate>1</tessellate>
+          <coordinates>
+            ${centerlineCoords.map(([lat, lon]) => `${lon},${lat},0`).join(' ')}
+          </coordinates>
+        </LineString>
+      </Placemark>
+    </Folder>`;
+    }
+
+    // Add Inundation Polygons (Su Örtüsü)
+    if (floodMapData && floodMapData.reachPolygons.length > 0) {
+      kmlContent += `
+    <Folder>
+      <name>1B Taşkın Yayılım Alanı (Derinlik Bazlı Su Örtüsü)</name>`;
+      
+      floodMapData.reachPolygons.forEach((reach) => {
+        let styleId = '#floodPolyShallow';
+        if (reach.avgDepth >= 3.0) styleId = '#floodPolyCritical';
+        else if (reach.avgDepth >= 1.5) styleId = '#floodPolyDeep';
+        else if (reach.avgDepth >= 0.5) styleId = '#floodPolyMedium';
+
+        const desc = `Mesafe: Km ${(reach.stationFrom / 1000).toFixed(3)} - ${(reach.stationTo / 1000).toFixed(3)} | Ort. Su Kotu: ${reach.avgWse.toFixed(2)} m | Ort. Su Derinliği: ${reach.avgDepth.toFixed(2)} m | Yayılım Genişliği: ${reach.avgWidth.toFixed(1)} m | Alan: ${Math.round(reach.areaM2)} m² | Akış Hızı: ${reach.avgVelocity.toFixed(2)} m/s`;
+
+        kmlContent += `
+      <Placemark>
+        <name>Taşkın Dilimi Km ${(reach.stationFrom / 1000).toFixed(3)} - ${(reach.stationTo / 1000).toFixed(3)}</name>
+        <description><![CDATA[${desc}]]></description>
+        <styleUrl>${styleId}</styleUrl>
+        <Polygon>
+          <tessellate>1</tessellate>
+          <outerBoundaryIs>
+            <LinearRing>
+              <coordinates>
+                ${reach.coords.map(([lat, lon]) => `${lon},${lat},${reach.avgWse.toFixed(2)}`).join(' ')} ${reach.coords[0][1]},${reach.coords[0][0]},${reach.avgWse.toFixed(2)}
+              </coordinates>
+            </LinearRing>
+          </outerBoundaryIs>
+        </Polygon>
+      </Placemark>`;
+      });
+
+      kmlContent += `
+    </Folder>
+    <Folder>
+      <name>Taşkın Yayılım Sınırları (Tehlike Hattı)</name>
+      <Placemark>
+        <name>Sol Sahil Taşkın Sınırı</name>
+        <styleUrl>#hazardBoundary</styleUrl>
+        <LineString>
+          <tessellate>1</tessellate>
+          <coordinates>
+            ${floodMapData.leftBankLine.map(([lat, lon]) => `${lon},${lat},0`).join(' ')}
+          </coordinates>
+        </LineString>
+      </Placemark>
+      <Placemark>
+        <name>Sağ Sahil Taşkın Sınırı</name>
+        <styleUrl>#hazardBoundary</styleUrl>
+        <LineString>
+          <tessellate>1</tessellate>
+          <coordinates>
+            ${floodMapData.rightBankLine.map(([lat, lon]) => `${lon},${lat},0`).join(' ')}
+          </coordinates>
+        </LineString>
+      </Placemark>
+    </Folder>`;
     }
 
     // Add Transects
+    kmlContent += `
+    <Folder>
+      <name>Hidrolik Enkesitler</name>`;
     sections.forEach((sec, idx) => {
       if (!sec.cutLine) return;
       const res = simResults[idx];
@@ -638,20 +996,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         : `İstasyon: ${sec.station}m`;
 
       kmlContent += `
-    <Placemark>
-      <name>Enkesit Km ${(sec.station / 1000).toFixed(3)}</name>
-      <description><![CDATA[${desc}]]></description>
-      <styleUrl>${isOver ? '#transectFlood' : '#transectNorm'}</styleUrl>
-      <LineString>
-        <tessellate>1</tessellate>
-        <coordinates>
-          ${sec.cutLine[0][1]},${sec.cutLine[0][0]},0 ${sec.cutLine[1][1]},${sec.cutLine[1][0]},0
-        </coordinates>
-      </LineString>
-    </Placemark>`;
+      <Placemark>
+        <name>Enkesit Km ${(sec.station / 1000).toFixed(3)}</name>
+        <description><![CDATA[${desc}]]></description>
+        <styleUrl>${isOver ? '#transectFlood' : '#transectNorm'}</styleUrl>
+        <LineString>
+          <tessellate>1</tessellate>
+          <coordinates>
+            ${sec.cutLine[0][1]},${sec.cutLine[0][0]},0 ${sec.cutLine[1][1]},${sec.cutLine[1][0]},0
+          </coordinates>
+        </LineString>
+      </Placemark>`;
     });
-
     kmlContent += `
+    </Folder>
   </Document>
 </kml>`;
 
@@ -659,7 +1017,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `1B_Taskin_Enkesitleri_Q${peakFlow}.kml`);
+    link.setAttribute("download", `1B_Taskin_Yayilim_Haritasi_Q${peakFlow}.kml`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1072,40 +1430,249 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                 {/* Result Tab 3: Interactive Flooded Map */}
                 {resultTab === 'map' && (
-                  <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner mt-2">
+                  <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner mt-2 flex flex-col">
+                    {/* Top Floating Layer & Basemap Quick Bar */}
+                    <div className="absolute top-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 pointer-events-none">
+                      {/* Layer Toggle Chips */}
+                      <div className="flex flex-wrap items-center gap-1 bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-300 shadow-md pointer-events-auto">
+                        <button
+                          onClick={() => setShowFloodPolygons(!showFloodPolygons)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            showFloodPolygons 
+                              ? 'bg-cyan-700 text-white shadow-xs' 
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                          title="Derinlik bazlı taşkın yayılım su kütlesi poligonları"
+                        >
+                          <span>🌊</span>
+                          <span>Taşkın Yüzeyi</span>
+                        </button>
+
+                        <button
+                          onClick={() => setShowFloodBoundary(!showFloodBoundary)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            showFloodBoundary 
+                              ? 'bg-red-600 text-white shadow-xs' 
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                          title="Sol ve sağ taşkın sınır (tehlike) hatları"
+                        >
+                          <span>🔴</span>
+                          <span>Taşkın Sınırları</span>
+                        </button>
+
+                        <button
+                          onClick={() => setShowWettedWidths(!showWettedWidths)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            showWettedWidths 
+                              ? 'bg-blue-700 text-white shadow-xs' 
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                          title="Enkesitlerdeki su yüzeyi yayılma genişlikleri"
+                        >
+                          <span>📏</span>
+                          <span>Su Genişlikleri</span>
+                        </button>
+
+                        <button
+                          onClick={() => setShowCenterlineLayer(!showCenterlineLayer)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            showCenterlineLayer 
+                              ? 'bg-indigo-700 text-white shadow-xs' 
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                          title="Nehir talveg / merkez hattı"
+                        >
+                          <span>〰️</span>
+                          <span>Nehir Aksı</span>
+                        </button>
+
+                        <button
+                          onClick={() => setShowTransectLines(!showTransectLines)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            showTransectLines 
+                              ? 'bg-slate-800 text-white shadow-xs' 
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                          title="Enkesit kesme çizgileri"
+                        >
+                          <span>📐</span>
+                          <span>Enkesitler</span>
+                        </button>
+
+                        {structures.length > 0 && (
+                          <button
+                            onClick={() => setShowStructuresLayer(!showStructuresLayer)}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                              showStructuresLayer 
+                                ? 'bg-amber-600 text-white shadow-xs' 
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                            title="Köprü ve menfez sanat yapıları"
+                          >
+                            <span>🌉</span>
+                            <span>Sanat Yapıları ({structures.length})</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Basemap Selector Pill */}
+                      <div className="bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-300 shadow-md pointer-events-auto flex items-center gap-1">
+                        {BASEMAP_OPTIONS.map((b) => (
+                          <button
+                            key={b.id}
+                            onClick={() => setActiveBasemap(b.id)}
+                            className={`px-2 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                              activeBasemap === b.id 
+                                ? 'bg-cyan-700 text-white shadow-xs' 
+                                : 'text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            {b.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Leaflet Map */}
                     <MapContainer
                       center={centerlineCoords[0] || [39.92, 32.85]}
                       zoom={14}
                       className="w-full h-full"
                     >
                       <TileLayer url={currentBasemap.url} attribution={currentBasemap.attribution} maxZoom={24} />
-                      {centerlineCoords.length > 0 && (
-                        <Polyline positions={centerlineCoords} color="#0284c7" weight={4} opacity={0.9} />
+
+                      {/* 1. Flood Inundation Polygons (Derinlik bazlı renk gradyanı ile) */}
+                      {showFloodPolygons && floodMapData?.reachPolygons.map((reach) => (
+                        <Polygon
+                          key={`reach-poly-${reach.id}`}
+                          positions={reach.coords}
+                          pathOptions={{
+                            fillColor: reach.fillColor,
+                            fillOpacity: 0.72,
+                            color: reach.strokeColor,
+                            weight: 1.2
+                          }}
+                        >
+                          <Tooltip direction="top" opacity={0.95}>
+                            <div className="text-xs font-sans">
+                              <p className="font-bold text-slate-900">Taşkın Dilimi: Km {(reach.stationFrom / 1000).toFixed(3)} - {(reach.stationTo / 1000).toFixed(3)}</p>
+                              <p className="text-cyan-800 font-semibold">{reach.depthLabel}</p>
+                              <p className="text-slate-600 text-[11px]">Ort. Derinlik: {reach.avgDepth.toFixed(2)} m | Genişlik: {reach.avgWidth.toFixed(1)} m</p>
+                            </div>
+                          </Tooltip>
+                          <Popup>
+                            <div className="text-xs space-y-1.5 min-w-[220px]">
+                              <div className="font-bold text-slate-900 border-b pb-1 flex items-center justify-between">
+                                <span>🌊 1B Taşkın Yayılım Dilimi</span>
+                                <span className="text-[10px] bg-cyan-100 text-cyan-900 px-1.5 py-0.5 rounded font-bold">
+                                  Km {(reach.stationFrom / 1000).toFixed(3)} - {(reach.stationTo / 1000).toFixed(3)}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-1.5 text-[11px] pt-0.5">
+                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                  <span className="text-slate-500 block text-[9px]">Ortalama Su Kotu:</span>
+                                  <span className="font-bold text-slate-800">{reach.avgWse.toFixed(2)} m</span>
+                                </div>
+                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                  <span className="text-slate-500 block text-[9px]">Ortalama Derinlik:</span>
+                                  <span className="font-bold text-blue-700">{reach.avgDepth.toFixed(2)} m</span>
+                                </div>
+                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                  <span className="text-slate-500 block text-[9px]">Taşkın Genişliği:</span>
+                                  <span className="font-bold text-slate-800">{reach.avgWidth.toFixed(1)} m</span>
+                                </div>
+                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                  <span className="text-slate-500 block text-[9px]">Akış Hızı:</span>
+                                  <span className="font-bold text-slate-800">{reach.avgVelocity.toFixed(2)} m/s</span>
+                                </div>
+                              </div>
+                              <div className="bg-cyan-50 text-cyan-900 p-1.5 rounded text-[10px] font-semibold border border-cyan-200">
+                                Bu dilimdeki su alanı: {Math.round(reach.areaM2).toLocaleString()} m² ({(reach.areaM2 / 10000).toFixed(3)} ha)
+                              </div>
+                            </div>
+                          </Popup>
+                        </Polygon>
+                      ))}
+
+                      {/* 2. Flood Inundation Boundary Hazard Lines (Kırmızı kesikli tehlike hattı) */}
+                      {showFloodBoundary && floodMapData && (
+                        <>
+                          <Polyline positions={floodMapData.leftBankLine} color="#ef4444" weight={2.5} dashArray="5, 5" opacity={0.95}>
+                            <Tooltip sticky>Sol Sahil Taşkın Sınırı</Tooltip>
+                          </Polyline>
+                          <Polyline positions={floodMapData.rightBankLine} color="#ef4444" weight={2.5} dashArray="5, 5" opacity={0.95}>
+                            <Tooltip sticky>Sağ Sahil Taşkın Sınırı</Tooltip>
+                          </Polyline>
+                        </>
                       )}
+
+                      {/* 3. Wetted Surface Width Lines on Cross Sections */}
+                      {showWettedWidths && floodMapData?.sectionExtents.map((se) => (
+                        <React.Fragment key={`wet-line-${se.idx}`}>
+                          <Polyline
+                            positions={[se.wetLeftCoord, se.wetRightCoord]}
+                            color={se.idx === selectedSectionIdx ? '#f59e0b' : '#06b6d4'}
+                            weight={se.idx === selectedSectionIdx ? 4 : 2.5}
+                            opacity={0.95}
+                            eventHandlers={{
+                              click: () => setSelectedSectionIdx(se.idx)
+                            }}
+                          >
+                            <Tooltip direction="top" opacity={0.9}>
+                              <span>Km {(se.station / 1000).toFixed(3)}: Genişlik {se.wettedWidth.toFixed(1)}m | Su Kotu: {se.waterElevation.toFixed(2)}m</span>
+                            </Tooltip>
+                          </Polyline>
+                          <CircleMarker
+                            center={se.wetLeftCoord}
+                            radius={3}
+                            pathOptions={{ color: '#0284c7', fillColor: '#38bdf8', fillOpacity: 1, weight: 1.5 }}
+                          />
+                          <CircleMarker
+                            center={se.wetRightCoord}
+                            radius={3}
+                            pathOptions={{ color: '#0284c7', fillColor: '#38bdf8', fillOpacity: 1, weight: 1.5 }}
+                          />
+                        </React.Fragment>
+                      ))}
+
+                      {/* 4. Stream Centerline */}
+                      {showCenterlineLayer && centerlineCoords.length > 0 && (
+                        <Polyline positions={centerlineCoords} color="#2563eb" weight={3.5} opacity={0.85}>
+                          <Tooltip sticky>Nehir Merkez Aksı</Tooltip>
+                        </Polyline>
+                      )}
+
+                      {/* 5. Natural Banks */}
                       {bankCoords.length > 0 && (
-                        <Polyline positions={bankCoords} color="#ef4444" weight={2} dashArray="4, 4" opacity={0.8} />
+                        <Polyline positions={bankCoords} color="#94a3b8" weight={1.5} dashArray="3, 3" opacity={0.7} />
                       )}
-                      {sections.map((sec, idx) => {
+
+                      {/* 6. Transect Cut Lines */}
+                      {showTransectLines && sections.map((sec, idx) => {
                         if (!sec.cutLine) return null;
-                        const res = simResults[idx];
-                        const isOver = res ? res.isOverbank : false;
                         const isSelected = idx === selectedSectionIdx;
                         return (
                           <Polyline
-                            key={idx}
+                            key={`cutline-${idx}`}
                             positions={sec.cutLine}
-                            color={isSelected ? '#06b6d4' : isOver ? '#ef4444' : '#10b981'}
-                            weight={isSelected ? 5 : 2.5}
-                            opacity={0.9}
+                            color={isSelected ? '#f59e0b' : '#64748b'}
+                            weight={isSelected ? 3 : 1.2}
+                            dashArray="3, 3"
+                            opacity={0.75}
                             eventHandlers={{
                               click: () => setSelectedSectionIdx(idx)
                             }}
-                          />
+                          >
+                            <Tooltip direction="top">
+                              <span>Kesit Km {(sec.station / 1000).toFixed(3)}</span>
+                            </Tooltip>
+                          </Polyline>
                         );
                       })}
 
-                      {/* Render Hydraulic Structure Markers on Map */}
-                      {structures.filter(s => s.isActive).map((struct) => {
+                      {/* 7. Hydraulic Structures Markers */}
+                      {showStructuresLayer && structures.filter(s => s.isActive).map((struct) => {
                         const coord = struct.coordinates || sections.find(sec => Math.abs(sec.station - struct.station) < 60)?.centerCoord;
                         if (!coord) return null;
                         const sRes = structureResults.find(sr => sr.structure.id === struct.id);
@@ -1157,24 +1724,62 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         );
                       })}
 
-                      {mapBounds && <MapAutoCenter bounds={mapBounds} />}
+                      {/* Map Auto Center */}
+                      {floodMapData?.floodBounds ? (
+                        <MapAutoCenter bounds={floodMapData.floodBounds} />
+                      ) : (
+                        mapBounds && <MapAutoCenter bounds={mapBounds} />
+                      )}
                     </MapContainer>
 
-                    {/* Map Legend Overlay */}
-                    <div className="absolute bottom-3 left-3 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl flex items-center gap-3">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>
-                        <span>Merkez Aksı</span>
+                    {/* Floating Inundation Depth Legend in Bottom-Left */}
+                    <div className="absolute bottom-3 left-3 z-[400] bg-white/95 backdrop-blur-md px-3 py-2 rounded-xl text-[11px] text-slate-800 border border-slate-300 shadow-xl space-y-1.5">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        1B Taşkın Yayılım Lejandı
                       </div>
-                      <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                        <span>Ana Kanalda</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
-                        <span className="text-red-300 font-bold">Taşkın Var</span>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3 h-3 rounded-xs bg-[#38bdf8] border border-[#0284c7] inline-block"></span>
+                          <span>&lt; 0.5 m (Sığ)</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3 h-3 rounded-xs bg-[#0284c7] border border-[#0369a1] inline-block"></span>
+                          <span>0.5 - 1.5 m (Orta)</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3 h-3 rounded-xs bg-[#0369a1] border border-[#1e3a8a] inline-block"></span>
+                          <span>1.5 - 3.0 m (Derin)</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3 h-3 rounded-xs bg-[#1e3a8a] border border-[#0f172a] inline-block"></span>
+                          <span>&gt; 3.0 m (Kritik)</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3.5 h-0.5 border-t-2 border-dashed border-red-500 inline-block"></span>
+                          <span className="text-red-700 font-semibold">Taşkın Sınırı</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3.5 h-0.5 bg-cyan-500 inline-block"></span>
+                          <span>Su Genişliği</span>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Floating Area & Distance Metrics Tag in Bottom-Right */}
+                    {floodMapData && (
+                      <div className="absolute bottom-3 right-3 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl text-slate-200 border border-slate-700 shadow-xl text-right">
+                        <div className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider">Toplam Taşkın Alanı</div>
+                        <div className="text-sm font-display font-bold text-white">
+                          {Math.round(floodMapData.totalFloodAreaM2).toLocaleString()} m²
+                          <span className="text-[11px] text-slate-300 font-normal ml-1">
+                            ({floodMapData.totalFloodAreaHa.toFixed(2)} ha)
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          Nehir Mesafesi: {(floodMapData.totalLengthM / 1000).toFixed(2)} km | Q: {peakFlow} m³/s
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1188,9 +1793,25 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   1B Hidrolik Analiz Özeti
                 </h3>
 
+                {/* Primary Metrics Grid (Statik simülasyondaki gibi zenginleştirilmiş) */}
                 <div className="grid grid-cols-2 gap-2.5">
+                  <div className="bg-cyan-50/80 border border-cyan-200 p-3 rounded-xl col-span-2">
+                    <p className="text-[10px] font-bold text-cyan-800 uppercase flex items-center justify-between">
+                      <span>Toplam Taşkın Yayılım Alanı</span>
+                      <span className="text-[9px] bg-cyan-200/80 text-cyan-900 px-1.5 py-0.5 rounded-full font-bold">1B Model</span>
+                    </p>
+                    <div className="flex items-baseline gap-2 mt-1">
+                      <p className="text-lg font-display font-bold text-slate-900">
+                        {floodMapData ? Math.round(floodMapData.totalFloodAreaM2).toLocaleString() : '0'} m²
+                      </p>
+                      <p className="text-xs font-bold text-cyan-700">
+                        ({floodMapData ? floodMapData.totalFloodAreaHa.toFixed(2) : '0.00'} ha)
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
-                    <p className="text-[10px] font-bold text-cyan-800 uppercase">Maks. Su Derinliği</p>
+                    <p className="text-[10px] font-bold text-blue-800 uppercase">Maks. Su Derinliği</p>
                     <p className="text-base font-display font-bold text-slate-900 mt-1">
                       {maxDepthVal.toFixed(2)} m
                     </p>
@@ -1204,9 +1825,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   </div>
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
-                    <p className="text-[10px] font-bold text-slate-700 uppercase">Ortalama Froude</p>
+                    <p className="text-[10px] font-bold text-slate-700 uppercase">Ort. Taşkın Genişliği</p>
                     <p className="text-base font-display font-bold text-slate-900 mt-1">
-                      {avgFroudeVal.toFixed(2)} ({avgFroudeVal < 1 ? 'Nehir' : 'Sel'})
+                      {floodMapData ? floodMapData.avgWidthTotal.toFixed(1) : '0.0'} m
                     </p>
                   </div>
 
@@ -1215,6 +1836,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     <p className="text-base font-display font-bold text-red-900 mt-1">
                       %{overbankPercent.toFixed(0)} ({overbankCount}/{simResults.length})
                     </p>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl col-span-2">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-slate-700">
+                      <span>Ortalama Froude Sayısı:</span>
+                      <span className="font-mono text-slate-900 text-xs">
+                        {avgFroudeVal.toFixed(2)} ({avgFroudeVal < 1 ? 'Nehir Rejimi' : 'Sel Rejimi'})
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -1279,14 +1909,22 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   </div>
                 )}
 
-                {/* Action Buttons */}
+                {/* Action & Export Buttons */}
                 <div className="pt-1 space-y-2">
                   <button
                     onClick={exportToKML}
                     className="w-full py-2.5 px-3 bg-blue-700 hover:bg-blue-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
                   >
                     <MapIcon size={15} />
-                    Taşkın Sınırlarını KML Olarak İndir
+                    Taşkın Yayılım Haritasını KML İndir
+                  </button>
+
+                  <button
+                    onClick={exportToGeoJSON}
+                    className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                  >
+                    <Globe size={14} />
+                    Taşkın Sınırlarını GeoJSON İndir (CBS)
                   </button>
 
                   <button
