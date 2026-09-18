@@ -57,6 +57,9 @@ import {
   detectThalwegCenterline,
   coordsToKMLFile,
   ThalwegDetectionResult,
+  detectBankTopsFromDEM,
+  BankTopsDetectionResult,
+  bankCoordsToKMLFile,
   BankLineItem,
   BankLinesParseResult,
   CrossSection, 
@@ -175,6 +178,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     totalPoints: number;
   } | null>(null);
   const [showBankLinesLayer, setShowBankLinesLayer] = useState<boolean>(true);
+  const [isDetectingBankTops, setIsDetectingBankTops] = useState<boolean>(false);
+  const [bankTopsResult, setBankTopsResult] = useState<BankTopsDetectionResult | null>(null);
+  const [bankTopsCorridorWidth, setBankTopsCorridorWidth] = useState<number>(80);
 
   // Manning Library Modal State
   const [isManningModalOpen, setIsManningModalOpen] = useState<boolean>(false);
@@ -423,14 +429,88 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     if (bankLinesInfo) {
       setBankLinesInfo({
         ...bankLinesInfo,
-        leftName: bankLinesInfo.rightName || 'Sol Kıyı',
-        rightName: bankLinesInfo.leftName || 'Sağ Kıyı'
+        leftName: bankLinesInfo.rightName || 'Sol Şev Üstü',
+        rightName: bankLinesInfo.leftName || 'Sağ Şev Üstü'
       });
     }
     if (sections.length > 0) {
       const calibrated = calibrateSectionsWithBankLines(sections, tempR, tempL);
       setSections(calibrated);
     }
+  };
+
+  // Automatically detect river bank tops (şev üstleri / breaklines) from DEM and Centerline
+  const handleDetectBankTops = async (searchCorridor: number = bankTopsCorridorWidth) => {
+    if (!demFile) {
+      alert("Lütfen önce bir DEM (Topografya) GeoTIFF dosyası yükleyin.");
+      return;
+    }
+    if (!centerlineFile && centerlineCoords.length === 0) {
+      alert("Lütfen önce Dere Ekseni (KML) yükleyin.");
+      return;
+    }
+
+    setIsDetectingBankTops(true);
+    try {
+      const targetInput = centerlineFile || centerlineCoords;
+      const result = await detectBankTopsFromDEM(
+        demFile,
+        targetInput,
+        searchCorridor,
+        10, // 10m spacing along river
+        selectedCRS.def
+      );
+
+      setBankTopsResult(result);
+      setLeftBankCoords(result.leftBankCoords);
+      setRightBankCoords(result.rightBankCoords);
+      setBankCoords(result.leftBankCoords);
+
+      // Construct a KML file object for the detected bank lines
+      const kmlFile = bankCoordsToKMLFile(
+        result.leftBankCoords,
+        result.rightBankCoords,
+        'dem_tespit_sev_ustleri.kml'
+      );
+      setBanksFile(kmlFile);
+
+      setBankLinesInfo({
+        leftName: 'Sol Şev Üstü (DEM)',
+        rightName: 'Sağ Şev Üstü (DEM)',
+        totalLines: 2,
+        totalPoints: result.leftBankCoords.length + result.rightBankCoords.length
+      });
+
+      // Automatically calibrate existing cross sections with true bank lines!
+      if (sections.length > 0) {
+        const calibrated = calibrateSectionsWithBankLines(sections, result.leftBankCoords, result.rightBankCoords);
+        setSections(calibrated);
+        setOriginalSections(calibrated);
+      }
+    } catch (err: any) {
+      console.error("DEM Şev Üstü Tespiti Hatası:", err);
+      alert("DEM verisinden dere şev üstleri tespit edilirken hata oluştu: " + (err.message || err));
+    } finally {
+      setIsDetectingBankTops(false);
+    }
+  };
+
+  // Download detected bank tops as KML file
+  const handleDownloadBankTopsKML = () => {
+    if (leftBankCoords.length === 0 && rightBankCoords.length === 0) return;
+    const kmlFile = bankCoordsToKMLFile(
+      leftBankCoords,
+      rightBankCoords,
+      'dem_tespit_sev_ustleri.kml'
+    );
+    const url = URL.createObjectURL(kmlFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'dem_tespit_sev_ustleri.kml';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // Manual Trigger: Compute Downstream Slope from DEM Cross-Sections
@@ -2718,12 +2798,107 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   )}
                 </div>
 
-                {/* Bank Stations KML Input */}
-                <div>
-                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                    Kıyı Çizgileri / Bank Stations (KML):
-                  </label>
-                  {banksFile ? (
+                {/* Bank Stations & Automatic Bank Tops Detection */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-slate-700 block">
+                      Dere Şev Üstleri / Kıyı Hatları:
+                    </label>
+                    {demFile && (centerlineFile || centerlineCoords.length > 0) && (
+                      <span className="text-[9px] text-cyan-800 font-bold bg-cyan-100 px-1.5 py-0.2 rounded">
+                        DEM Otomatik Tespiti Destekleniyor
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 1. DEM ile Otomatik Tespit Sonucu Kartı */}
+                  {bankTopsResult ? (
+                    <div className="bg-emerald-50/80 border border-emerald-300/80 p-2.5 rounded-xl space-y-2 shadow-2xs">
+                      <div className="flex items-center justify-between gap-2 border-b border-emerald-200/60 pb-1.5">
+                        <div className="flex items-center gap-1.5 overflow-hidden">
+                          <div className="p-1 bg-emerald-600 text-white rounded-md shrink-0">
+                            <Sparkles size={11} />
+                          </div>
+                          <div className="overflow-hidden">
+                            <span className="font-bold text-slate-900 text-xs truncate block">
+                              DEM Otomatik Şev Üstü Tespiti
+                            </span>
+                            <span className="text-[9px] text-emerald-800 font-medium truncate block">
+                              {bankTopsResult.pointsSampled} kesitte şev kırığı analiz edildi
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={handleDownloadBankTopsKML}
+                            className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-md text-[9px] font-bold cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                            title="Tespit edilen şev üstü çizgilerini KML olarak indir"
+                          >
+                            <Download size={10} />
+                            <span>KML İndir</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* İstatistik Göstergeleri */}
+                      <div className="grid grid-cols-3 gap-1 text-center py-0.5">
+                        <div className="bg-white p-1 rounded-lg border border-emerald-200/70">
+                          <span className="text-slate-500 block text-[9px]">Ort. Yatak Genişliği</span>
+                          <span className="font-bold text-emerald-950 text-[11px]">
+                            {bankTopsResult.avgChannelWidth} m
+                          </span>
+                        </div>
+                        <div className="bg-white p-1 rounded-lg border border-emerald-200/70">
+                          <span className="text-slate-500 block text-[9px]">Min - Maks Genişlik</span>
+                          <span className="font-bold text-slate-800 text-[10px]">
+                            {bankTopsResult.minChannelWidth} - {bankTopsResult.maxChannelWidth} m
+                          </span>
+                        </div>
+                        <div className="bg-white p-1 rounded-lg border border-emerald-200/70">
+                          <span className="text-slate-500 block text-[9px]">Ort. Şev Yüksekliği</span>
+                          <span className="font-bold text-cyan-900 text-[11px]">
+                            +{bankTopsResult.avgBankHeight} m
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Sol ve Sağ Sahil Nokta Bilgisi */}
+                      <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-emerald-200">
+                          <span className="font-bold text-emerald-800">🌿 Sol Şev Üstü</span>
+                          <span className="font-bold text-emerald-700">{leftBankCoords.length} nokta</span>
+                        </div>
+                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-amber-200">
+                          <span className="font-bold text-amber-800">🌾 Sağ Şev Üstü</span>
+                          <span className="font-bold text-amber-700">{rightBankCoords.length} nokta</span>
+                        </div>
+                      </div>
+
+                      {/* Alt Aksiyon Butonları */}
+                      <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleSwapBankLines}
+                          className="text-[10px] text-slate-700 hover:text-slate-900 font-bold bg-white hover:bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 flex items-center gap-1 cursor-pointer transition-all shadow-2xs"
+                          title="Sol ve sağ kıyı atamalarını yer değiştir"
+                        >
+                          <ArrowUpDown size={10} />
+                          <span>Sol ⇄ Sağ Değiştir</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDetectBankTops(bankTopsCorridorWidth)}
+                          disabled={isDetectingBankTops}
+                          className="text-[10px] text-emerald-900 hover:text-emerald-950 font-bold bg-emerald-200/60 hover:bg-emerald-200 px-2 py-1 rounded-lg border border-emerald-300 flex items-center gap-1 cursor-pointer transition-all"
+                        >
+                          <RefreshCw size={10} className={isDetectingBankTops ? 'animate-spin' : ''} />
+                          <span>{isDetectingBankTops ? 'Taranıyor...' : 'Yeniden Tara'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : banksFile ? (
+                    /* 2. Manuel KML ile Yüklenmiş Kıyı Hatları */
                     <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <div className="space-y-0.5 overflow-hidden">
@@ -2770,18 +2945,64 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       )}
                     </div>
                   ) : (
-                    <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        <div className="p-1 bg-amber-100 text-amber-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
-                          <Activity size={14} />
+                    /* 3. Henüz Kıyı Çizgisi Yokken - Otomatik Tespit veya KML Yükleme Seçeneği */
+                    <div className="space-y-1.5">
+                      {demFile && (centerlineFile || centerlineCoords.length > 0) ? (
+                        <div className="bg-gradient-to-br from-emerald-50 to-cyan-50 border border-emerald-200/90 rounded-xl p-2.5 space-y-2 shadow-2xs">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                                <Sparkles size={13} className="text-emerald-600" />
+                                Otomatik Dere Şev Üstü Tespiti
+                              </span>
+                              <p className="text-[10px] text-slate-600 leading-tight">
+                                DEM eğrilik ve yatak profili analiziyle dere sol ve sağ şev üstü kırıklarını (bank tops) otomatik tespit eder.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2 pt-1 border-t border-emerald-200/50">
+                            <div className="flex items-center gap-1.5 text-[10px] text-slate-600">
+                              <span className="text-[9px]">Tarama:</span>
+                              <select
+                                value={bankTopsCorridorWidth}
+                                onChange={(e) => setBankTopsCorridorWidth(Number(e.target.value))}
+                                className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-800"
+                              >
+                                <option value={50}>±25m (Dar Yatak)</option>
+                                <option value={80}>±40m (Standart)</option>
+                                <option value={120}>±60m (Geniş Vadi)</option>
+                                <option value={200}>±100m (Geniş Taşkın)</option>
+                              </select>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDetectBankTops(bankTopsCorridorWidth)}
+                              disabled={isDetectingBankTops}
+                              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold text-[10px] cursor-pointer shadow-sm transition-all flex items-center gap-1.5 shrink-0"
+                            >
+                              <Wand2 size={12} className={isDetectingBankTops ? 'animate-spin' : ''} />
+                              <span>{isDetectingBankTops ? 'Şev Üstü Taranıyor...' : 'Şev Üstlerini Tespit Et'}</span>
+                            </button>
+                          </div>
                         </div>
-                        <span className="font-bold text-xs text-slate-800 truncate">Kıyı Çizgileri KML (Opsiyonel)</span>
-                      </div>
-                      <span className="px-2 py-0.5 bg-amber-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
-                        Gözat
-                      </span>
-                      <input type="file" accept=".kml" onChange={handleBanksUpload} className="hidden" />
-                    </label>
+                      ) : null}
+
+                      {/* Alternatif Manuel KML Yükleme Butonu */}
+                      <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <div className="p-1 bg-amber-100 text-amber-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
+                            <Activity size={14} />
+                          </div>
+                          <span className="font-bold text-xs text-slate-800 truncate">Kıyı Çizgileri KML Yükle (Opsiyonel)</span>
+                        </div>
+                        <span className="px-2 py-0.5 bg-amber-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
+                          Gözat
+                        </span>
+                        <input type="file" accept=".kml" onChange={handleBanksUpload} className="hidden" />
+                      </label>
+                    </div>
                   )}
                 </div>
               </section>
@@ -3590,10 +3811,24 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         >
                           <TileLayer url={currentBasemap.url} attribution={currentBasemap.attribution} maxZoom={24} />
                           {centerlineCoords.length > 0 && (
-                            <Polyline positions={centerlineCoords} color="#0284c7" weight={4} opacity={0.9} />
+                            <Polyline positions={centerlineCoords} color="#0284c7" weight={4} opacity={0.9}>
+                              <Tooltip sticky>Nehir Merkez Ekseni (Thalweg)</Tooltip>
+                            </Polyline>
                           )}
-                          {bankCoords.length > 0 && (
-                            <Polyline positions={bankCoords} color="#ef4444" weight={2} dashArray="4, 4" opacity={0.8} />
+                          {leftBankCoords.length > 0 && (
+                            <Polyline positions={leftBankCoords} color="#059669" weight={2.5} dashArray="5, 4" opacity={0.85}>
+                              <Tooltip sticky>🌿 Sol Şev Üstü / Kıyı Çizgisi</Tooltip>
+                            </Polyline>
+                          )}
+                          {rightBankCoords.length > 0 && (
+                            <Polyline positions={rightBankCoords} color="#d97706" weight={2.5} dashArray="5, 4" opacity={0.85}>
+                              <Tooltip sticky>🌾 Sağ Şev Üstü / Kıyı Çizgisi</Tooltip>
+                            </Polyline>
+                          )}
+                          {leftBankCoords.length === 0 && rightBankCoords.length === 0 && bankCoords.length > 0 && (
+                            <Polyline positions={bankCoords} color="#ef4444" weight={2} dashArray="4, 4" opacity={0.8}>
+                              <Tooltip sticky>Şev Üstü / Kıyı Çizgisi</Tooltip>
+                            </Polyline>
                           )}
                           {sections.map((sec, idx) => {
                             if (!sec.cutLine) return null;

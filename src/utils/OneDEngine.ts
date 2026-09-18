@@ -689,6 +689,297 @@ export function coordsToKMLFile(coords: [number, number][], fileName: string = '
   return new File([blob], fileName, { type: 'application/vnd.google-earth.kml+xml' });
 }
 
+export interface BankTopsDetectionResult {
+  leftBankCoords: [number, number][];   // [lat, lon]
+  rightBankCoords: [number, number][];  // [lat, lon]
+  avgChannelWidth: number;              // Average top width in meters
+  minChannelWidth: number;              // Minimum top width in meters
+  maxChannelWidth: number;              // Maximum top width in meters
+  avgBankHeight: number;                // Average bank height above bed in meters
+  pointsSampled: number;
+  method: string;
+}
+
+/**
+ * Automatically detects river bank tops / top of slopes (dere şev üstleri / breaklines)
+ * from DEM and river centerline using orthogonal lateral transect slope and curvature analysis.
+ */
+export async function detectBankTopsFromDEM(
+  demFile: File,
+  centerlineCoordsOrFile: [number, number][] | File,
+  searchCorridorWidth: number = 80, // Total lateral search corridor in meters (e.g. 80m = ±40m)
+  sampleInterval: number = 10,      // Sampling along river in meters
+  crsDef?: string
+): Promise<BankTopsDetectionResult> {
+  const dem = await loadDEM(demFile);
+  
+  let centerlineGeo: Feature<LineString>;
+  if (centerlineCoordsOrFile instanceof File) {
+    centerlineGeo = await parseKML(centerlineCoordsOrFile);
+  } else {
+    if (centerlineCoordsOrFile.length < 2) {
+      throw new Error("Geçerli bir dere ekseni bulunamadı.");
+    }
+    centerlineGeo = turf.lineString(centerlineCoordsOrFile.map(([lat, lon]) => [lon, lat]));
+  }
+
+  const totalLength = turf.length(centerlineGeo, { units: 'meters' });
+  if (totalLength < 5) {
+    throw new Error("Dere ekseni çok kısa.");
+  }
+
+  const halfCorridor = Math.max(10, searchCorridorWidth / 2);
+  const lateralStep = 1.0; // Probe DEM every 1m across transect for fine slope gradient
+
+  const rawLeftPoints: { coord: [number, number]; offset: number; height: number; distAlong: number }[] = [];
+  const rawRightPoints: { coord: [number, number]; offset: number; height: number; distAlong: number }[] = [];
+  const channelWidths: number[] = [];
+  const bankHeights: number[] = [];
+
+  const actualStep = Math.max(5, sampleInterval);
+
+  for (let d = 0; d <= totalLength; d += actualStep) {
+    const pt = turf.along(centerlineGeo, d, { units: 'meters' });
+    const ptNext = turf.along(centerlineGeo, Math.min(d + 1, totalLength), { units: 'meters' });
+    const bearing = turf.bearing(pt, ptNext);
+
+    const angleLeft = bearing - 90;
+    const angleRight = bearing + 90;
+
+    // Sample lateral profile from -halfCorridor (left) to +halfCorridor (right)
+    const samples: { offset: number; pt: any; z: number }[] = [];
+
+    for (let offset = -halfCorridor; offset <= halfCorridor; offset += lateralStep) {
+      let probePt;
+      if (offset < 0) {
+        probePt = turf.destination(pt, Math.abs(offset), angleLeft, { units: 'meters' });
+      } else if (offset > 0) {
+        probePt = turf.destination(pt, offset, angleRight, { units: 'meters' });
+      } else {
+        probePt = pt;
+      }
+
+      const [pLon, pLat] = probePt.geometry.coordinates;
+      const z = getElevation(dem, pLon, pLat, crsDef);
+      samples.push({ offset, pt: probePt, z });
+    }
+
+    // Fill NaN elevations
+    const validElevs = samples.filter(s => !isNaN(s.z)).map(s => s.z);
+    const avgValid = validElevs.length > 0 ? validElevs.reduce((a, b) => a + b, 0) / validElevs.length : 100;
+    for (let i = 0; i < samples.length; i++) {
+      if (isNaN(samples[i].z)) {
+        let leftZ: number | null = null;
+        for (let l = i - 1; l >= 0; l--) { if (!isNaN(samples[l].z)) { leftZ = samples[l].z; break; } }
+        let rightZ: number | null = null;
+        for (let r = i + 1; r < samples.length; r++) { if (!isNaN(samples[r].z)) { rightZ = samples[r].z; break; } }
+        if (leftZ !== null && rightZ !== null) samples[i].z = (leftZ + rightZ) / 2;
+        else if (leftZ !== null) samples[i].z = leftZ;
+        else if (rightZ !== null) samples[i].z = rightZ;
+        else samples[i].z = avgValid;
+      }
+    }
+
+    // Find local thalweg (minimum bed elevation)
+    let minIdx = 0;
+    let minZ = samples[0].z;
+    for (let i = 0; i < samples.length; i++) {
+      if (samples[i].z < minZ) {
+        minZ = samples[i].z;
+        minIdx = i;
+      }
+    }
+
+    // Determine Left Bank Top (Şev Üstü): scan leftwards from minIdx
+    let bestLeftIdx = Math.max(0, minIdx - Math.round(8 / lateralStep));
+    let maxLeftScore = -999999;
+
+    for (let i = minIdx - 1; i >= 1; i--) {
+      const cur = samples[i];
+      const nextCloserToBed = samples[i + 1];
+      const prevFurtherLeft = samples[i - 1];
+
+      const distFromBed = Math.abs(cur.offset - samples[minIdx].offset);
+      if (distFromBed < 2.5) continue; // Minimum channel half-width 2.5m
+
+      const heightAboveBed = cur.z - minZ;
+      const slopeHere = (cur.z - nextCloserToBed.z) / Math.max(0.1, lateralStep);
+      const slopeOuter = (prevFurtherLeft.z - cur.z) / Math.max(0.1, lateralStep);
+      const curvature = slopeHere - slopeOuter;
+
+      let score = curvature * 3.5;
+      if (slopeHere > 0.08 && slopeOuter <= 0.05) {
+        score += 8.0;
+      }
+      if (slopeHere > 0.05 && slopeOuter < 0) {
+        score += 10.0;
+      }
+      if (heightAboveBed > 0.4) {
+        score += Math.min(4.0, heightAboveBed * 1.5);
+      }
+
+      if (score > maxLeftScore) {
+        maxLeftScore = score;
+        bestLeftIdx = i;
+      }
+    }
+
+    // Determine Right Bank Top (Şev Üstü): scan rightwards from minIdx
+    let bestRightIdx = Math.min(samples.length - 1, minIdx + Math.round(8 / lateralStep));
+    let maxRightScore = -999999;
+
+    for (let i = minIdx + 1; i < samples.length - 1; i++) {
+      const cur = samples[i];
+      const prevCloserToBed = samples[i - 1];
+      const nextFurtherRight = samples[i + 1];
+
+      const distFromBed = Math.abs(cur.offset - samples[minIdx].offset);
+      if (distFromBed < 2.5) continue; // Minimum channel half-width 2.5m
+
+      const heightAboveBed = cur.z - minZ;
+      const slopeHere = (cur.z - prevCloserToBed.z) / Math.max(0.1, lateralStep);
+      const slopeOuter = (nextFurtherRight.z - cur.z) / Math.max(0.1, lateralStep);
+      const curvature = slopeHere - slopeOuter;
+
+      let score = curvature * 3.5;
+      if (slopeHere > 0.08 && slopeOuter <= 0.05) {
+        score += 8.0;
+      }
+      if (slopeHere > 0.05 && slopeOuter < 0) {
+        score += 10.0;
+      }
+      if (heightAboveBed > 0.4) {
+        score += Math.min(4.0, heightAboveBed * 1.5);
+      }
+
+      if (score > maxRightScore) {
+        maxRightScore = score;
+        bestRightIdx = i;
+      }
+    }
+
+    const leftSamp = samples[bestLeftIdx];
+    const rightSamp = samples[bestRightIdx];
+
+    const [lLon, lLat] = leftSamp.pt.geometry.coordinates;
+    const [rLon, rLat] = rightSamp.pt.geometry.coordinates;
+
+    const width = Math.abs(rightSamp.offset - leftSamp.offset);
+    const avgH = ((leftSamp.z - minZ) + (rightSamp.z - minZ)) / 2;
+
+    rawLeftPoints.push({
+      coord: [lLat, lLon],
+      offset: leftSamp.offset,
+      height: leftSamp.z - minZ,
+      distAlong: d
+    });
+
+    rawRightPoints.push({
+      coord: [rLat, rLon],
+      offset: rightSamp.offset,
+      height: rightSamp.z - minZ,
+      distAlong: d
+    });
+
+    channelWidths.push(width);
+    bankHeights.push(avgH);
+  }
+
+  // Hydrodynamic line smoothing on left and right coordinates
+  const smoothBankCoords = (rawList: { coord: [number, number] }[]): [number, number][] => {
+    const smoothed: [number, number][] = [];
+    const windowRadius = 2; // 5-point smoothing
+
+    for (let i = 0; i < rawList.length; i++) {
+      let sumLat = 0;
+      let sumLon = 0;
+      let count = 0;
+
+      for (let w = -windowRadius; w <= windowRadius; w++) {
+        const idx = i + w;
+        if (idx >= 0 && idx < rawList.length) {
+          const weight = windowRadius + 1 - Math.abs(w);
+          sumLat += rawList[idx].coord[0] * weight;
+          sumLon += rawList[idx].coord[1] * weight;
+          count += weight;
+        }
+      }
+      smoothed.push([sumLat / count, sumLon / count]);
+    }
+    return smoothed;
+  };
+
+  const smoothedLeft = smoothBankCoords(rawLeftPoints);
+  const smoothedRight = smoothBankCoords(rawRightPoints);
+
+  const avgWidth = channelWidths.length > 0 ? channelWidths.reduce((a, b) => a + b, 0) / channelWidths.length : 15;
+  const minWidth = channelWidths.length > 0 ? Math.min(...channelWidths) : 10;
+  const maxWidth = channelWidths.length > 0 ? Math.max(...channelWidths) : 25;
+  const avgHeight = bankHeights.length > 0 ? bankHeights.reduce((a, b) => a + b, 0) / bankHeights.length : 1.5;
+
+  return {
+    leftBankCoords: smoothedLeft,
+    rightBankCoords: smoothedRight,
+    avgChannelWidth: Number(avgWidth.toFixed(2)),
+    minChannelWidth: Number(minWidth.toFixed(2)),
+    maxChannelWidth: Number(maxWidth.toFixed(2)),
+    avgBankHeight: Number(avgHeight.toFixed(2)),
+    pointsSampled: rawLeftPoints.length,
+    method: `DEM şev eğimi ve bükeylik (curvature) analizi (±${halfCorridor}m koridor) ile otomatik tespit edildi.`
+  };
+}
+
+/**
+ * Converts Left & Right bank tops into a dual-line KML file.
+ */
+export function bankCoordsToKMLFile(
+  leftBankCoords: [number, number][],
+  rightBankCoords: [number, number][],
+  fileName: string = 'dem_tespit_sev_ustleri.kml'
+): File {
+  const leftCoordStr = leftBankCoords.map(([lat, lon]) => `${lon.toFixed(7)},${lat.toFixed(7)},0`).join(' ');
+  const rightCoordStr = rightBankCoords.map(([lat, lon]) => `${lon.toFixed(7)},${lat.toFixed(7)},0`).join(' ');
+
+  const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${fileName.replace('.kml', '')}</name>
+    <description>DEM Eğrilik ve Şev Kırığı Analiziyle Otomatik Tespit Edilen Dere Şev Üstleri (Bank Tops)</description>
+    <Style id="leftBankStyle">
+      <LineStyle>
+        <color>ff10b981</color>
+        <width>3.5</width>
+      </LineStyle>
+    </Style>
+    <Style id="rightBankStyle">
+      <LineStyle>
+        <color>fff59e0b</color>
+        <width>3.5</width>
+      </LineStyle>
+    </Style>
+    <Placemark>
+      <name>Sol Şev Üstü (Left Bank Top)</name>
+      <styleUrl>#leftBankStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>${leftCoordStr}</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Sağ Şev Üstü (Right Bank Top)</name>
+      <styleUrl>#rightBankStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>${rightCoordStr}</coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+
+  const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+  return new File([blob], fileName, { type: 'application/vnd.google-earth.kml+xml' });
+}
+
 export async function generateCrossSections(
   demFile: File,
   centerlineFile: File,
