@@ -24,9 +24,17 @@ import {
   FileSpreadsheet,
   Layers as LayersIcon,
   TrendingUp,
-  AlertCircle
+  AlertCircle,
+  Plus,
+  Trash2,
+  Edit3,
+  ShieldAlert,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp,
+  X
 } from 'lucide-react';
-import { MapContainer, TileLayer, Polyline } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, Tooltip } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as XLSX from 'xlsx';
 import { 
@@ -34,8 +42,12 @@ import {
   parseManualCrossSections,
   runRouting, 
   parseKMLCoordinates, 
+  parseKMLStructures,
   CrossSection, 
-  RoutingResult 
+  RoutingResult,
+  HydraulicStructure,
+  StructureHydraulicResult,
+  StructureType
 } from '../utils/OneDEngine';
 import { CRS_LIST, CRSItem } from '../utils/crsList';
 import { MapAutoCenter } from './MapHelpers';
@@ -105,6 +117,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [simResults, setSimResults] = useState<RoutingResult[]>([]);
 
+  // Hydraulic Structures (Bridges & Culverts)
+  const [structures, setStructures] = useState<HydraulicStructure[]>([]);
+  const [structureResults, setStructureResults] = useState<StructureHydraulicResult[]>([]);
+  const [structuresKmlFile, setStructuresKmlFile] = useState<File | null>(null);
+  const [isStructureModalOpen, setIsStructureModalOpen] = useState<boolean>(false);
+  const [editingStructure, setEditingStructure] = useState<HydraulicStructure | null>(null);
+  const [expandedStructureId, setExpandedStructureId] = useState<string | null>(null);
+
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
 
   // Compute map bounds from centerline or cross-sections
@@ -120,6 +140,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         }
       });
     }
+    structures.forEach(s => {
+      if (s.coordinates) {
+        allPoints.push(s.coordinates);
+      }
+    });
     if (allPoints.length === 0) return null;
 
     let minLat = Infinity, maxLat = -Infinity;
@@ -314,6 +339,125 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
   };
 
+  // Handle Point-type KML Upload for Hydraulic Structures (Köprü & Menfez)
+  const handleStructuresKmlUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setStructuresKmlFile(file);
+      try {
+        const parsed = await parseKMLStructures(file, sections, centerlineCoords);
+        if (parsed.length === 0) {
+          alert("KML dosyasında nokta (Point / Placemark) tipinde sanat yapısı bulunamadı.");
+          return;
+        }
+        setStructures(prev => {
+          // Merge or replace
+          return [...prev, ...parsed];
+        });
+      } catch (err: any) {
+        console.error("Sanat yapısı KML okunamadı:", err);
+        alert("KML dosyası okunamadı: " + err.message);
+      }
+    }
+  };
+
+  // Download Sample Structures Point KML
+  const downloadSampleStructuresKML = () => {
+    let refLat = 39.9200;
+    let refLon = 32.8500;
+    if (centerlineCoords.length > 0) {
+      const midIdx = Math.floor(centerlineCoords.length / 2);
+      refLat = centerlineCoords[midIdx][0];
+      refLon = centerlineCoords[midIdx][1];
+    } else if (sections.length > 0 && sections[0].centerCoord) {
+      refLat = sections[0].centerCoord[0];
+      refLon = sections[0].centerCoord[1];
+    }
+
+    const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Örnek Sanat Yapıları (Köprü ve Menfezler)</name>
+    <description>1B Dinamik Akış Analizi için Nokta (Point) Sanat Yapısı KML Dosyası</description>
+    <Placemark>
+      <name>K-1 Karayolu Köprüsü</name>
+      <description>Genişlik: 16m, Tabliye Kotu: +4m, Ayak Sayısı: 1</description>
+      <Point>
+        <coordinates>${(refLon + 0.0012).toFixed(6)},${(refLat + 0.0012).toFixed(6)},105.0</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>M-1 Kutu Menfez (3x2m)</name>
+      <description>Göz: 2x, Genişlik: 6m, Yükseklik: 2.5m</description>
+      <Point>
+        <coordinates>${(refLon - 0.0015).toFixed(6)},${(refLat - 0.0015).toFixed(6)},102.0</coordinates>
+      </Point>
+    </Placemark>
+  </Document>
+</kml>`;
+
+    const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "Ornek_Sanat_Yapilari_Nokta.kml");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Add Manual Structure
+  const handleAddStructure = (type: StructureType = 'bridge') => {
+    const defaultStation = sections.length > 0 
+      ? Math.round(sections[Math.floor(sections.length / 2)].station)
+      : (structures.length + 1) * 250;
+
+    const matchedSec = sections.find(s => Math.abs(s.station - defaultStation) < 60) || sections[0];
+    const bedZ = matchedSec ? matchedSec.minElevation : 100;
+    const defaultLowChord = type === 'bridge' ? bedZ + 3.0 : bedZ + 2.0;
+    const defaultRoadElev = defaultLowChord + (type === 'bridge' ? 1.2 : 0.8);
+
+    const newStruct: HydraulicStructure = {
+      id: `struct_${Date.now()}`,
+      name: type === 'bridge' ? `Köprü ${structures.length + 1}` : `Menfez ${structures.length + 1}`,
+      type,
+      station: defaultStation,
+      coordinates: matchedSec?.centerCoord,
+      invertElevation: Number(bedZ.toFixed(2)),
+      lowChordElevation: Number(defaultLowChord.toFixed(2)),
+      roadElevation: Number(defaultRoadElev.toFixed(2)),
+      openingWidth: type === 'bridge' ? 16.0 : 6.0,
+      openingHeight: type === 'bridge' ? 3.0 : 2.0,
+      barrelCount: 1,
+      pierCount: type === 'bridge' ? 1 : 0,
+      pierWidth: 0.8,
+      orificeCoefficient: 0.8,
+      weirCoefficient: 1.7,
+      isActive: true
+    };
+
+    setStructures([...structures, newStruct]);
+    setEditingStructure(newStruct);
+    setIsStructureModalOpen(true);
+  };
+
+  // Save Edited Structure
+  const handleSaveStructure = (updated: HydraulicStructure) => {
+    setStructures(structures.map(s => s.id === updated.id ? updated : s));
+    setEditingStructure(null);
+    setIsStructureModalOpen(false);
+  };
+
+  // Delete Structure
+  const handleDeleteStructure = (id: string) => {
+    setStructures(structures.filter(s => s.id !== id));
+  };
+
+  // Toggle Structure Active
+  const handleToggleStructure = (id: string) => {
+    setStructures(structures.map(s => s.id === id ? { ...s, isActive: !s.isActive } : s));
+  };
+
   // Run 1D Hydrodynamic Simulation
   const handleStartAnalysis = () => {
     if (sections.length === 0) {
@@ -333,15 +477,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     setIsSimulating(true);
     setTimeout(() => {
       try {
-        const results = runRouting(
+        const { results, structureResults: structRes } = runRouting(
           sections,
           peakFlow,
           manningMain,
           manningLOB,
           manningROB,
-          downstreamSlope
+          downstreamSlope,
+          structures
         );
         setSimResults(results);
+        setStructureResults(structRes);
         setIsSimulating(false);
         setIsResultPage(true);
         setMobileTab('preview');
@@ -356,10 +502,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   // Export Results to CSV
   const exportToCSV = () => {
     if (simResults.length === 0) return;
-    const headers = "Kesit_No,Istasyon_m,Taban_Kotu_m,Su_Kotu_m,Su_Derinligi_m,Akis_Hizi_ms,Islak_Alan_m2,Ust_Genislik_m,Froude_Sayisi,Kanal_Tasma_Durumu\n";
-    const rows = simResults.map((r, i) => 
-      `${i + 1},${r.station},${r.bedElevation.toFixed(2)},${r.waterElevation.toFixed(2)},${r.maxDepth.toFixed(2)},${r.velocity.toFixed(2)},${r.area.toFixed(2)},${r.topWidth.toFixed(2)},${r.froudeNumber.toFixed(2)},${r.isOverbank ? 'Taşkın Yatağında' : 'Ana Kanalda'}`
-    ).join("\n");
+    const headers = "Kesit_No,Istasyon_m,Taban_Kotu_m,Su_Kotu_m,Su_Derinligi_m,Akis_Hizi_ms,Islak_Alan_m2,Ust_Genislik_m,Froude_Sayisi,Kanal_Tasma_Durumu,Sanat_Yapisi_Etkisi,Kabarma_DeltaH_m\n";
+    const rows = simResults.map((r, i) => {
+      const structInfo = r.structureEffect 
+        ? `${r.structureEffect.structureName} (${r.structureEffect.flowState === 'overtopping' ? 'Yol Tasti' : r.structureEffect.flowState === 'pressure' ? 'Kiris Boguldu' : 'Serbest Akis'})` 
+        : '-';
+      const backwater = r.structureEffect ? r.structureEffect.backwaterRise.toFixed(2) : '0.00';
+      return `${i + 1},${r.station},${r.bedElevation.toFixed(2)},${r.waterElevation.toFixed(2)},${r.maxDepth.toFixed(2)},${r.velocity.toFixed(2)},${r.area.toFixed(2)},${r.topWidth.toFixed(2)},${r.froudeNumber.toFixed(2)},${r.isOverbank ? 'Taşkın Yatağında' : 'Ana Kanalda'},"${structInfo}",${backwater}`;
+    }).join("\n");
 
     const blob = new Blob(["\uFEFF" + headers + rows], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -608,6 +758,61 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               <polyline points={eglPoints} fill="none" stroke="#d97706" strokeWidth="1.5" strokeDasharray="5 3" />
                               <line x1={curX} y1="30" x2={curX} y2="260" stroke="#0ea5e9" strokeWidth="2" strokeDasharray="3 3" />
                               <circle cx={curX} cy={mapY(currentActiveResult?.waterElevation || 0)} r="4" fill="#0284c7" stroke="#fff" strokeWidth="2" />
+
+                              {/* Render Hydraulic Structures (Köprü & Menfez) */}
+                              {structures.filter(s => s.isActive).map(struct => {
+                                const sX = mapX(struct.station);
+                                const yRoad = mapY(struct.roadElevation);
+                                const yLow = mapY(struct.lowChordElevation);
+                                const yBed = mapY(struct.invertElevation);
+                                const deckHeight = Math.max(5, yLow - yRoad);
+                                const sRes = structureResults.find(sr => sr.structure.id === struct.id);
+                                const isOver = sRes?.isOvertopped || false;
+                                const isPress = sRes?.flowState === 'pressure';
+
+                                return (
+                                  <g key={struct.id} className="cursor-pointer">
+                                    {/* Piers / Yan Duvarlar */}
+                                    <line x1={sX - 5} y1={yLow} x2={sX - 5} y2={yBed} stroke="#475569" strokeWidth="2.5" />
+                                    <line x1={sX + 5} y1={yLow} x2={sX + 5} y2={yBed} stroke="#475569" strokeWidth="2.5" />
+                                    {/* Deck / Tabliye Gövdesi */}
+                                    <rect
+                                      x={sX - 16}
+                                      y={yRoad}
+                                      width={32}
+                                      height={deckHeight}
+                                      fill={isOver ? '#fca5a5' : isPress ? '#fcd34d' : '#94a3b8'}
+                                      stroke={isOver ? '#dc2626' : isPress ? '#d97706' : '#334155'}
+                                      strokeWidth="1.5"
+                                      rx="2"
+                                    />
+                                    {/* Yapı İsmi */}
+                                    <text
+                                      x={sX}
+                                      y={Math.max(22, yRoad - 6)}
+                                      fontSize="9"
+                                      fontWeight="bold"
+                                      textAnchor="middle"
+                                      fill={isOver ? '#b91c1c' : '#1e293b'}
+                                    >
+                                      {struct.name}
+                                    </text>
+                                    {/* Taşkın / Uyarı İbaresi */}
+                                    {isOver && (
+                                      <text
+                                        x={sX}
+                                        y={Math.max(12, yRoad - 16)}
+                                        fontSize="8"
+                                        fontWeight="extrabold"
+                                        textAnchor="middle"
+                                        fill="#dc2626"
+                                      >
+                                        ⚠️ YOL TAŞTI
+                                      </text>
+                                    )}
+                                  </g>
+                                );
+                              })}
                             </>
                           );
                         })()}
@@ -632,85 +837,163 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 )}
 
                 {/* Result Tab 2: Cross Section Inspector */}
-                {resultTab === 'section' && currentActiveSection && currentActiveResult && (
-                  <div className="flex-1 flex flex-col min-h-0 pt-2 relative overflow-hidden">
-                    <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1 mb-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-cyan-800">Kesit: Km {(currentActiveSection.station / 1000).toFixed(3)}</span>
-                        {currentActiveResult.isOverbank ? (
-                          <span className="text-[10px] bg-red-100 text-red-800 px-2 py-0.5 rounded-full border border-red-300">
-                            Taşkın Yatağına Taştı
-                          </span>
-                        ) : (
-                          <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
-                            Ana Kanalda Sınırlandı
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 text-[11px] text-slate-600">
-                        <span>Su Kotu: <strong>{currentActiveResult.waterElevation.toFixed(2)} m</strong></span>
-                        <span>Derinlik: <strong>{currentActiveResult.maxDepth.toFixed(2)} m</strong></span>
-                        <span>Hız: <strong>{currentActiveResult.velocity.toFixed(2)} m/s</strong></span>
-                      </div>
-                    </div>
+                {resultTab === 'section' && currentActiveSection && currentActiveResult && (() => {
+                  const matchedStruct = structures.find(s => s.isActive && Math.abs(s.station - currentActiveSection.station) < 50);
+                  const matchedStructRes = matchedStruct ? structureResults.find(sr => sr.structure.id === matchedStruct.id) : null;
+                  const freeboard = matchedStruct ? matchedStruct.lowChordElevation - currentActiveResult.waterElevation : 0;
 
-                    <div className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 relative overflow-hidden flex items-center justify-center">
-                      <svg width="100%" height="100%" viewBox="0 0 700 280" preserveAspectRatio="none" className="w-full h-full">
-                        {(() => {
-                          const sec = currentActiveSection;
-                          const wl = currentActiveResult.waterElevation;
-                          const minX = Math.min(...sec.profile.map(p => p.x));
-                          const maxX = Math.max(...sec.profile.map(p => p.x));
-                          const minZ = sec.minElevation;
-                          const maxZ = Math.max(sec.maxElevation, wl + 1);
-
-                          const mapX = (x: number) => 30 + ((x - minX) / (maxX - minX || 1)) * 640;
-                          const mapZ = (z: number) => 250 - ((z - minZ) / (maxZ - minZ || 1)) * 200;
-
-                          const groundPath = `M 30 250 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 670 250 Z`;
-
-                          const wetProfile = sec.profile.filter(p => p.z <= wl);
-                          let waterSvg = null;
-                          if (wetProfile.length > 1) {
-                            const firstWetX = mapX(wetProfile[0].x);
-                            const lastWetX = mapX(wetProfile[wetProfile.length - 1].x);
-                            const waterTopY = mapZ(wl);
-
-                            const waterPath = `M ${firstWetX} ${waterTopY} ` +
-                              wetProfile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') +
-                              ` L ${lastWetX} ${waterTopY} Z`;
-
-                            waterSvg = (
+                  return (
+                    <div className="flex-1 flex flex-col min-h-0 pt-2 relative overflow-hidden">
+                      {/* Structure Alert Banner if section has a bridge or culvert */}
+                      {matchedStruct && (
+                        <div className={`px-3 py-1.5 rounded-xl mb-1 text-xs flex items-center justify-between border ${
+                          freeboard < 0
+                            ? 'bg-red-50 text-red-900 border-red-300'
+                            : freeboard < 0.5
+                            ? 'bg-amber-50 text-amber-900 border-amber-300'
+                            : 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                        }`}>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold">
+                              {matchedStruct.type === 'bridge' ? '🌉 Köprü Geçişi' : '🔲 Menfez Geçişi'}: {matchedStruct.name}
+                            </span>
+                            <span className="text-[10px] bg-white/80 px-2 py-0.5 rounded-md font-mono border">
+                              Kiriş Altı: {matchedStruct.lowChordElevation.toFixed(2)}m | Tabliye: {matchedStruct.roadElevation.toFixed(2)}m
+                            </span>
+                          </div>
+                          <div className="font-bold text-[11px] flex items-center gap-1.5">
+                            {freeboard < 0 ? (
                               <>
-                                <path d={waterPath} fill="#0284c7" fillOpacity="0.4" />
-                                <line x1={firstWetX} y1={waterTopY} x2={lastWetX} y2={waterTopY} stroke="#0284c7" strokeWidth="2.5" />
+                                <ShieldAlert size={14} className="text-red-700" />
+                                <span>Kiriş Boğuldu / Hava Payı: {freeboard.toFixed(2)} m</span>
+                              </>
+                            ) : (
+                              <>
+                                <ShieldCheck size={14} className="text-emerald-700" />
+                                <span>Kiriş Altı Emniyetli (Hava Payı: +{freeboard.toFixed(2)} m)</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1 mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-cyan-800">Kesit: Km {(currentActiveSection.station / 1000).toFixed(3)}</span>
+                          {currentActiveResult.isOverbank ? (
+                            <span className="text-[10px] bg-red-100 text-red-800 px-2 py-0.5 rounded-full border border-red-300">
+                              Taşkın Yatağına Taştı
+                            </span>
+                          ) : (
+                            <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
+                              Ana Kanalda Sınırlandı
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px] text-slate-600">
+                          <span>Su Kotu: <strong>{currentActiveResult.waterElevation.toFixed(2)} m</strong></span>
+                          <span>Derinlik: <strong>{currentActiveResult.maxDepth.toFixed(2)} m</strong></span>
+                          <span>Hız: <strong>{currentActiveResult.velocity.toFixed(2)} m/s</strong></span>
+                        </div>
+                      </div>
+
+                      <div className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 relative overflow-hidden flex items-center justify-center">
+                        <svg width="100%" height="100%" viewBox="0 0 700 280" preserveAspectRatio="none" className="w-full h-full">
+                          {(() => {
+                            const sec = currentActiveSection;
+                            const wl = currentActiveResult.waterElevation;
+                            const minX = Math.min(...sec.profile.map(p => p.x));
+                            const maxX = Math.max(...sec.profile.map(p => p.x));
+                            const minZ = sec.minElevation;
+                            const maxZ = Math.max(sec.maxElevation, wl + 1, matchedStruct ? matchedStruct.roadElevation + 0.5 : 0);
+
+                            const mapX = (x: number) => 30 + ((x - minX) / (maxX - minX || 1)) * 640;
+                            const mapZ = (z: number) => 250 - ((z - minZ) / (maxZ - minZ || 1)) * 200;
+
+                            const groundPath = `M 30 250 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 670 250 Z`;
+
+                            const wetProfile = sec.profile.filter(p => p.z <= wl);
+                            let waterSvg = null;
+                            if (wetProfile.length > 1) {
+                              const firstWetX = mapX(wetProfile[0].x);
+                              const lastWetX = mapX(wetProfile[wetProfile.length - 1].x);
+                              const waterTopY = mapZ(wl);
+
+                              const waterPath = `M ${firstWetX} ${waterTopY} ` +
+                                wetProfile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') +
+                                ` L ${lastWetX} ${waterTopY} Z`;
+
+                              waterSvg = (
+                                <>
+                                  <path d={waterPath} fill="#0284c7" fillOpacity="0.4" />
+                                  <line x1={firstWetX} y1={waterTopY} x2={lastWetX} y2={waterTopY} stroke="#0284c7" strokeWidth="2.5" />
+                                </>
+                              );
+                            }
+
+                            return (
+                              <>
+                                <path d={groundPath} fill="#f1f5f9" stroke="#334155" strokeWidth="2" strokeLinejoin="round" />
+                                {waterSvg}
+                                <line x1={mapX(sec.bankLeftX)} y1="40" x2={mapX(sec.bankLeftX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
+                                <line x1={mapX(sec.bankRightX)} y1="40" x2={mapX(sec.bankRightX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
+
+                                <text x={mapX(sec.bankLeftX) - 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sol Taşkın Yt.</text>
+                                <text x={mapX((sec.bankLeftX + sec.bankRightX) / 2)} y="35" fontSize="10" textAnchor="middle" fill="#0284c7" fontWeight="bold">Ana Kanal</text>
+                                <text x={mapX(sec.bankRightX) + 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sağ Taşkın Yt.</text>
+
+                                {/* Render Bridge / Culvert Superstructure if present */}
+                                {matchedStruct && (() => {
+                                  const midBankX = (sec.bankLeftX + sec.bankRightX) / 2;
+                                  const halfOpening = matchedStruct.openingWidth / 2;
+                                  const sLeftX = mapX(midBankX - halfOpening);
+                                  const sRightX = mapX(midBankX + halfOpening);
+                                  const sRoadY = mapZ(matchedStruct.roadElevation);
+                                  const sLowY = mapZ(matchedStruct.lowChordElevation);
+                                  const sBedY = mapZ(matchedStruct.invertElevation);
+
+                                  return (
+                                    <g>
+                                      {/* Bridge deck or culvert top slab */}
+                                      <rect
+                                        x={sLeftX - 10}
+                                        y={sRoadY}
+                                        width={Math.max(20, sRightX - sLeftX + 20)}
+                                        height={Math.max(6, sLowY - sRoadY)}
+                                        fill="#475569"
+                                        fillOpacity="0.85"
+                                        stroke="#1e293b"
+                                        strokeWidth="2"
+                                        rx="2"
+                                      />
+                                      {/* Low chord line */}
+                                      <line x1={sLeftX} y1={sLowY} x2={sRightX} y2={sLowY} stroke="#f59e0b" strokeWidth="2" strokeDasharray="4 2" />
+                                      {/* Abutments */}
+                                      <line x1={sLeftX} y1={sLowY} x2={sLeftX} y2={sBedY} stroke="#334155" strokeWidth="4" />
+                                      <line x1={sRightX} y1={sLowY} x2={sRightX} y2={sBedY} stroke="#334155" strokeWidth="4" />
+                                      {matchedStruct.pierCount > 0 && (
+                                        <line x1={mapX(midBankX)} y1={sLowY} x2={mapX(midBankX)} y2={sBedY} stroke="#334155" strokeWidth="3" />
+                                      )}
+                                      <text x={mapX(midBankX)} y={Math.max(25, sRoadY - 6)} fontSize="10" fontWeight="bold" textAnchor="middle" fill="#0f172a">
+                                        {matchedStruct.name} (Tabliye: {matchedStruct.roadElevation.toFixed(2)}m)
+                                      </text>
+                                    </g>
+                                  );
+                                })()}
                               </>
                             );
-                          }
+                          })()}
+                        </svg>
+                      </div>
 
-                          return (
-                            <>
-                              <path d={groundPath} fill="#f1f5f9" stroke="#334155" strokeWidth="2" strokeLinejoin="round" />
-                              {waterSvg}
-                              <line x1={mapX(sec.bankLeftX)} y1="40" x2={mapX(sec.bankLeftX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
-                              <line x1={mapX(sec.bankRightX)} y1="40" x2={mapX(sec.bankRightX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
-
-                              <text x={mapX(sec.bankLeftX) - 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sol Taşkın Yt.</text>
-                              <text x={mapX((sec.bankLeftX + sec.bankRightX) / 2)} y="35" fontSize="10" textAnchor="middle" fill="#0284c7" fontWeight="bold">Ana Kanal</text>
-                              <text x={mapX(sec.bankRightX) + 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sağ Taşkın Yt.</text>
-                            </>
-                          );
-                        })()}
-                      </svg>
+                      <div className="pt-2 px-1 flex items-center justify-between text-[11px] text-slate-600">
+                        <span>Sol Bank: <strong>{currentActiveSection.bankLeftX.toFixed(0)}m</strong></span>
+                        <span>Taban Kotu: <strong>{currentActiveSection.minElevation.toFixed(2)}m</strong></span>
+                        <span>Sağ Bank: <strong>{currentActiveSection.bankRightX.toFixed(0)}m</strong></span>
+                      </div>
                     </div>
-
-                    <div className="pt-2 px-1 flex items-center justify-between text-[11px] text-slate-600">
-                      <span>Sol Bank: <strong>{currentActiveSection.bankLeftX.toFixed(0)}m</strong></span>
-                      <span>Taban Kotu: <strong>{currentActiveSection.minElevation.toFixed(2)}m</strong></span>
-                      <span>Sağ Bank: <strong>{currentActiveSection.bankRightX.toFixed(0)}m</strong></span>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Result Tab 3: Interactive Flooded Map */}
                 {resultTab === 'map' && (
@@ -745,6 +1028,60 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           />
                         );
                       })}
+
+                      {/* Render Hydraulic Structure Markers on Map */}
+                      {structures.filter(s => s.isActive).map((struct) => {
+                        const coord = struct.coordinates || sections.find(sec => Math.abs(sec.station - struct.station) < 60)?.centerCoord;
+                        if (!coord) return null;
+                        const sRes = structureResults.find(sr => sr.structure.id === struct.id);
+                        const markerColor = sRes?.isOvertopped ? '#ef4444' : sRes?.flowState === 'pressure' ? '#f59e0b' : '#0284c7';
+
+                        return (
+                          <CircleMarker
+                            key={struct.id}
+                            center={coord}
+                            radius={8}
+                            pathOptions={{
+                              color: '#ffffff',
+                              fillColor: markerColor,
+                              fillOpacity: 0.95,
+                              weight: 2.5
+                            }}
+                          >
+                            <Tooltip direction="top" offset={[0, -8]} opacity={0.95}>
+                              <div className="text-xs font-bold">
+                                {struct.type === 'bridge' ? '🌉' : '🔲'} {struct.name} (Km {(struct.station / 1000).toFixed(3)})
+                              </div>
+                            </Tooltip>
+                            <Popup>
+                              <div className="text-xs space-y-1.5 min-w-[200px]">
+                                <div className="font-bold text-slate-900 border-b pb-1 flex items-center justify-between">
+                                  <span>{struct.type === 'bridge' ? '🌉 Köprü' : '🔲 Menfez'}: {struct.name}</span>
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                                    sRes?.isOvertopped ? 'bg-red-100 text-red-800' : sRes?.flowState === 'pressure' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                                  }`}>
+                                    {sRes?.isOvertopped ? 'Yol Taştı' : sRes?.flowState === 'pressure' ? 'Basınçlı' : 'Serbest'}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-600 space-y-0.5">
+                                  <div>Konum: <strong>Km {(struct.station / 1000).toFixed(3)}</strong> ({struct.station} m)</div>
+                                  <div>Tabliye Üst Kotu: <strong>{struct.roadElevation.toFixed(2)} m</strong></div>
+                                  <div>Kiriş Altı Kotu: <strong>{struct.lowChordElevation.toFixed(2)} m</strong></div>
+                                  <div>Net Açıklık: <strong>{struct.openingWidth} m</strong></div>
+                                  {sRes && (
+                                    <div className="pt-1 mt-1 border-t border-slate-200">
+                                      <div>Menba Su Kotu: <strong>{sRes.upstreamWSE.toFixed(2)} m</strong></div>
+                                      <div>Kabarma Artışı ($\Delta h$): <strong className="text-red-700 font-bold">+{sRes.backwaterRise.toFixed(2)} m</strong></div>
+                                      <div>Kiriş Hava Payı: <strong className={sRes.freeboard < 0 ? 'text-red-600' : 'text-emerald-700'}>{sRes.freeboard.toFixed(2)} m</strong></div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </Popup>
+                          </CircleMarker>
+                        );
+                      })}
+
                       {mapBounds && <MapAutoCenter bounds={mapBounds} />}
                     </MapContainer>
 
@@ -822,6 +1159,47 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         <span className="text-slate-500 block text-[9px]">Su Yüzeyi Genişliği:</span>
                         <span className="font-bold text-slate-800">{currentActiveResult.topWidth.toFixed(1)} m</span>
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hydraulic Structures Evaluation Card */}
+                {structureResults.length > 0 && (
+                  <div className="bg-amber-50/80 border border-amber-200 p-3 rounded-xl space-y-2 text-xs">
+                    <p className="font-bold text-amber-900 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <LayersIcon size={14} className="text-amber-700" />
+                        Sanat Yapıları Değerlendirmesi
+                      </span>
+                      <span className="text-[10px] bg-amber-200/80 text-amber-900 px-2 py-0.5 rounded-full font-bold">
+                        {structureResults.length} Yapı
+                      </span>
+                    </p>
+                    <div className="space-y-1.5 max-h-60 overflow-y-auto custom-scrollbar pr-1">
+                      {structureResults.map((sr) => (
+                        <div key={sr.structure.id} className="bg-white p-2.5 rounded-lg border border-amber-200 space-y-1 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900 text-[11px]">
+                              {sr.structure.type === 'bridge' ? '🌉' : '🔲'} {sr.structure.name}
+                            </span>
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                              sr.isOvertopped 
+                                ? 'bg-red-100 text-red-800 border border-red-300' 
+                                : sr.flowState === 'pressure'
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            }`}>
+                              {sr.isOvertopped ? 'Yol Üstü Taştı' : sr.flowState === 'pressure' ? 'Kiriş Boğuldu' : 'Serbest Emniyetli'}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-600 pt-0.5">
+                            <div>Konum: <strong>Km {(sr.station / 1000).toFixed(3)}</strong></div>
+                            <div>Kabarma ($\Delta h$): <strong className="text-red-700 font-bold">+{sr.backwaterRise.toFixed(2)} m</strong></div>
+                            <div>Menba Su Kotu: <strong>{sr.upstreamWSE.toFixed(2)} m</strong></div>
+                            <div>Hava Payı: <strong className={sr.freeboard < 0 ? 'text-red-600 font-bold' : 'text-emerald-700'}>{sr.freeboard.toFixed(2)} m</strong></div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -1464,7 +1842,128 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </div>
               </section>
 
-              {/* 5. START SIMULATION BUTTON */}
+              {/* 5. SANAT YAPILARI (KÖPRÜ VE MENFEZ GEÇİŞLERİ) */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-3 shrink-0">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-cyan-100 text-cyan-800 rounded-xl">
+                      <LayersIcon size={14} />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-900">5. Sanat Yapıları (Köprü & Menfez)</h3>
+                      <p className="text-[10px] text-slate-500">Kiriş altı kotu, açıklık ve kabarma (backwater) analizi</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full border border-slate-200">
+                    {structures.length} Yapı
+                  </span>
+                </div>
+
+                {/* Upload KML and Actions Bar */}
+                <div className="grid grid-cols-2 gap-1.5">
+                  <label className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 border border-dashed border-cyan-400 bg-cyan-50/60 hover:bg-cyan-100/60 text-cyan-900 rounded-xl font-bold text-[11px] transition-all cursor-pointer shadow-2xs">
+                    <Upload size={13} className="text-cyan-700 shrink-0" />
+                    <span>Nokta KML Yükle</span>
+                    <input type="file" accept=".kml" onChange={handleStructuresKmlUpload} className="hidden" />
+                  </label>
+
+                  <button
+                    onClick={downloadSampleStructuresKML}
+                    className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-[11px] transition-all cursor-pointer shadow-2xs"
+                  >
+                    <Download size={13} className="text-slate-600 shrink-0" />
+                    <span>Örnek KML İndir</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-0.5">
+                  <span className="text-[10px] font-bold text-slate-600">Tanımlı Yapı Listesi:</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => handleAddStructure('bridge')}
+                      className="px-2 py-0.5 bg-cyan-700 hover:bg-cyan-800 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                    >
+                      <Plus size={11} />
+                      <span>Köprü</span>
+                    </button>
+                    <button
+                      onClick={() => handleAddStructure('box_culvert')}
+                      className="px-2 py-0.5 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                    >
+                      <Plus size={11} />
+                      <span>Menfez</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Structure List */}
+                {structures.length === 0 ? (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-dashed border-slate-300 text-center space-y-1">
+                    <p className="text-[11px] font-bold text-slate-700">Henüz sanat yapısı eklenmedi</p>
+                    <p className="text-[10px] text-slate-500">
+                      Nokta (Point) KML yükleyerek veya butonlarla manuel köprü/menfez ekleyebilirsiniz.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                    {structures.map((s) => (
+                      <div
+                        key={s.id}
+                        className={`p-2 rounded-xl border transition-all text-xs flex flex-col gap-1 ${
+                          s.isActive
+                            ? 'bg-slate-50 border-slate-300'
+                            : 'bg-slate-100/60 border-slate-200 opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="checkbox"
+                              checked={s.isActive}
+                              onChange={() => handleToggleStructure(s.id)}
+                              className="w-3.5 h-3.5 rounded text-cyan-600 focus:ring-0 cursor-pointer"
+                            />
+                            <span className="font-bold text-slate-900 text-[11px]">
+                              {s.type === 'bridge' ? '🌉' : '🔲'} {s.name}
+                            </span>
+                            <span className="text-[9px] bg-slate-200 text-slate-700 font-mono px-1.5 py-0.2 rounded">
+                              Km {(s.station / 1000).toFixed(3)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingStructure({ ...s });
+                                setIsStructureModalOpen(true);
+                              }}
+                              className="p-1 text-slate-500 hover:text-cyan-700 hover:bg-white rounded transition-colors cursor-pointer"
+                              title="Düzenle"
+                            >
+                              <Edit3 size={13} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteStructure(s.id)}
+                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-white rounded transition-colors cursor-pointer"
+                              title="Sil"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1 text-[10px] text-slate-600 bg-white/70 p-1.5 rounded-lg border border-slate-200/80">
+                          <div>Tabliye: <strong className="text-slate-800">{s.roadElevation.toFixed(2)}m</strong></div>
+                          <div>Kiriş Altı: <strong className="text-slate-800">{s.lowChordElevation.toFixed(2)}m</strong></div>
+                          <div>Açıklık: <strong className="text-slate-800">{s.openingWidth}m</strong></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {/* 6. START SIMULATION BUTTON */}
               <div className="pt-1 mt-auto shrink-0">
                 <button
                   onClick={handleStartAnalysis}
@@ -1662,6 +2161,46 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               />
                             );
                           })}
+
+                          {/* Render Hydraulic Structure Markers on Preview Map */}
+                          {structures.filter(s => s.isActive).map((struct) => {
+                            const coord = struct.coordinates || sections.find(sec => Math.abs(sec.station - struct.station) < 60)?.centerCoord;
+                            if (!coord) return null;
+
+                            return (
+                              <CircleMarker
+                                key={struct.id}
+                                center={coord}
+                                radius={7}
+                                pathOptions={{
+                                  color: '#ffffff',
+                                  fillColor: struct.type === 'bridge' ? '#0284c7' : '#d97706',
+                                  fillOpacity: 0.9,
+                                  weight: 2
+                                }}
+                              >
+                                <Tooltip direction="top" offset={[0, -7]} opacity={0.95}>
+                                  <div className="text-xs font-bold">
+                                    {struct.type === 'bridge' ? '🌉' : '🔲'} {struct.name} (Km {(struct.station / 1000).toFixed(3)})
+                                  </div>
+                                </Tooltip>
+                                <Popup>
+                                  <div className="text-xs space-y-1 min-w-[180px]">
+                                    <div className="font-bold text-slate-900 border-b pb-1">
+                                      {struct.type === 'bridge' ? '🌉 Köprü' : '🔲 Menfez'}: {struct.name}
+                                    </div>
+                                    <div className="text-[11px] text-slate-600">
+                                      <div>Konum: <strong>Km {(struct.station / 1000).toFixed(3)}</strong></div>
+                                      <div>Tabliye: <strong>{struct.roadElevation.toFixed(2)} m</strong></div>
+                                      <div>Kiriş Altı: <strong>{struct.lowChordElevation.toFixed(2)} m</strong></div>
+                                      <div>Açıklık: <strong>{struct.openingWidth} m</strong></div>
+                                    </div>
+                                  </div>
+                                </Popup>
+                              </CircleMarker>
+                            );
+                          })}
+
                           {mapBounds && <MapAutoCenter bounds={mapBounds} />}
                         </MapContainer>
 
@@ -1701,7 +2240,18 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     currentActiveSection ? (
                       <div className="w-full h-full bg-slate-50 p-4 flex flex-col justify-between">
                         <div className="flex items-center justify-between text-xs font-bold text-slate-800 pb-2 border-b border-slate-200">
-                          <span>Doğal Zemin Enkesiti: Km {(currentActiveSection.station / 1000).toFixed(3)}</span>
+                          <div className="flex items-center gap-2">
+                            <span>Doğal Zemin Enkesiti: Km {(currentActiveSection.station / 1000).toFixed(3)}</span>
+                            {(() => {
+                              const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - currentActiveSection.station) < 50);
+                              if (!matchingStruct) return null;
+                              return (
+                                <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                                  {matchingStruct.type === 'bridge' ? '🌉 Köprü:' : '🔲 Menfez:'} {matchingStruct.name}
+                                </span>
+                              );
+                            })()}
+                          </div>
                           <span className="text-slate-500">
                             Kot Aralığı: {currentActiveSection.minElevation.toFixed(2)}m - {currentActiveSection.maxElevation.toFixed(2)}m
                           </span>
@@ -1711,10 +2261,13 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           <svg width="100%" height="100%" viewBox="0 0 700 240" preserveAspectRatio="none" className="w-full h-full">
                             {(() => {
                               const sec = currentActiveSection;
+                              const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - sec.station) < 50);
+
                               const minX = Math.min(...sec.profile.map(p => p.x));
                               const maxX = Math.max(...sec.profile.map(p => p.x));
+                              const structTopZ = matchingStruct ? Math.max(matchingStruct.roadElevation, sec.maxElevation) : sec.maxElevation;
                               const minZ = sec.minElevation;
-                              const maxZ = sec.maxElevation + 2;
+                              const maxZ = structTopZ + 2;
 
                               const mapX = (x: number) => 30 + ((x - minX) / (maxX - minX || 1)) * 640;
                               const mapZ = (z: number) => 220 - ((z - minZ) / (maxZ - minZ || 1)) * 180;
@@ -1726,6 +2279,35 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   <path d={groundPath} fill="#f1f5f9" stroke="#334155" strokeWidth="2.5" />
                                   <line x1={mapX(sec.bankLeftX)} y1="20" x2={mapX(sec.bankLeftX)} y2="220" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
                                   <line x1={mapX(sec.bankRightX)} y1="20" x2={mapX(sec.bankRightX)} y2="220" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
+
+                                  {/* Structure Superstructure Overlay if at section */}
+                                  {matchingStruct && (
+                                    <g>
+                                      {/* Bridge Deck or Culvert Top */}
+                                      <rect
+                                        x={mapX(sec.bankLeftX)}
+                                        y={Math.min(mapZ(matchingStruct.roadElevation), mapZ(matchingStruct.lowChordElevation))}
+                                        width={Math.max(10, mapX(sec.bankRightX) - mapX(sec.bankLeftX))}
+                                        height={Math.max(8, Math.abs(mapZ(matchingStruct.roadElevation) - mapZ(matchingStruct.lowChordElevation)))}
+                                        fill="#475569"
+                                        stroke="#1e293b"
+                                        strokeWidth="1.5"
+                                        rx="2"
+                                        opacity="0.9"
+                                      />
+                                      {/* Deck Label */}
+                                      <text
+                                        x={(mapX(sec.bankLeftX) + mapX(sec.bankRightX)) / 2}
+                                        y={mapZ(matchingStruct.roadElevation) - 5}
+                                        fontSize="10"
+                                        fill="#0f172a"
+                                        fontWeight="bold"
+                                        textAnchor="middle"
+                                      >
+                                        Tabliye: {matchingStruct.roadElevation.toFixed(2)}m | Kiriş Altı: {matchingStruct.lowChordElevation.toFixed(2)}m
+                                      </text>
+                                    </g>
+                                  )}
 
                                   <text x={mapX(sec.bankLeftX) - 25} y="18" fontSize="10" fill="#64748b" fontWeight="bold">Sol Kıyı</text>
                                   <text x={mapX((sec.bankLeftX + sec.bankRightX) / 2)} y="18" fontSize="10" textAnchor="middle" fill="#0284c7" fontWeight="bold">Ana Yatak</text>
@@ -1802,6 +2384,172 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Structure Edit Modal */}
+      {isStructureModalOpen && editingStructure && (
+        <div className="fixed inset-0 z-[1000] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-300 shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-cyan-100 text-cyan-800 rounded-lg">
+                  <LayersIcon size={16} />
+                </div>
+                <h4 className="text-sm font-bold text-slate-900">
+                  Sanat Yapısı Parametreleri ({editingStructure.type === 'bridge' ? 'Köprü' : 'Menfez'})
+                </h4>
+              </div>
+              <button
+                onClick={() => {
+                  setIsStructureModalOpen(false);
+                  setEditingStructure(null);
+                }}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3.5 overflow-y-auto custom-scrollbar flex-1 text-xs">
+              {/* Form fields: Name, Type */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">Yapı Adı / Kodu:</label>
+                  <input
+                    type="text"
+                    value={editingStructure.name}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, name: e.target.value })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 font-bold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">Yapı Tipi:</label>
+                  <select
+                    value={editingStructure.type}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, type: e.target.value as StructureType })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 font-bold text-slate-800 cursor-pointer"
+                  >
+                    <option value="bridge">Köprü (Açık Tabliyeli)</option>
+                    <option value="box_culvert">Kutu Menfez (Box Culvert)</option>
+                    <option value="pipe_culvert">Boru Menfez (Pipe)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Station, Invert, Low Chord */}
+              <div className="grid grid-cols-3 gap-2.5">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">İstasyon (m):</label>
+                  <input
+                    type="number"
+                    value={editingStructure.station}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, station: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">Taban Kotu (m):</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editingStructure.invertElevation}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, invertElevation: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">Kiriş Alt / Tavan (m):</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editingStructure.lowChordElevation}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, lowChordElevation: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              {/* Road, Opening Width, Pier Count */}
+              <div className="grid grid-cols-3 gap-2.5">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">Tabliye / Yol (m):</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editingStructure.roadElevation}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, roadElevation: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">Net Açıklık (m):</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    value={editingStructure.openingWidth}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, openingWidth: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">Ayak Sayısı (Piers):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="10"
+                    value={editingStructure.pierCount}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, pierCount: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              {/* Coefficients */}
+              <div className="grid grid-cols-2 gap-2.5 pt-1 border-t border-slate-200">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 block mb-1">Orifis / Basınç Katsayısı (Cd):</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={editingStructure.orificeCoefficient}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, orificeCoefficient: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-700"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 block mb-1">Savak / Aşma Katsayısı (Cw):</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editingStructure.weirCoefficient}
+                    onChange={(e) => setEditingStructure({ ...editingStructure, weirCoefficient: Number(e.target.value) })}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-700"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  setIsStructureModalOpen(false);
+                  setEditingStructure(null);
+                }}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs cursor-pointer"
+              >
+                İptal
+              </button>
+              <button
+                onClick={() => handleSaveStructure(editingStructure)}
+                className="px-4 py-1.5 rounded-xl bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 cursor-pointer"
+              >
+                <Check size={14} />
+                Değişiklikleri Kaydet
+              </button>
             </div>
           </div>
         </div>

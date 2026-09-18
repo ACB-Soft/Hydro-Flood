@@ -32,6 +32,46 @@ export interface RoutingResult {
   isOverbank: boolean;
   energyElevation: number;
   bedElevation: number;
+  structureEffect?: {
+    structureName: string;
+    flowState: 'free' | 'pressure' | 'overtopping';
+    backwaterRise: number;
+  };
+}
+
+export type StructureType = 'bridge' | 'box_culvert' | 'pipe_culvert';
+
+export interface HydraulicStructure {
+  id: string;
+  name: string;
+  type: StructureType;
+  station: number; // m
+  coordinates?: [number, number]; // [lat, lon]
+  roadElevation: number; // High chord (m)
+  lowChordElevation: number; // Low chord (m)
+  invertElevation: number; // Bed invert (m)
+  openingWidth: number; // Net span width (m)
+  openingHeight?: number; // Height for culverts (m)
+  barrelCount: number; // Number of spans/barrels
+  pierCount: number; // Bridge piers
+  pierWidth: number; // Pier thickness (m)
+  orificeCoefficient: number; // Cd (e.g. 0.8)
+  weirCoefficient: number; // Cw (e.g. 1.7)
+  isActive: boolean;
+}
+
+export interface StructureHydraulicResult {
+  structure: HydraulicStructure;
+  station: number;
+  flowState: 'free' | 'pressure' | 'overtopping';
+  upstreamWSE: number;
+  downstreamWSE: number;
+  backwaterRise: number;
+  freeboard: number;
+  isOvertopped: boolean;
+  weirDischarge: number;
+  culvertDischarge: number;
+  throughVelocity: number;
 }
 
 export async function parseKML(file: File): Promise<Feature<LineString>> {
@@ -415,19 +455,258 @@ export function computeNormalDepth(
   };
 }
 
+export async function parseKMLStructures(
+  file: File,
+  sections: CrossSection[],
+  centerlineCoords?: [number, number][]
+): Promise<HydraulicStructure[]> {
+  const text = await file.text();
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(text, 'text/xml');
+  const placemarks = xml.getElementsByTagName('Placemark');
+
+  const structures: HydraulicStructure[] = [];
+  const elements = placemarks.length > 0 ? Array.from(placemarks) : Array.from(xml.getElementsByTagName('Point'));
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    const coordsNode = el.getElementsByTagName('coordinates')[0];
+    if (!coordsNode || !coordsNode.textContent) continue;
+
+    const coordsText = coordsNode.textContent.trim();
+    const parts = coordsText.split(',').map(Number);
+    if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) continue;
+
+    const lon = parts[0];
+    const lat = parts[1];
+    const elevInKml = parts.length >= 3 && !isNaN(parts[2]) ? parts[2] : null;
+
+    // Extract name
+    let name = `Sanat Yapısı ${i + 1}`;
+    const nameNode = el.getElementsByTagName('name')[0];
+    if (nameNode && nameNode.textContent?.trim()) {
+      name = nameNode.textContent.trim();
+    }
+
+    // Determine type: bridge or culvert based on name
+    let type: StructureType = 'bridge';
+    const lowerName = name.toLowerCase();
+    if (lowerName.includes('menfez') || lowerName.includes('culvert') || lowerName.includes('kutu')) {
+      type = 'box_culvert';
+    } else if (lowerName.includes('boru') || lowerName.includes('pipe')) {
+      type = 'pipe_culvert';
+    }
+
+    // Find closest station from sections or centerline
+    let matchedStation = i * 200 + 100;
+    let closestDist = Infinity;
+    let refBedElevation = elevInKml || 100;
+
+    if (sections.length > 0) {
+      for (const sec of sections) {
+        if (sec.centerCoord) {
+          const dLat = sec.centerCoord[0] - lat;
+          const dLon = sec.centerCoord[1] - lon;
+          const dist = Math.sqrt(dLat * dLat + dLon * dLon);
+          if (dist < closestDist) {
+            closestDist = dist;
+            matchedStation = sec.station;
+            refBedElevation = sec.minElevation;
+          }
+        }
+      }
+    }
+
+    // Reasonable default geometry based on type and bed elevation
+    const bedZ = refBedElevation;
+    const defaultLowChord = type === 'bridge' ? bedZ + 3.0 : bedZ + 2.0;
+    const defaultRoadElev = defaultLowChord + (type === 'bridge' ? 1.2 : 0.8);
+    const defaultWidth = type === 'bridge' ? 15.0 : 6.0;
+
+    structures.push({
+      id: `struct_${Date.now()}_${i}`,
+      name,
+      type,
+      station: matchedStation,
+      coordinates: [lat, lon],
+      invertElevation: Number(bedZ.toFixed(2)),
+      lowChordElevation: Number(defaultLowChord.toFixed(2)),
+      roadElevation: Number(defaultRoadElev.toFixed(2)),
+      openingWidth: defaultWidth,
+      openingHeight: type === 'bridge' ? 3.0 : 2.0,
+      barrelCount: 1,
+      pierCount: type === 'bridge' ? 1 : 0,
+      pierWidth: 0.8,
+      orificeCoefficient: 0.8,
+      weirCoefficient: 1.7,
+      isActive: true
+    });
+  }
+
+  // Sort structures by station
+  structures.sort((a, b) => a.station - b.station);
+  return structures;
+}
+
+export function computeStructureHydraulics(
+  structure: HydraulicStructure,
+  tailwaterWSE: number,
+  bedElevation: number,
+  Q: number
+): StructureHydraulicResult {
+  const B_net = Math.max(1, structure.openingWidth - (structure.pierCount * structure.pierWidth));
+  const H_open = Math.max(0.5, structure.lowChordElevation - bedElevation);
+  const A_open = B_net * H_open * Math.max(1, structure.barrelCount);
+  const Cd = structure.orificeCoefficient || 0.8;
+  const Cw = structure.weirCoefficient || 1.7;
+  const g = 9.81;
+
+  let flowState: 'free' | 'pressure' | 'overtopping' = 'free';
+  let upstreamWSE = tailwaterWSE;
+  let isOvertopped = false;
+  let weirDischarge = 0;
+  let culvertDischarge = Q;
+
+  // Case 1: Low Flow (Free Surface)
+  if (tailwaterWSE < structure.lowChordElevation - 0.2) {
+    const V_approx = Q / Math.max(1, A_open * 0.7);
+    const dH_pier = (structure.pierCount * 0.15 + 0.1) * ((V_approx * V_approx) / (2 * g));
+    const backwater = Math.max(0.08, Math.min(2.0, dH_pier));
+    upstreamWSE = tailwaterWSE + backwater;
+
+    if (upstreamWSE >= structure.lowChordElevation) {
+      flowState = 'pressure';
+    } else {
+      flowState = 'free';
+    }
+  } else {
+    // Case 2: Surcharged / Pressure Flow through bridge opening
+    // Q = Cd * A * sqrt(2g * deltaH) -> deltaH = Q^2 / (2g * (Cd * A)^2)
+    const dH_orifice = Math.pow(Q, 2) / (2 * g * Math.pow(Cd * A_open, 2));
+    upstreamWSE = Math.max(structure.lowChordElevation + 0.1, tailwaterWSE + dH_orifice);
+    flowState = 'pressure';
+  }
+
+  // Case 3: Overtopping / Weir Flow over road deck
+  if (upstreamWSE > structure.roadElevation) {
+    isOvertopped = true;
+    flowState = 'overtopping';
+
+    // Iterative balance of orifice flow and weir flow
+    // Q = Q_orifice + Q_weir
+    const deltaH_deck = Math.max(0.2, structure.roadElevation - structure.lowChordElevation);
+    const Q_max_orifice = Cd * A_open * Math.sqrt(2 * g * deltaH_deck);
+    culvertDischarge = Math.min(Q, Q_max_orifice);
+    weirDischarge = Math.max(0, Q - culvertDischarge);
+
+    const roadWidth = Math.max(10, structure.openingWidth * 1.5);
+    const H_weir = Math.pow(weirDischarge / Math.max(0.1, Cw * roadWidth), 2 / 3);
+    upstreamWSE = structure.roadElevation + H_weir;
+  }
+
+  const backwaterRise = Math.max(0, upstreamWSE - tailwaterWSE);
+  const freeboard = structure.lowChordElevation - upstreamWSE;
+  const throughVelocity = culvertDischarge / Math.max(0.5, A_open);
+
+  return {
+    structure,
+    station: structure.station,
+    flowState,
+    upstreamWSE,
+    downstreamWSE: tailwaterWSE,
+    backwaterRise,
+    freeboard,
+    isOvertopped,
+    weirDischarge,
+    culvertDischarge,
+    throughVelocity
+  };
+}
+
 export function runRouting(
   sections: CrossSection[],
   peakFlow: number,
   nMain: number,
   nLOB: number,
   nROB: number,
-  S0: number
-): RoutingResult[] {
-  return sections.map(sec => {
+  S0: number,
+  structures: HydraulicStructure[] = []
+): { results: RoutingResult[]; structureResults: StructureHydraulicResult[] } {
+  // Step 1: Base normal depth calculation for each section
+  const baseResults: RoutingResult[] = sections.map(sec => {
     const res = computeNormalDepth(sec, peakFlow, nMain, nLOB, nROB, S0);
     return {
       station: sec.station,
       ...res
     };
   });
+
+  const activeStructures = structures.filter(s => s.isActive);
+  const structureResults: StructureHydraulicResult[] = [];
+
+  if (activeStructures.length === 0) {
+    return { results: baseResults, structureResults: [] };
+  }
+
+  // Step 2: Compute hydraulic backwater for each structure
+  // Create mutable working copy
+  const finalResults = baseResults.map(r => ({ ...r }));
+
+  for (const struct of activeStructures) {
+    // Find closest section to structure
+    let closestIdx = 0;
+    let minDiff = Infinity;
+    for (let i = 0; i < sections.length; i++) {
+      const diff = Math.abs(sections[i].station - struct.station);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestIdx = i;
+      }
+    }
+
+    const sec = sections[closestIdx];
+    const tailwater = finalResults[closestIdx].waterElevation;
+    const structHyd = computeStructureHydraulics(struct, tailwater, sec.minElevation, peakFlow);
+    structureResults.push(structHyd);
+
+    // Apply backwater upstream of structure (upstream = station < struct.station in downstream flow)
+    const backwaterSurge = structHyd.backwaterRise;
+    if (backwaterSurge > 0.02) {
+      const normalDepth = Math.max(1, tailwater - sec.minElevation);
+      // Backwater reach length L_backwater ~= 2.5 * y_n / S0 (capped between 200m and 3000m)
+      const L_reach = Math.max(300, Math.min(3000, (2.5 * normalDepth) / Math.max(0.0005, S0)));
+
+      for (let i = closestIdx; i >= 0; i--) {
+        const distUpstream = struct.station - sections[i].station;
+        if (distUpstream < 0) continue;
+        if (distUpstream > L_reach) break;
+
+        const decay = Math.exp(-2.5 * (distUpstream / L_reach));
+        const addedWSE = backwaterSurge * decay;
+
+        if (addedWSE > 0.02) {
+          finalResults[i].waterElevation += addedWSE;
+          finalResults[i].maxDepth = finalResults[i].waterElevation - finalResults[i].bedElevation;
+          finalResults[i].energyElevation += addedWSE * 0.9;
+          
+          // If water elevation exceeds left or right bank, mark as overbank
+          const secProfile = sections[i].profile;
+          const leftBankPt = secProfile.find(p => p.x >= sections[i].bankLeftX);
+          const rightBankPt = secProfile.find(p => p.x >= sections[i].bankRightX);
+          const bankMinZ = Math.min(leftBankPt?.z || Infinity, rightBankPt?.z || Infinity);
+          if (finalResults[i].waterElevation > bankMinZ) {
+            finalResults[i].isOverbank = true;
+          }
+
+          finalResults[i].structureEffect = {
+            structureName: struct.name,
+            flowState: structHyd.flowState,
+            backwaterRise: addedWSE
+          };
+        }
+      }
+    }
+  }
+
+  return { results: finalResults, structureResults };
 }
