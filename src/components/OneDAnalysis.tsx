@@ -34,7 +34,7 @@ import {
   ChevronUp,
   X
 } from 'lucide-react';
-import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, Tooltip } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as XLSX from 'xlsx';
 import { 
@@ -54,6 +54,49 @@ import { MapAutoCenter } from './MapHelpers';
 
 interface OneDAnalysisProps {
   onBackToDashboard: () => void;
+}
+
+// Leaflet Map Click Listener for interactive placement
+function MapLocationPicker({ onMapClick, active }: { onMapClick: (lat: number, lon: number) => void; active: boolean }) {
+  useMapEvents({
+    click(e) {
+      if (active) {
+        onMapClick(e.latlng.lat, e.latlng.lng);
+      }
+    }
+  });
+  return null;
+}
+
+// Helper to find nearest cross-section and station distance
+function findNearestStationOnReach(
+  lat: number,
+  lon: number,
+  sectionsList: CrossSection[]
+): { station: number; coordinates: [number, number]; nearestSec: CrossSection | null } {
+  if (sectionsList.length > 0) {
+    let closestSec = sectionsList[0];
+    let minD = Infinity;
+    for (const sec of sectionsList) {
+      if (sec.centerCoord) {
+        const d = Math.hypot(sec.centerCoord[0] - lat, sec.centerCoord[1] - lon);
+        if (d < minD) {
+          minD = d;
+          closestSec = sec;
+        }
+      }
+    }
+    return {
+      station: Math.round(closestSec.station),
+      coordinates: closestSec.centerCoord || [lat, lon],
+      nearestSec: closestSec
+    };
+  }
+  return {
+    station: 0,
+    coordinates: [lat, lon],
+    nearestSec: null
+  };
 }
 
 const BASEMAP_OPTIONS = [
@@ -123,6 +166,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [structuresKmlFile, setStructuresKmlFile] = useState<File | null>(null);
   const [isStructureModalOpen, setIsStructureModalOpen] = useState<boolean>(false);
   const [editingStructure, setEditingStructure] = useState<HydraulicStructure | null>(null);
+  const [isSelectingLocationOnMap, setIsSelectingLocationOnMap] = useState<boolean>(false);
   const [expandedStructureId, setExpandedStructureId] = useState<string | null>(null);
 
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
@@ -406,11 +450,16 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     document.body.removeChild(link);
   };
 
-  // Add Manual Structure
-  const handleAddStructure = (type: StructureType = 'bridge') => {
-    const defaultStation = sections.length > 0 
-      ? Math.round(sections[Math.floor(sections.length / 2)].station)
-      : (structures.length + 1) * 250;
+  // Add Manual Structure (optionally at a target station)
+  const handleAddStructure = (type: StructureType = 'bridge', targetStation?: number) => {
+    let defaultStation = targetStation !== undefined ? Math.round(targetStation) : 0;
+    if (targetStation === undefined) {
+      if (sections.length > 0) {
+        defaultStation = Math.round(sections[Math.floor(sections.length / 2)].station);
+      } else {
+        defaultStation = (structures.length + 1) * 250;
+      }
+    }
 
     const matchedSec = sections.find(s => Math.abs(s.station - defaultStation) < 60) || sections[0];
     const bedZ = matchedSec ? matchedSec.minElevation : 100;
@@ -438,6 +487,32 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
     setStructures([...structures, newStruct]);
     setEditingStructure(newStruct);
+    setIsStructureModalOpen(true);
+  };
+
+  // Interactive Map Click Handler for Structure Placement
+  const handleMapLocationSelected = (lat: number, lon: number) => {
+    if (editingStructure) {
+      const { station, coordinates, nearestSec } = findNearestStationOnReach(lat, lon, sections);
+      const bed = nearestSec ? Number(nearestSec.minElevation.toFixed(2)) : editingStructure.invertElevation;
+      const diff = editingStructure.lowChordElevation - editingStructure.invertElevation;
+      const newLow = Number((bed + (diff > 0.5 ? diff : (editingStructure.type === 'bridge' ? 3.0 : 2.0))).toFixed(2));
+      const roadDiff = editingStructure.roadElevation - editingStructure.lowChordElevation;
+      const newRoad = Number((newLow + (roadDiff > 0.3 ? roadDiff : 1.0)).toFixed(2));
+
+      const updated: HydraulicStructure = {
+        ...editingStructure,
+        station,
+        coordinates,
+        invertElevation: bed,
+        lowChordElevation: newLow,
+        roadElevation: newRoad
+      };
+
+      setEditingStructure(updated);
+      setStructures(structures.map(s => s.id === updated.id ? updated : s));
+    }
+    setIsSelectingLocationOnMap(false);
     setIsStructureModalOpen(true);
   };
 
@@ -2185,12 +2260,21 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   </div>
                                 </Tooltip>
                                 <Popup>
-                                  <div className="text-xs space-y-1 min-w-[180px]">
-                                    <div className="font-bold text-slate-900 border-b pb-1">
-                                      {struct.type === 'bridge' ? '🌉 Köprü' : '🔲 Menfez'}: {struct.name}
+                                  <div className="text-xs space-y-1.5 min-w-[180px]">
+                                    <div className="font-bold text-slate-900 border-b pb-1 flex items-center justify-between">
+                                      <span>{struct.type === 'bridge' ? '🌉 Köprü' : '🔲 Menfez'}: {struct.name}</span>
+                                      <button
+                                        onClick={() => {
+                                          setEditingStructure({ ...struct });
+                                          setIsStructureModalOpen(true);
+                                        }}
+                                        className="text-[10px] text-cyan-700 hover:text-cyan-900 font-bold underline cursor-pointer"
+                                      >
+                                        Düzenle
+                                      </button>
                                     </div>
                                     <div className="text-[11px] text-slate-600">
-                                      <div>Konum: <strong>Km {(struct.station / 1000).toFixed(3)}</strong></div>
+                                      <div>Konum: <strong>Km {(struct.station / 1000).toFixed(3)}</strong> ({struct.station}m)</div>
                                       <div>Tabliye: <strong>{struct.roadElevation.toFixed(2)} m</strong></div>
                                       <div>Kiriş Altı: <strong>{struct.lowChordElevation.toFixed(2)} m</strong></div>
                                       <div>Açıklık: <strong>{struct.openingWidth} m</strong></div>
@@ -2201,14 +2285,38 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             );
                           })}
 
+                          {/* Map Click Listener for Structure Location Picking */}
+                          <MapLocationPicker onMapClick={handleMapLocationSelected} active={isSelectingLocationOnMap} />
+
                           {mapBounds && <MapAutoCenter bounds={mapBounds} />}
                         </MapContainer>
 
-                        {/* Top Notification Banner inside Map */}
-                        <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
-                          <Compass className="text-cyan-400 shrink-0" size={13} />
-                          <span>Harita üzerindeki yeşil çizgilere tıklayarak enkesitleri seçebilirsiniz</span>
-                        </div>
+                        {/* Interactive Location Selection Banner */}
+                        {isSelectingLocationOnMap ? (
+                          <div className="absolute top-2.5 left-2.5 right-2.5 z-[500] bg-cyan-900/95 backdrop-blur-md text-white px-3.5 py-2 rounded-xl text-xs flex items-center justify-between shadow-2xl border border-cyan-400/60 animate-pulse">
+                            <div className="flex items-center gap-2">
+                              <Compass size={15} className="text-cyan-300 animate-spin" />
+                              <span>
+                                <strong>Konum Seçimi Aktif:</strong> Harita üzerinde köprü/menfezin bulunacağı noktaya tıklayınız.
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => {
+                                setIsSelectingLocationOnMap(false);
+                                setIsStructureModalOpen(true);
+                              }}
+                              className="px-2.5 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[11px] font-bold transition-all cursor-pointer"
+                            >
+                              İptal
+                            </button>
+                          </div>
+                        ) : (
+                          /* Top Notification Banner inside Map */
+                          <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
+                            <Compass className="text-cyan-400 shrink-0" size={13} />
+                            <span>Harita üzerindeki yeşil çizgilere tıklayarak enkesitleri, sanat yapılarına tıklayarak detayları seçebilirsiniz</span>
+                          </div>
+                        )}
 
                         {/* Bottom Status Bar inside Map */}
                         <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
@@ -2239,21 +2347,53 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     /* Cross Section Profile SVG */
                     currentActiveSection ? (
                       <div className="w-full h-full bg-slate-50 p-4 flex flex-col justify-between">
-                        <div className="flex items-center justify-between text-xs font-bold text-slate-800 pb-2 border-b border-slate-200">
-                          <div className="flex items-center gap-2">
-                            <span>Doğal Zemin Enkesiti: Km {(currentActiveSection.station / 1000).toFixed(3)}</span>
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-800 pb-2 border-b border-slate-200 flex-wrap gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span>Doğal Zemin Enkesiti: Km {(currentActiveSection.station / 1000).toFixed(3)} ({currentActiveSection.station.toFixed(0)}m)</span>
                             {(() => {
                               const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - currentActiveSection.station) < 50);
-                              if (!matchingStruct) return null;
+                              if (!matchingStruct) {
+                                return (
+                                  <div className="flex items-center gap-1.5 ml-1">
+                                    <button
+                                      onClick={() => handleAddStructure('bridge', currentActiveSection.station)}
+                                      className="px-2 py-0.5 bg-cyan-700 hover:bg-cyan-800 text-white rounded-md text-[10px] font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                                      title="Bu enkesite doğrudan köprü tanımla"
+                                    >
+                                      <Plus size={11} />
+                                      <span>Köprü Ekle</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleAddStructure('box_culvert', currentActiveSection.station)}
+                                      className="px-2 py-0.5 bg-amber-700 hover:bg-amber-800 text-white rounded-md text-[10px] font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                                      title="Bu enkesite doğrudan menfez tanımla"
+                                    >
+                                      <Plus size={11} />
+                                      <span>Menfez Ekle</span>
+                                    </button>
+                                  </div>
+                                );
+                              }
                               return (
-                                <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                                  {matchingStruct.type === 'bridge' ? '🌉 Köprü:' : '🔲 Menfez:'} {matchingStruct.name}
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                                    {matchingStruct.type === 'bridge' ? '🌉 Köprü:' : '🔲 Menfez:'} {matchingStruct.name}
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      setEditingStructure({ ...matchingStruct });
+                                      setIsStructureModalOpen(true);
+                                    }}
+                                    className="text-[10px] text-cyan-700 hover:text-cyan-900 underline font-bold cursor-pointer"
+                                  >
+                                    Düzenle
+                                  </button>
+                                </div>
                               );
                             })()}
                           </div>
-                          <span className="text-slate-500">
-                            Kot Aralığı: {currentActiveSection.minElevation.toFixed(2)}m - {currentActiveSection.maxElevation.toFixed(2)}m
+                          <span className="text-slate-500 text-[11px]">
+                            Taban: <strong className="text-slate-800 font-mono">{currentActiveSection.minElevation.toFixed(2)}m</strong> | Tepe: {currentActiveSection.maxElevation.toFixed(2)}m
                           </span>
                         </div>
 
@@ -2439,17 +2579,112 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </div>
               </div>
 
-              {/* Station, Invert, Low Chord */}
-              <div className="grid grid-cols-3 gap-2.5">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-700 block mb-1">İstasyon (m):</label>
-                  <input
-                    type="number"
-                    value={editingStructure.station}
-                    onChange={(e) => setEditingStructure({ ...editingStructure, station: Number(e.target.value) })}
-                    className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
-                  />
+              {/* Konum & İstasyon Belirleme Paneli */}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-slate-900 flex items-center gap-1.5">
+                    <Compass size={14} className="text-cyan-700" />
+                    Konum ve Enkesit Hizalama
+                  </label>
+                  {editingStructure.coordinates && (
+                    <span className="text-[10px] text-slate-500 font-mono bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                      [{editingStructure.coordinates[0].toFixed(5)}, {editingStructure.coordinates[1].toFixed(5)}]
+                    </span>
+                  )}
                 </div>
+
+                {/* Option A: Select from Existing Sections Dropdown */}
+                {sections.length > 0 && (
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">
+                      Mevcut Enkesitlerden Seç (Otomatik Kot ve Koordinat):
+                    </label>
+                    <select
+                      value={
+                        sections.reduce((prev, curr) => 
+                          Math.abs(curr.station - editingStructure.station) < Math.abs(prev.station - editingStructure.station) ? curr : prev
+                        , sections[0])?.station
+                      }
+                      onChange={(e) => {
+                        const selectedSt = Number(e.target.value);
+                        const foundSec = sections.find(s => Math.abs(s.station - selectedSt) < 1);
+                        if (foundSec) {
+                          const bed = Number(foundSec.minElevation.toFixed(2));
+                          const diff = editingStructure.lowChordElevation - editingStructure.invertElevation;
+                          const newLow = Number((bed + (diff > 0.5 ? diff : (editingStructure.type === 'bridge' ? 3.0 : 2.0))).toFixed(2));
+                          const roadDiff = editingStructure.roadElevation - editingStructure.lowChordElevation;
+                          const newRoad = Number((newLow + (roadDiff > 0.3 ? roadDiff : 1.0)).toFixed(2));
+
+                          setEditingStructure({
+                            ...editingStructure,
+                            station: Math.round(foundSec.station),
+                            coordinates: foundSec.centerCoord || editingStructure.coordinates,
+                            invertElevation: bed,
+                            lowChordElevation: newLow,
+                            roadElevation: newRoad
+                          });
+                        }
+                      }}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 font-bold text-slate-800 cursor-pointer shadow-2xs text-[11px]"
+                    >
+                      {sections.map((sec, idx) => (
+                        <option key={idx} value={sec.station}>
+                          Kesit #{idx + 1} — Km {(sec.station / 1000).toFixed(3)} ({sec.station.toFixed(0)} m) | Taban: {sec.minElevation.toFixed(2)} m
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Option B: Manual Station Meter & Option C: Interactive Map Picker */}
+                <div className="grid grid-cols-2 gap-2.5 pt-0.5">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">
+                      İstasyon Metrajı (Metre):
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={editingStructure.station}
+                        onChange={(e) => {
+                          const st = Number(e.target.value);
+                          const nearestSec = sections.find(s => Math.abs(s.station - st) < 60);
+                          setEditingStructure({
+                            ...editingStructure,
+                            station: st,
+                            coordinates: nearestSec?.centerCoord || editingStructure.coordinates
+                          });
+                        }}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 font-bold text-slate-800 text-[11px]"
+                        placeholder="Örn: 250"
+                      />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">m</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">
+                      Harita Üzerinden Seçim:
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRightPanelTab('map');
+                        setIsSelectingLocationOnMap(true);
+                        setIsStructureModalOpen(false);
+                      }}
+                      className="w-full py-1.5 px-2 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all shadow-2xs cursor-pointer h-[32px]"
+                      title="Harita üzerinden tıklayarak konum seç"
+                    >
+                      <Compass size={13} />
+                      <span>Haritada Tıkla ve Seç</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Invert, Low Chord, Road Elevations */}
+              <div className="grid grid-cols-3 gap-2.5">
                 <div>
                   <label className="text-[10px] font-bold text-slate-700 block mb-1">Taban Kotu (m):</label>
                   <input
@@ -2470,10 +2705,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
                   />
                 </div>
-              </div>
-
-              {/* Road, Opening Width, Pier Count */}
-              <div className="grid grid-cols-3 gap-2.5">
                 <div>
                   <label className="text-[10px] font-bold text-slate-700 block mb-1">Tabliye / Yol (m):</label>
                   <input
@@ -2484,6 +2715,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     className="w-full bg-white border border-slate-300 rounded-xl px-2 py-1 font-bold text-slate-800"
                   />
                 </div>
+              </div>
+
+              {/* Opening Width & Pier Count */}
+              <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="text-[10px] font-bold text-slate-700 block mb-1">Net Açıklık (m):</label>
                   <input
