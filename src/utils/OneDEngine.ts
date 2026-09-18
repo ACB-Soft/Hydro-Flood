@@ -1,5 +1,6 @@
 import * as turf from '@turf/turf';
 import * as GeoTIFF from 'geotiff';
+import proj4 from 'proj4';
 import { Feature, LineString } from 'geojson';
 
 export interface ProfilePoint {
@@ -97,14 +98,28 @@ export async function loadDEM(file: File) {
   return { bbox, width, height, data };
 }
 
-function getElevation(dem: any, lon: number, lat: number): number {
+function getElevation(dem: any, lon: number, lat: number, crsDef?: string): number {
   const { bbox, width, height, data } = dem;
-  if (lon < bbox[0] || lon > bbox[2] || lat < bbox[1] || lat > bbox[3]) {
+  let targetX = lon;
+  let targetY = lat;
+
+  // If DEM bounding box is in projected coordinates (meters, > 180 or > 90) and crsDef is provided
+  if (crsDef && (Math.abs(bbox[0]) > 180 || Math.abs(bbox[1]) > 90 || Math.abs(bbox[2]) > 180 || Math.abs(bbox[3]) > 90)) {
+    try {
+      const [px, py] = proj4('EPSG:4326', crsDef, [lon, lat]);
+      targetX = px;
+      targetY = py;
+    } catch (err) {
+      // Fallback to lon, lat
+    }
+  }
+
+  if (targetX < bbox[0] || targetX > bbox[2] || targetY < bbox[1] || targetY > bbox[3]) {
     return NaN;
   }
   
-  const px = Math.floor(((lon - bbox[0]) / (bbox[2] - bbox[0])) * width);
-  const py = Math.floor(((bbox[3] - lat) / (bbox[3] - bbox[1])) * height);
+  const px = Math.floor(((targetX - bbox[0]) / (bbox[2] - bbox[0])) * width);
+  const py = Math.floor(((bbox[3] - targetY) / (bbox[3] - bbox[1])) * height);
   
   if (px < 0 || px >= width || py < 0 || py >= height) return NaN;
   
@@ -119,7 +134,8 @@ export async function generateCrossSections(
   leftBankFile: File | null,
   rightBankFile: File | null,
   dx: number,
-  sectionWidth: number = 200 // Default 200m width
+  sectionWidth: number = 200, // Default 200m width
+  crsDef?: string
 ): Promise<CrossSection[]> {
   const dem = await loadDEM(demFile);
   const centerline = await parseKML(centerlineFile);
@@ -150,7 +166,7 @@ export async function generateCrossSections(
       }
       
       const [lon, lat] = samplePt.geometry.coordinates;
-      let z = getElevation(dem, lon, lat);
+      let z = getElevation(dem, lon, lat, crsDef);
       if (isNaN(z)) z = 0;
       
       // Determine zone (LOB, MAIN, ROB)
@@ -188,6 +204,94 @@ export async function generateCrossSections(
     });
   }
   
+  return sections;
+}
+
+export async function parseManualCrossSections(
+  demFile: File,
+  kmlFile: File,
+  crsDef?: string
+): Promise<CrossSection[]> {
+  const dem = await loadDEM(demFile);
+  const text = await kmlFile.text();
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(text, 'text/xml');
+  const placemarks = xml.getElementsByTagName('Placemark');
+  
+  const sections: CrossSection[] = [];
+  const resolution = 2; // sample DEM every 2 meters
+  const elements = placemarks.length > 0 ? Array.from(placemarks) : Array.from(xml.getElementsByTagName('LineString'));
+
+  let cumulativeStation = 0;
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    const coordsNode = el.getElementsByTagName('coordinates')[0];
+    if (!coordsNode || !coordsNode.textContent) continue;
+
+    const coordsText = coordsNode.textContent.trim();
+    const pairs = coordsText.split(/\s+/);
+    const lineCoords: number[][] = [];
+    for (const p of pairs) {
+      const [lon, lat] = p.split(',').map(Number);
+      if (!isNaN(lon) && !isNaN(lat)) {
+        lineCoords.push([lon, lat]);
+      }
+    }
+    if (lineCoords.length < 2) continue;
+
+    const line = turf.lineString(lineCoords);
+    const lineLen = turf.length(line, { units: 'meters' });
+    if (lineLen < 5) continue; // skip too short lines
+
+    let station = cumulativeStation;
+    const nameNode = el.getElementsByTagName('name')[0];
+    if (nameNode && nameNode.textContent) {
+      const match = nameNode.textContent.match(/\d+(\.\d+)?/);
+      if (match) {
+        station = parseFloat(match[0]);
+      }
+    }
+
+    const profile: ProfilePoint[] = [];
+    for (let d = 0; d <= lineLen; d += resolution) {
+      const pt = turf.along(line, d, { units: 'meters' });
+      const [lon, lat] = pt.geometry.coordinates;
+      let z = getElevation(dem, lon, lat, crsDef);
+      if (isNaN(z)) z = 0;
+
+      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
+      if (d < lineLen * 0.25) type = 'LOB';
+      else if (d > lineLen * 0.75) type = 'ROB';
+
+      profile.push({ x: d, z, type });
+    }
+
+    const elevations = profile.map(p => p.z);
+    const minElevation = elevations.length > 0 ? Math.min(...elevations) : 0;
+    const maxElevation = elevations.length > 0 ? Math.max(...elevations) : 0;
+
+    const firstPt = lineCoords[0];
+    const lastPt = lineCoords[lineCoords.length - 1];
+
+    sections.push({
+      station: Math.round(station),
+      profile,
+      centerCoord: [(firstPt[1] + lastPt[1]) / 2, (firstPt[0] + lastPt[0]) / 2],
+      cutLine: [
+        [firstPt[1], firstPt[0]],
+        [lastPt[1], lastPt[0]]
+      ],
+      minElevation,
+      maxElevation,
+      bankLeftX: lineLen * 0.25,
+      bankRightX: lineLen * 0.75
+    });
+
+    cumulativeStation += 50;
+  }
+
+  sections.sort((a, b) => a.station - b.station);
   return sections;
 }
 

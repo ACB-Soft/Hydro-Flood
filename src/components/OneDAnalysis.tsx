@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import {
-  ArrowLeft,
   Activity,
   Droplets,
   Map as MapIcon,
@@ -22,17 +21,23 @@ import {
   Layers,
   Eye,
   FileCode,
-  Layers as LayersIcon
+  FileSpreadsheet,
+  Layers as LayersIcon,
+  TrendingUp,
+  AlertCircle
 } from 'lucide-react';
-import { MapContainer, TileLayer, Polyline, CircleMarker } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import * as XLSX from 'xlsx';
 import { 
   generateCrossSections, 
+  parseManualCrossSections,
   runRouting, 
   parseKMLCoordinates, 
   CrossSection, 
   RoutingResult 
 } from '../utils/OneDEngine';
+import { CRS_LIST, CRSItem } from '../utils/crsList';
 import { MapAutoCenter } from './MapHelpers';
 
 interface OneDAnalysisProps {
@@ -47,15 +52,25 @@ const BASEMAP_OPTIONS = [
   { id: 'street', label: 'Standart Sokak (OSM)', url: 'https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png', attribution: '&copy; OpenStreetMap' }
 ];
 
+export interface HydrographPoint {
+  time: number; // Hours
+  flow: number; // m3/s
+}
+
 const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   // Navigation & View Mode
   const [isResultPage, setIsResultPage] = useState<boolean>(false);
   const [mobileTab, setMobileTab] = useState<'controls' | 'preview'>('controls');
-  const [rightPanelTab, setRightPanelTab] = useState<'map' | 'section' | 'profile'>('map');
+  const [rightPanelTab, setRightPanelTab] = useState<'map' | 'section' | 'hydrograph'>('map');
   const [resultTab, setResultTab] = useState<'profile' | 'section' | 'map'>('profile');
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
+
+  // Coordinate System (CRS) Selection (defaults to TUREF / TM36 (3°) EPSG:5256)
+  const [selectedCRS, setSelectedCRS] = useState<CRSItem>(
+    CRS_LIST.find(c => c.code === 'EPSG:5256') || CRS_LIST[0]
+  );
 
   // File Inputs
   const [demFile, setDemFile] = useState<File | null>(null);
@@ -64,7 +79,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [centerlineCoords, setCenterlineCoords] = useState<[number, number][]>([]);
   const [bankCoords, setBankCoords] = useState<[number, number][]>([]);
 
-  // Cross-Section Settings
+  // Cross-Section Settings & Manual KML
+  const [crossSectionMode, setCrossSectionMode] = useState<'auto' | 'manual'>('auto');
+  const [manualKmlFile, setManualKmlFile] = useState<File | null>(null);
   const [crossSectionInterval, setCrossSectionInterval] = useState<number>(50);
   const [sectionWidth, setSectionWidth] = useState<number>(200);
   const [sections, setSections] = useState<CrossSection[]>([]);
@@ -76,10 +93,13 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [manningMain, setManningMain] = useState<number>(0.035); // Ana Kanal
   const [manningROB, setManningROB] = useState<number>(0.060); // Sağ Taşkın Yatağı
 
-  // Hydraulic Boundary Conditions
+  // Flow / Hydrograph Mode
+  const [flowMode, setFlowMode] = useState<'steady' | 'hydrograph'>('steady');
   const [peakFlow, setPeakFlow] = useState<number>(150); // m3/s
   const [downstreamSlope, setDownstreamSlope] = useState<number>(0.001); // m/m
   const [simDuration, setSimDuration] = useState<number>(24); // hours
+  const [hydrographData, setHydrographData] = useState<HydrographPoint[]>([]);
+  const [hydrographFileName, setHydrographFileName] = useState<string | null>(null);
 
   // Simulation State & Results
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
@@ -145,10 +165,62 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
   };
 
-  // Generate Cross Sections from DEM and Centerline
+  // Handle Manual Cross Sections KML Upload
+  const handleManualCrossSectionsUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setManualKmlFile(file);
+      if (!demFile) {
+        alert("Lütfen önce bir DEM dosyası yükleyin.");
+        return;
+      }
+      setIsExtracting(true);
+      try {
+        const data = await parseManualCrossSections(demFile, file, selectedCRS.def);
+        if (data.length === 0) {
+          alert("KML dosyasında geçerli enkesit çizgileri bulunamadı.");
+        } else {
+          setSections(data);
+          setSelectedSectionIdx(0);
+          setIsFileOpened(true);
+        }
+      } catch (err: any) {
+        console.error(err);
+        alert("Manuel enkesit ayrıştırma hatası: " + err.message);
+      } finally {
+        setIsExtracting(false);
+      }
+    }
+  };
+
+  // Generate Cross Sections from DEM and Centerline (Automatic mode)
   const handleGenerateSections = async () => {
-    if (!demFile || !centerlineFile) {
-      alert("Lütfen DEM ve Nehir Merkez Hattı KML dosyalarını yükleyin.");
+    if (!demFile) {
+      alert("Lütfen önce bir DEM (Topografya) dosyası yükleyin.");
+      return;
+    }
+    if (crossSectionMode === 'manual') {
+      if (!manualKmlFile) {
+        alert("Lütfen manuel enkesit KML dosyasını seçin.");
+        return;
+      }
+      setIsExtracting(true);
+      try {
+        const data = await parseManualCrossSections(demFile, manualKmlFile, selectedCRS.def);
+        setSections(data);
+        setSelectedSectionIdx(0);
+        setIsFileOpened(true);
+      } catch (err: any) {
+        console.error(err);
+        alert("Manuel enkesit ayrıştırma hatası: " + err.message);
+      } finally {
+        setIsExtracting(false);
+      }
+      return;
+    }
+
+    if (!centerlineFile) {
+      alert("Lütfen Nehir Merkez Hattı KML dosyasını yükleyin.");
       return;
     }
     setIsExtracting(true);
@@ -159,7 +231,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         banksFile,
         null,
         crossSectionInterval,
-        sectionWidth
+        sectionWidth,
+        selectedCRS.def
       );
       setSections(data);
       setSelectedSectionIdx(0);
@@ -172,11 +245,80 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
   };
 
+  // Download Sample Hydrograph Template (.xlsx)
+  const downloadHydrographTemplate = () => {
+    const sampleData = [
+      { 'Zaman (Saat)': 0, 'Debi (m3/s)': 20.0 },
+      { 'Zaman (Saat)': 2, 'Debi (m3/s)': 35.0 },
+      { 'Zaman (Saat)': 4, 'Debi (m3/s)': 65.0 },
+      { 'Zaman (Saat)': 6, 'Debi (m3/s)': 120.0 },
+      { 'Zaman (Saat)': 8, 'Debi (m3/s)': 210.0 },
+      { 'Zaman (Saat)': 10, 'Debi (m3/s)': 330.0 },
+      { 'Zaman (Saat)': 12, 'Debi (m3/s)': 450.0 }, // Peak
+      { 'Zaman (Saat)': 14, 'Debi (m3/s)': 390.0 },
+      { 'Zaman (Saat)': 16, 'Debi (m3/s)': 280.0 },
+      { 'Zaman (Saat)': 18, 'Debi (m3/s)': 180.0 },
+      { 'Zaman (Saat)': 20, 'Debi (m3/s)': 110.0 },
+      { 'Zaman (Saat)': 22, 'Debi (m3/s)': 60.0 },
+      { 'Zaman (Saat)': 24, 'Debi (m3/s)': 30.0 }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(sampleData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Debi_Hidrografi");
+    XLSX.writeFile(wb, "Ornek_Debi_Hidrografi_Sablonu.xlsx");
+  };
+
+  // Handle Hydrograph File Upload (.xlsx, .xls, .csv)
+  const handleHydrographUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setHydrographFileName(file.name);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const wb = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = wb.SheetNames[0];
+        const ws = wb.Sheets[firstSheetName];
+        const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+
+        const parsedPoints: HydrographPoint[] = [];
+
+        for (let i = 0; i < rawData.length; i++) {
+          const row = rawData[i];
+          if (!row || row.length < 2) continue;
+          const valTime = parseFloat(String(row[0]).replace(',', '.'));
+          const valFlow = parseFloat(String(row[1]).replace(',', '.'));
+          if (!isNaN(valTime) && !isNaN(valFlow)) {
+            parsedPoints.push({ time: valTime, flow: valFlow });
+          }
+        }
+
+        if (parsedPoints.length < 2) {
+          alert("Yüklenen dosyada geçerli zaman ve debi değerleri bulunamadı. Lütfen şablonu referans alınız.");
+          return;
+        }
+
+        // Sort by time
+        parsedPoints.sort((a, b) => a.time - b.time);
+        setHydrographData(parsedPoints);
+
+        // Calculate peak flow and duration
+        const maxQ = Math.max(...parsedPoints.map(p => p.flow));
+        const maxT = Math.max(...parsedPoints.map(p => p.time));
+        setPeakFlow(Math.round(maxQ));
+        setSimDuration(Math.round(maxT));
+      } catch (err: any) {
+        console.error("Hidrograf okuma hatası:", err);
+        alert("Hidrograf dosyası ayrıştırılamadı: " + err.message);
+      }
+    }
+  };
+
   // Run 1D Hydrodynamic Simulation
   const handleStartAnalysis = () => {
     if (sections.length === 0) {
-      if (!demFile || !centerlineFile) {
-        alert("Lütfen önce DEM ve Merkez Hattı dosyalarını seçip enkesitleri üretin.");
+      if (!demFile) {
+        alert("Lütfen önce bir DEM dosyası yükleyip enkesitleri çıkarın.");
         return;
       }
       handleGenerateSections().then(() => {
@@ -352,7 +494,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
           {/* Main Results Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 h-full min-h-0 flex-1">
-            {/* LEFT / CENTER VISUALIZATION PANEL (col-span-8 or 9) */}
+            {/* LEFT / CENTER VISUALIZATION PANEL (col-span-8) */}
             <div className="lg:col-span-8 flex flex-col gap-2.5 h-full min-h-0">
               <div className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm flex-1 flex flex-col min-h-0 relative overflow-hidden">
                 {/* Result Sub-tabs Header */}
@@ -451,7 +593,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           const wsePoints = simResults.map(r => `${mapX(r.station)},${mapY(r.waterElevation)}`).join(' ');
                           const eglPoints = simResults.map(r => `${mapX(r.station)},${mapY(r.energyElevation)}`).join(' ');
 
-                          // Water filled polygon
                           const waterPoly = `${mapX(simResults[0].station)},${mapY(simResults[0].bedElevation)} ` +
                             simResults.map(r => `${mapX(r.station)},${mapY(r.waterElevation)}`).join(' ') +
                             ` ${mapX(simResults[simResults.length - 1].station)},${mapY(simResults[simResults.length - 1].bedElevation)} ` +
@@ -461,19 +602,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                           return (
                             <>
-                              {/* Water Polygon */}
                               <polygon points={waterPoly} fill="#0284c7" fillOpacity="0.25" />
-
-                              {/* River Bed Line */}
                               <polyline points={bedPoints} fill="none" stroke="#1e293b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-
-                              {/* Water Surface Line */}
                               <polyline points={wsePoints} fill="none" stroke="#0284c7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-
-                              {/* Energy Grade Line */}
                               <polyline points={eglPoints} fill="none" stroke="#d97706" strokeWidth="1.5" strokeDasharray="5 3" />
-
-                              {/* Current Selected Station Indicator */}
                               <line x1={curX} y1="30" x2={curX} y2="260" stroke="#0ea5e9" strokeWidth="2" strokeDasharray="3 3" />
                               <circle cx={curX} cy={mapY(currentActiveResult?.waterElevation || 0)} r="4" fill="#0284c7" stroke="#fff" strokeWidth="2" />
                             </>
@@ -482,7 +614,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </svg>
                     </div>
 
-                    {/* Bottom slider controller */}
                     <div className="pt-2 px-1 flex items-center gap-3">
                       <span className="text-[10px] font-bold text-slate-600 shrink-0">Kesit Kaydırıcı:</span>
                       <input
@@ -538,7 +669,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                           const groundPath = `M 30 250 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 670 250 Z`;
 
-                          // Water polygon
                           const wetProfile = sec.profile.filter(p => p.z <= wl);
                           let waterSvg = null;
                           if (wetProfile.length > 1) {
@@ -560,17 +690,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                           return (
                             <>
-                              {/* Ground Fill */}
                               <path d={groundPath} fill="#f1f5f9" stroke="#334155" strokeWidth="2" strokeLinejoin="round" />
-
-                              {/* Water Level */}
                               {waterSvg}
-
-                              {/* Bank Station Lines */}
                               <line x1={mapX(sec.bankLeftX)} y1="40" x2={mapX(sec.bankLeftX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
                               <line x1={mapX(sec.bankRightX)} y1="40" x2={mapX(sec.bankRightX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
 
-                              {/* Labels */}
                               <text x={mapX(sec.bankLeftX) - 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sol Taşkın Yt.</text>
                               <text x={mapX((sec.bankLeftX + sec.bankRightX) / 2)} y="35" fontSize="10" textAnchor="middle" fill="#0284c7" fontWeight="bold">Ana Kanal</text>
                               <text x={mapX(sec.bankRightX) + 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sağ Taşkın Yt.</text>
@@ -745,7 +869,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
             >
               <Sliders size={13} />
               <span>Girdi & Parametre Paneli</span>
-              {demFile && centerlineFile && (
+              {demFile && (
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse absolute top-1 right-2" />
               )}
             </button>
@@ -768,17 +892,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
               }`}
             >
-              {/* 1. TOPOGRAFYA VE KML ŞEBEKE */}
+              {/* 1. TOPOGRAFYA VE KOORDİNAT SİSTEMİ (CRS) */}
               <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <FileText size={14} className="text-cyan-700" />
-                    <span>1. Topografya & Nehir Geometrisi</span>
+                    <span>1. Topografya & Koordinat Sistemi</span>
                   </h2>
-                  {demFile && centerlineFile && (
+                  {demFile && (
                     <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-0.5">
                       <CheckCircle2 size={10} />
-                      Hazır
+                      Yüklendi
                     </span>
                   )}
                 </div>
@@ -786,7 +910,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 {/* DEM File Input */}
                 <div>
                   <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                    Sayısal Yükseklik Modeli (DEM):
+                    Topografya Dosyası (DEM):
                   </label>
                   {demFile ? (
                     <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex items-center justify-between gap-2">
@@ -796,7 +920,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           <span className="font-bold text-slate-900 text-xs truncate">{demFile.name}</span>
                         </div>
                         <p className="text-[10px] text-slate-600 truncate">
-                          {(demFile.size / (1024 * 1024)).toFixed(2)} MB • Raster GeoTIFF
+                          {(demFile.size / (1024 * 1024)).toFixed(2)} MB • GeoTIFF Raster
                         </p>
                       </div>
                       <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all shadow-sm">
@@ -832,6 +956,59 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       />
                     </label>
                   )}
+                </div>
+
+                {/* DEM Koordinat Sistemi (CRS) Seçimi - Identical to Statik Taşkın */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                    Koordinat Sistemi (CRS):
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={selectedCRS.code}
+                      onChange={(e) => {
+                        const found = CRS_LIST.find(c => c.code === e.target.value);
+                        if (found) setSelectedCRS(found);
+                      }}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-cyan-600 appearance-none cursor-pointer transition-all pr-7 shadow-sm"
+                    >
+                      <optgroup label="TUREF / TM (3° - Türkiye)">
+                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:525')).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="ED50 / TM (3° - Türkiye)">
+                        {CRS_LIST.filter(c => c.code.startsWith('EPSG:522')).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="WGS 84 / UTM (6° - Türkiye & Bölgesel)">
+                        {CRS_LIST.filter(c => ['EPSG:32635', 'EPSG:32636', 'EPSG:32637', 'EPSG:32638'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="ED50 / UTM (6° - Türkiye & Bölgesel)">
+                        {CRS_LIST.filter(c => ['EPSG:23035', 'EPSG:23036', 'EPSG:23037', 'EPSG:23038'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Global & Standartlar">
+                        {CRS_LIST.filter(c => ['EPSG:4326', 'EPSG:3857'].includes(c.code)).map(crs => (
+                          <option key={crs.code} value={crs.code} className="bg-white text-slate-900 py-1">
+                            {crs.code} - {crs.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
                 </div>
 
                 {/* River Centerline KML Input */}
@@ -907,72 +1084,159 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </div>
               </section>
 
-              {/* 2. ENKESİT ÇIKARIMI PARAMETRELERİ */}
+              {/* 2. ENKESİT ÇIKARIMI (OTOMATİK VEYA MANUEL KML) */}
               <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <Ruler size={14} className="text-cyan-700" />
-                    <span>2. Doğal Enkesit Çıkarımı</span>
+                    <span>2. Enkesit Geometrisi & Çıkarımı</span>
                   </h2>
                   {sections.length > 0 && (
                     <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300">
-                      {sections.length} Kesit
+                      {sections.length} Kesit Hazır
                     </span>
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                      Aralık (dx) [m]:
-                    </label>
-                    <input
-                      type="number"
-                      min="10"
-                      max="500"
-                      step="10"
-                      value={crossSectionInterval}
-                      onChange={(e) => setCrossSectionInterval(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 shadow-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                      Genişlik (B) [m]:
-                    </label>
-                    <input
-                      type="number"
-                      min="50"
-                      max="1000"
-                      step="25"
-                      value={sectionWidth}
-                      onChange={(e) => setSectionWidth(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 shadow-sm"
-                    />
-                  </div>
+                {/* Mode Switcher: Otomatik Üretim vs Manuel KML */}
+                <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button
+                    onClick={() => setCrossSectionMode('auto')}
+                    className={`flex-1 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer text-center ${
+                      crossSectionMode === 'auto'
+                        ? 'bg-cyan-700 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Otomatik Üretim (dx)
+                  </button>
+                  <button
+                    onClick={() => setCrossSectionMode('manual')}
+                    className={`flex-1 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer text-center ${
+                      crossSectionMode === 'manual'
+                        ? 'bg-cyan-700 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Manuel Enkesit KML
+                  </button>
                 </div>
 
-                <button
-                  onClick={handleGenerateSections}
-                  disabled={isExtracting || !demFile || !centerlineFile}
-                  className={`w-full py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer ${
-                    isExtracting
-                      ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                      : 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                  }`}
-                >
-                  {isExtracting ? (
-                    <>
-                      <RefreshCw size={13} className="animate-spin" />
-                      <span>DEM'den Kotlar Ayrıştırılıyor...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Ruler size={13} />
-                      <span>{sections.length > 0 ? 'Enkesitleri Yeniden Üret' : 'Enkesitleri Çıkar'}</span>
-                    </>
-                  )}
-                </button>
+                {crossSectionMode === 'auto' ? (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                          Aralık (dx) [m]:
+                        </label>
+                        <input
+                          type="number"
+                          min="10"
+                          max="500"
+                          step="10"
+                          value={crossSectionInterval}
+                          onChange={(e) => setCrossSectionInterval(Number(e.target.value))}
+                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 shadow-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                          Genişlik (B) [m]:
+                        </label>
+                        <input
+                          type="number"
+                          min="50"
+                          max="1000"
+                          step="25"
+                          value={sectionWidth}
+                          onChange={(e) => setSectionWidth(Number(e.target.value))}
+                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 shadow-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleGenerateSections}
+                      disabled={isExtracting || !demFile || !centerlineFile}
+                      className={`w-full py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer ${
+                        isExtracting
+                          ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                          : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                      }`}
+                    >
+                      {isExtracting ? (
+                        <>
+                          <RefreshCw size={13} className="animate-spin" />
+                          <span>DEM'den Kotlar Ayrıştırılıyor...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Ruler size={13} />
+                          <span>{sections.length > 0 ? 'Enkesitleri Yeniden Üret' : 'Enkesitleri DEM\'den Çıkar'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ) : (
+                  /* Manuel Enkesit KML Modu */
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-700 block">
+                      Ölçülmüş / Haritalanmış Enkesit Çizgileri KML Dosyası:
+                    </label>
+                    {manualKmlFile ? (
+                      <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex items-center justify-between gap-2">
+                        <div className="space-y-0.5 overflow-hidden">
+                          <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                            <span className="font-bold text-slate-900 text-xs truncate">{manualKmlFile.name}</span>
+                          </div>
+                          <p className="text-[10px] text-emerald-700 truncate">
+                            {sections.length > 0 ? `${sections.length} Enkesit Ayrıştırıldı` : 'KML Yüklendi'}
+                          </p>
+                        </div>
+                        <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all shadow-sm">
+                          Değiştir
+                          <input type="file" accept=".kml" onChange={handleManualCrossSectionsUpload} className="hidden" />
+                        </label>
+                      </div>
+                    ) : (
+                      <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <div className="p-1 bg-emerald-100 text-emerald-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
+                            <SplitSquareVertical size={14} />
+                          </div>
+                          <span className="font-bold text-xs text-slate-800 truncate">Manuel Enkesitler KML Yükle</span>
+                        </div>
+                        <span className="px-2 py-0.5 bg-emerald-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
+                          Gözat
+                        </span>
+                        <input type="file" accept=".kml" onChange={handleManualCrossSectionsUpload} className="hidden" />
+                      </label>
+                    )}
+
+                    <button
+                      onClick={handleGenerateSections}
+                      disabled={isExtracting || !demFile || !manualKmlFile}
+                      className={`w-full py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer ${
+                        isExtracting
+                          ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                          : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                      }`}
+                    >
+                      {isExtracting ? (
+                        <>
+                          <RefreshCw size={13} className="animate-spin" />
+                          <span>Kotlar DEM'den Çıkarılıyor...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Ruler size={13} />
+                          <span>Manuel Kesit Kotlarını DEM'den Hesapla</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </section>
 
               {/* 3. MANNING PÜRÜZLÜLÜK KATSAYILARI */}
@@ -1024,45 +1288,155 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </div>
               </section>
 
-              {/* 4. HİDROLİK SINIR ŞARTLARI & DEBİ */}
+              {/* 4. HİDROLOJİK SINIR ŞARTLARI & DEBİ HİDROGRAFI */}
               <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <Activity size={14} className="text-cyan-700" />
                     <span>4. Hidrolojik & Sınır Şartları</span>
                   </h2>
+                  {flowMode === 'hydrograph' && hydrographData.length > 0 && (
+                    <span className="text-[9px] font-bold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-300">
+                      {hydrographData.length} Zaman Adımı
+                    </span>
+                  )}
                 </div>
 
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] font-bold text-slate-700">Pik Debi (Q):</span>
-                    <span className="text-xs font-extrabold text-cyan-800">{peakFlow} m³/s</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="5"
-                    max="1500"
-                    step="5"
-                    value={peakFlow}
-                    onChange={(e) => setPeakFlow(Number(e.target.value))}
-                    className="w-full h-1.5 bg-slate-300 rounded-full appearance-none cursor-pointer accent-cyan-700"
-                  />
-                  <div className="grid grid-cols-5 gap-1 pt-1">
-                    {[50, 100, 250, 500, 1000].map((val) => (
-                      <button
-                        key={val}
-                        onClick={() => setPeakFlow(val)}
-                        className={`py-0.5 rounded text-[9px] font-bold border transition-all text-center cursor-pointer ${
-                          peakFlow === val
-                            ? 'bg-cyan-100 border-cyan-500 text-cyan-900 shadow-sm'
-                            : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        {val} m³
-                      </button>
-                    ))}
-                  </div>
+                {/* Flow Mode Switcher: Sabit Debi vs Dinamik Hidrograf */}
+                <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button
+                    onClick={() => setFlowMode('steady')}
+                    className={`flex-1 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer text-center ${
+                      flowMode === 'steady'
+                        ? 'bg-cyan-700 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Sabit / Pik Debi
+                  </button>
+                  <button
+                    onClick={() => setFlowMode('hydrograph')}
+                    className={`flex-1 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer text-center flex items-center justify-center gap-1 ${
+                      flowMode === 'hydrograph'
+                        ? 'bg-cyan-700 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <FileSpreadsheet size={12} />
+                    <span>Akım Hidrografı (Excel)</span>
+                  </button>
                 </div>
+
+                {flowMode === 'steady' ? (
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-[10px] font-bold text-slate-700">Pik Debi (Q):</span>
+                      <span className="text-xs font-extrabold text-cyan-800">{peakFlow} m³/s</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="1500"
+                      step="5"
+                      value={peakFlow}
+                      onChange={(e) => setPeakFlow(Number(e.target.value))}
+                      className="w-full h-1.5 bg-slate-300 rounded-full appearance-none cursor-pointer accent-cyan-700"
+                    />
+                    <div className="grid grid-cols-5 gap-1 pt-1">
+                      {[50, 100, 250, 500, 1000].map((val) => (
+                        <button
+                          key={val}
+                          onClick={() => setPeakFlow(val)}
+                          className={`py-0.5 rounded text-[9px] font-bold border transition-all text-center cursor-pointer ${
+                            peakFlow === val
+                              ? 'bg-cyan-100 border-cyan-500 text-cyan-900 shadow-sm'
+                              : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {val} m³
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  /* Akım Hidrografı (Excel / CSV) Yükleme ve Şablon */
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold text-slate-700">Debi Hidrografı Verisi:</span>
+                      <button
+                        onClick={downloadHydrographTemplate}
+                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 border border-slate-300 shadow-sm cursor-pointer"
+                        title="Örnek Excel formatını indirin"
+                      >
+                        <Download size={11} className="text-cyan-700" />
+                        <span>Örnek Şablonu İndir (.xlsx)</span>
+                      </button>
+                    </div>
+
+                    {hydrographFileName && hydrographData.length > 0 ? (
+                      <div className="bg-blue-50 border border-blue-200 p-2.5 rounded-xl space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={14} className="text-blue-600 shrink-0" />
+                            <span className="font-bold text-slate-900 text-xs truncate max-w-[150px]">
+                              {hydrographFileName}
+                            </span>
+                          </div>
+                          <label className="px-2 py-0.5 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shadow-sm">
+                            Değiştir
+                            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleHydrographUpload} className="hidden" />
+                          </label>
+                        </div>
+
+                        {/* Mini Hydrograph Plot */}
+                        <div className="w-full h-20 bg-white border border-blue-200 rounded-lg p-1">
+                          <svg width="100%" height="100%" viewBox="0 0 300 70" preserveAspectRatio="none" className="w-full h-full">
+                            {(() => {
+                              const maxT = Math.max(...hydrographData.map(d => d.time));
+                              const maxQ = Math.max(...hydrographData.map(d => d.flow));
+                              const mapX = (t: number) => 10 + (t / (maxT || 1)) * 280;
+                              const mapY = (q: number) => 65 - (q / (maxQ || 1)) * 55;
+
+                              const polyPoints = `10,65 ` + hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ') + ` 290,65`;
+                              const linePoints = hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
+
+                              return (
+                                <>
+                                  <polygon points={polyPoints} fill="#38bdf8" fillOpacity="0.3" />
+                                  <polyline points={linePoints} fill="none" stroke="#0284c7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                  {hydrographData.map((d, idx) => (
+                                    <circle key={idx} cx={mapX(d.time)} cy={mapY(d.flow)} r="2" fill="#0369a1" />
+                                  ))}
+                                </>
+                              );
+                            })()}
+                          </svg>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-700 pt-0.5">
+                          <span>Pik Debi: <strong className="text-cyan-800">{peakFlow} m³/s</strong></span>
+                          <span>Süre: <strong className="text-slate-900">{simDuration} Saat</strong></span>
+                        </div>
+                      </div>
+                    ) : (
+                      <label className="flex items-center justify-between gap-2 p-2.5 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <div className="p-1.5 bg-blue-100 text-blue-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
+                            <FileSpreadsheet size={16} />
+                          </div>
+                          <div className="overflow-hidden">
+                            <span className="font-bold text-xs text-slate-800 block truncate">Excel / CSV Hidrograf Yükle</span>
+                            <span className="text-[10px] text-slate-500 block truncate">Saat ve Debi sütunları içeren dosya</span>
+                          </div>
+                        </div>
+                        <span className="px-2 py-1 bg-blue-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
+                          Yükle
+                        </span>
+                        <input type="file" accept=".xlsx,.xls,.csv" onChange={handleHydrographUpload} className="hidden" />
+                      </label>
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <div>
@@ -1077,7 +1451,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Süre (Saat):</label>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Hesap Süresi (Saat):</label>
                     <input
                       type="number"
                       min="1"
@@ -1145,6 +1519,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         <SplitSquareVertical size={13} />
                         <span>Enkesit Profili (X-Z)</span>
                       </button>
+                      {hydrographData.length > 0 && (
+                        <button
+                          onClick={() => setRightPanelTab('hydrograph')}
+                          className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                            rightPanelTab === 'hydrograph'
+                              ? 'bg-cyan-700 text-white shadow-sm'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <TrendingUp size={13} />
+                          <span>Akım Hidrografı</span>
+                        </button>
+                      )}
                     </div>
 
                     {sections.length > 0 && rightPanelTab === 'section' && (
@@ -1199,10 +1586,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   </div>
                 </div>
 
-                {/* Content View: Map or Cross Section Profile */}
+                {/* Content View: Map or Cross Section Profile or Hydrograph */}
                 <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner">
                   {rightPanelTab === 'map' ? (
-                    !isFileOpened && centerlineCoords.length === 0 ? (
+                    !isFileOpened && centerlineCoords.length === 0 && sections.length === 0 ? (
                       /* Empty Blueprint State matching Analysis.tsx */
                       <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-3.5 p-6 text-center bg-slate-100 relative select-none">
                         <div
@@ -1218,20 +1605,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         <div className="space-y-1.5 max-w-sm z-10">
                           <h3 className="text-sm font-bold text-slate-900">1B Hidrodinamik Model Hazır</h3>
                           <p className="text-xs text-slate-600 leading-relaxed">
-                            {demFile && centerlineFile ? (
+                            {demFile ? (
                               <>
-                                DEM ve Nehir Merkez Aksı seçildi. Haritada eksen ve enkesitleri görüntülemek için{' '}
+                                DEM ve Koordinat Sistemi ({selectedCRS.code}) seçildi. Haritada eksen ve enkesitleri görüntülemek için{' '}
                                 <strong className="text-slate-900 font-bold">'Dosyayı Aç'</strong> butonuna basınız.
                               </>
                             ) : (
                               <>
-                                Sol panelden DEM ve Merkez Aks KML dosyalarını yükleyerek nehir güzergahını ve enkesit
+                                Sol panelden DEM, Koordinat Sistemi ve KML dosyalarını yükleyerek nehir güzergahını ve enkesit
                                 hatlarını haritada inceleyebilirsiniz.
                               </>
                             )}
                           </p>
                         </div>
-                        {demFile && centerlineFile && (
+                        {demFile && (
                           <button
                             onClick={() => {
                               setIsFileOpened(true);
@@ -1247,7 +1634,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     ) : (
                       <>
                         <MapContainer
-                          center={centerlineCoords[0] || [39.92, 32.85]}
+                          center={centerlineCoords[0] || (sections[0]?.centerCoord) || [39.92, 32.85]}
                           zoom={13}
                           maxZoom={24}
                           className="w-full h-full"
@@ -1287,14 +1674,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         {/* Bottom Status Bar inside Map */}
                         <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
                           <div className="flex items-center gap-3 text-[10px]">
+                            <span>
+                              <strong className="text-cyan-400">CRS:</strong> {selectedCRS.code}
+                            </span>
                             {centerlineCoords.length > 0 && (
                               <span>
-                                <strong className="text-cyan-400">Merkez Aks:</strong> {centerlineCoords.length} Nokta
+                                <strong className="text-blue-400">Merkez Aks:</strong> {centerlineCoords.length} Nokta
                               </span>
                             )}
                             {sections.length > 0 && (
                               <span>
-                                <strong className="text-emerald-400">Üretilen Enkesit:</strong> {sections.length} Adet (dx: {crossSectionInterval}m)
+                                <strong className="text-emerald-400">Enkesitler:</strong> {sections.length} Adet {crossSectionMode === 'manual' ? '(Manuel KML)' : `(dx: ${crossSectionInterval}m)`}
                               </span>
                             )}
                           </div>
@@ -1306,7 +1696,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </div>
                       </>
                     )
-                  ) : (
+                  ) : rightPanelTab === 'section' ? (
                     /* Cross Section Profile SVG */
                     currentActiveSection ? (
                       <div className="w-full h-full bg-slate-50 p-4 flex flex-col justify-between">
@@ -1354,9 +1744,61 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </div>
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">
-                        Önizleme için önce enkesitleri çıkarın.
+                        Önizleme için önce enkesitleri çıkarın veya manuel KML dosyasını yükleyin.
                       </div>
                     )
+                  ) : (
+                    /* Hydrograph Full Chart View */
+                    <div className="w-full h-full bg-slate-50 p-4 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-800 pb-2 border-b border-slate-200">
+                        <span className="flex items-center gap-1.5 text-cyan-800">
+                          <TrendingUp size={15} />
+                          Dinamik Akım Hidrografı (Zaman Serisi)
+                        </span>
+                        <span className="text-slate-500">
+                          Pik Debi: <strong>{peakFlow} m³/s</strong> | Süre: <strong>{simDuration} Saat</strong>
+                        </span>
+                      </div>
+
+                      <div className="flex-1 w-full my-3 flex items-center justify-center relative">
+                        <svg width="100%" height="100%" viewBox="0 0 700 240" preserveAspectRatio="none" className="w-full h-full">
+                          {(() => {
+                            const maxT = Math.max(...hydrographData.map(d => d.time));
+                            const maxQ = Math.max(...hydrographData.map(d => d.flow));
+
+                            const mapX = (t: number) => 50 + (t / (maxT || 1)) * 620;
+                            const mapY = (q: number) => 210 - (q / (maxQ || 1)) * 180;
+
+                            const polyPoints = `50,210 ` + hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ') + ` ${mapX(maxT)},210`;
+                            const linePoints = hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
+
+                            return (
+                              <>
+                                {/* Grid lines */}
+                                <line x1="50" y1="30" x2="670" y2="30" stroke="#e2e8f0" strokeDasharray="3 3" />
+                                <line x1="50" y1="90" x2="670" y2="90" stroke="#e2e8f0" strokeDasharray="3 3" />
+                                <line x1="50" y1="150" x2="670" y2="150" stroke="#e2e8f0" strokeDasharray="3 3" />
+                                <line x1="50" y1="210" x2="670" y2="210" stroke="#cbd5e1" strokeWidth="1.5" />
+
+                                {/* Flow Area & Line */}
+                                <polygon points={polyPoints} fill="#0284c7" fillOpacity="0.25" />
+                                <polyline points={linePoints} fill="none" stroke="#0284c7" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+
+                                {hydrographData.map((d, idx) => (
+                                  <circle key={idx} cx={mapX(d.time)} cy={mapY(d.flow)} r="4" fill="#0284c7" stroke="#fff" strokeWidth="2" />
+                                ))}
+                              </>
+                            );
+                          })()}
+                        </svg>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-600">
+                        <span>Başlangıç Debisi: {hydrographData[0]?.flow} m³/s</span>
+                        <span className="text-cyan-800 font-bold">Pik Debi: {peakFlow} m³/s</span>
+                        <span>Bitiş Debisi: {hydrographData[hydrographData.length - 1]?.flow} m³/s</span>
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
