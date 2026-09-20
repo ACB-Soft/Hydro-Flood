@@ -1931,6 +1931,42 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             const bRightSvgY = mapZ(bRightZ);
                             const talvegSvgY = mapZ(talvegPt.z);
 
+                            // Calculate thalweg relative offsets and bankfull spill width
+                            const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
+                            const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
+                            const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
+
+                            const spillElevation = Math.min(bLeftZ, bRightZ);
+                            let spillLeftX = sec.bankLeftX;
+                            if (bLeftZ > spillElevation) {
+                              const talvegIdx = sec.profile.indexOf(talvegPt);
+                              for (let k = talvegIdx; k >= 1; k--) {
+                                const p1 = sec.profile[k];
+                                const p2 = sec.profile[k - 1];
+                                if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                  const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                  spillLeftX = p1.x + frac * (p2.x - p1.x);
+                                  break;
+                                }
+                              }
+                            }
+                            let spillRightX = sec.bankRightX;
+                            if (bRightZ > spillElevation) {
+                              const talvegIdx = sec.profile.indexOf(talvegPt);
+                              for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
+                                const p1 = sec.profile[k];
+                                const p2 = sec.profile[k + 1];
+                                if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                  const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                  spillRightX = p1.x + frac * (p2.x - p1.x);
+                                  break;
+                                }
+                              }
+                            }
+                            const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
+                            const spillSvgL = mapX(spillLeftX);
+                            const spillSvgR = mapX(spillRightX);
+                            const spillSvgY = mapZ(spillElevation);
                             const wLeftX = (currentActiveResult.waterLeftX !== undefined && !isNaN(currentActiveResult.waterLeftX))
                               ? currentActiveResult.waterLeftX
                               : minX;
@@ -1973,6 +2009,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   <marker id="resArrowRight" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
                                     <polygon points="0 0, 6 3, 0 6" fill="#0284c7" />
                                   </marker>
+                                  <marker id="spillArrowLeft" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto">
+                                    <polygon points="6 0, 0 3, 6 6" fill="#ea580c" />
+                                  </marker>
+                                  <marker id="spillArrowRight" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
+                                    <polygon points="0 0, 6 3, 0 6" fill="#ea580c" />
+                                  </marker>
                                 </defs>
 
                                 {/* Background Zone Shading */}
@@ -1991,23 +2033,23 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   Sağ Taşkın Yatağı (ROB)
                                 </text>
 
-                                {/* Channel Width Dimension Line */}
+                                {/* 1. Total Channel Width Dimension Line (Toplam Yatak Genişliği) */}
                                 {bRightSvgX - bLeftSvgX > 25 && (
                                   <g>
                                     <line
                                       x1={bLeftSvgX + 4}
-                                      y1={52}
+                                      y1={50}
                                       x2={bRightSvgX - 4}
-                                      y2={52}
+                                      y2={50}
                                       stroke="#0284c7"
                                       strokeWidth="1.5"
                                       markerStart="url(#resArrowLeft)"
                                       markerEnd="url(#resArrowRight)"
                                     />
                                     <rect
-                                      x={(bLeftSvgX + bRightSvgX) / 2 - 45}
-                                      y={44}
-                                      width={90}
+                                      x={(bLeftSvgX + bRightSvgX) / 2 - 55}
+                                      y={42}
+                                      width={110}
                                       height={15}
                                       rx={3}
                                       fill="#ffffff"
@@ -2016,13 +2058,58 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     />
                                     <text
                                       x={(bLeftSvgX + bRightSvgX) / 2}
-                                      y={55}
-                                      fontSize="8.5"
+                                      y={53}
+                                      fontSize="8"
                                       textAnchor="middle"
                                       fill="#0369a1"
                                       fontWeight="bold"
                                     >
-                                      W = {(sec.bankRightX - sec.bankLeftX).toFixed(1)} m
+                                      Toplam Yatak: {totalChannelWidth.toFixed(1)} m
+                                    </text>
+                                  </g>
+                                )}
+
+                                {/* 2. Bankfull Spillway Width Dimension Line (Taşma Genişliği) */}
+                                {spillSvgR - spillSvgL > 25 && (
+                                  <g>
+                                    <line
+                                      x1={spillSvgL}
+                                      y1={spillSvgY}
+                                      x2={spillSvgR}
+                                      y2={spillSvgY}
+                                      stroke="#ea580c"
+                                      strokeWidth="1.8"
+                                      strokeDasharray="4 2"
+                                    />
+                                    <line
+                                      x1={spillSvgL + 4}
+                                      y1={66}
+                                      x2={spillSvgR - 4}
+                                      y2={66}
+                                      stroke="#ea580c"
+                                      strokeWidth="1.3"
+                                      markerStart="url(#spillArrowLeft)"
+                                      markerEnd="url(#spillArrowRight)"
+                                    />
+                                    <rect
+                                      x={(spillSvgL + spillSvgR) / 2 - 58}
+                                      y={58}
+                                      width={116}
+                                      height={15}
+                                      rx={3}
+                                      fill="#fff7ed"
+                                      stroke="#fed7aa"
+                                      strokeWidth="1"
+                                    />
+                                    <text
+                                      x={(spillSvgL + spillSvgR) / 2}
+                                      y={69}
+                                      fontSize="8"
+                                      textAnchor="middle"
+                                      fill="#c2410c"
+                                      fontWeight="bold"
+                                    >
+                                      Taşma Genişliği: {bankfullWidth.toFixed(1)} m (Kot: {spillElevation.toFixed(2)}m)
                                     </text>
                                   </g>
                                 )}
@@ -2031,13 +2118,13 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 <path d={groundPath} fill="url(#groundGradRes)" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
                                 {waterSvg}
 
-                                {/* 1. Sol Şev Üstü (Left Bank Top) Line & Marker */}
+                                {/* 1. Sol Şev Üstü (Left Bank Top) Line & Marker with Talveg Distance */}
                                 <line x1={bLeftSvgX} y1="20" x2={bLeftSvgX} y2="245" stroke="#059669" strokeWidth="2" strokeDasharray="5 3" />
                                 <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
                                 <g transform={`translate(${Math.max(45, bLeftSvgX)}, 20)`}>
-                                  <rect x="-45" y="-12" width="90" height="15" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
-                                  <text x="0" y="-2" fontSize="8.5" textAnchor="middle" fill="#065f46" fontWeight="bold">
-                                    🌿 Sol Şev ({sec.bankLeftX.toFixed(1)}m)
+                                  <rect x="-52" y="-12" width="104" height="15" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
+                                  <text x="0" y="-2" fontSize="8" textAnchor="middle" fill="#065f46" fontWeight="bold">
+                                    🌿 Sol Şev (Talvege -{distLFromTalveg.toFixed(1)}m)
                                   </text>
                                 </g>
 
@@ -2045,19 +2132,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 <line x1={talvegSvgX} y1="25" x2={talvegSvgX} y2="245" stroke="#0284c7" strokeWidth="2" strokeDasharray="6 3" />
                                 <circle cx={talvegSvgX} cy={talvegSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
                                 <g transform={`translate(${Math.max(65, Math.min(635, talvegSvgX))}, 242)`}>
-                                  <rect x="-44" y="-13" width="88" height="15" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
-                                  <text x="0" y="-2" fontSize="8.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                                    🌊 Taban ({talvegPt.z.toFixed(2)}m)
+                                  <rect x="-48" y="-13" width="96" height="15" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
+                                  <text x="0" y="-2" fontSize="8" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                    🌊 Talveg (0.0m | {talvegPt.z.toFixed(2)}m)
                                   </text>
                                 </g>
 
-                                {/* 3. Sağ Şev Üstü (Right Bank Top) Line & Marker */}
+                                {/* 3. Sağ Şev Üstü (Right Bank Top) Line & Marker with Talveg Distance */}
                                 <line x1={bRightSvgX} y1="20" x2={bRightSvgX} y2="245" stroke="#d97706" strokeWidth="2" strokeDasharray="5 3" />
                                 <circle cx={bRightSvgX} cy={bRightSvgY} r="4.5" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
                                 <g transform={`translate(${Math.min(655, bRightSvgX)}, 20)`}>
-                                  <rect x="-45" y="-12" width="90" height="15" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
-                                  <text x="0" y="-2" fontSize="8.5" textAnchor="middle" fill="#92400e" fontWeight="bold">
-                                    🌾 Sağ Şev ({sec.bankRightX.toFixed(1)}m)
+                                  <rect x="-52" y="-12" width="104" height="15" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
+                                  <text x="0" y="-2" fontSize="8" textAnchor="middle" fill="#92400e" fontWeight="bold">
+                                    🌾 Sağ Şev (Talvege +{distRFromTalveg.toFixed(1)}m)
                                   </text>
                                 </g>
 
@@ -3190,26 +3277,34 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </div>
                       </div>
 
-                      {/* İstatistik Göstergeleri */}
-                      <div className="grid grid-cols-3 gap-1 text-center py-0.5">
-                        <div className="bg-white p-1 rounded-lg border border-emerald-200/70">
-                          <span className="text-slate-500 block text-[9px]">Ort. Yatak Genişliği</span>
-                          <span className="font-bold text-emerald-950 text-[11px]">
+                      {/* İstatistik Göstergeleri - Toplam Kanal Genişliği & Taşma Genişliği Ayrık */}
+                      <div className="grid grid-cols-2 gap-1.5 text-center py-0.5">
+                        <div className="bg-white p-1.5 rounded-lg border border-blue-200">
+                          <span className="text-slate-500 block text-[9px] font-medium">Ort. Toplam Kanal Genişliği</span>
+                          <span className="font-bold text-blue-900 text-xs">
                             {bankTopsResult.avgChannelWidth} m
                           </span>
-                        </div>
-                        <div className="bg-white p-1 rounded-lg border border-emerald-200/70">
-                          <span className="text-slate-500 block text-[9px]">Min - Maks Genişlik</span>
-                          <span className="font-bold text-slate-800 text-[10px]">
-                            {bankTopsResult.minChannelWidth} - {bankTopsResult.maxChannelWidth} m
+                          <span className="text-[8px] text-slate-400 block">
+                            (Min: {bankTopsResult.minChannelWidth}m - Maks: {bankTopsResult.maxChannelWidth}m)
                           </span>
                         </div>
-                        <div className="bg-white p-1 rounded-lg border border-emerald-200/70">
-                          <span className="text-slate-500 block text-[9px]">Ort. Şev Yüksekliği</span>
-                          <span className="font-bold text-cyan-900 text-[11px]">
-                            +{bankTopsResult.avgBankHeight} m
+
+                        <div className="bg-white p-1.5 rounded-lg border border-orange-200">
+                          <span className="text-orange-700 block text-[9px] font-medium">Ort. Taşma (Bankfull) Genişliği</span>
+                          <span className="font-bold text-orange-900 text-xs">
+                            {bankTopsResult.avgBankfullWidth ?? bankTopsResult.avgChannelWidth} m
+                          </span>
+                          <span className="text-[8px] text-orange-600/80 block font-medium">
+                            (Alt Şev Kotu Bazlı)
                           </span>
                         </div>
+                      </div>
+
+                      <div className="bg-white px-2 py-1 rounded-lg border border-emerald-200 flex items-center justify-between text-[9px]">
+                        <span className="text-slate-600 font-medium">Ortalama Şev Yüksekliği:</span>
+                        <span className="font-bold text-emerald-800 text-[10px]">
+                          +{bankTopsResult.avgBankHeight} m
+                        </span>
                       </div>
 
                       {/* Sol ve Sağ Sahil Nokta Bilgisi */}
@@ -3318,10 +3413,13 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 onChange={(e) => setBankTopsCorridorWidth(Number(e.target.value))}
                                 className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-800"
                               >
-                                <option value={50}>±25m (Dar Yatak)</option>
-                                <option value={80}>±40m (Standart)</option>
+                                <option value={20}>±10m (Çok Dar Hendek/Kanal)</option>
+                                <option value={30}>±15m (Dar Dere Yatağı)</option>
+                                <option value={40}>±20m (Küçük Yatak)</option>
+                                <option value={50}>±25m (Dar Vadi)</option>
+                                <option value={80}>±40m (Standart Yatak)</option>
                                 <option value={120}>±60m (Geniş Vadi)</option>
-                                <option value={200}>±100m (Geniş Taşkın)</option>
+                                <option value={200}>±100m (Geniş Taşkın Ovası)</option>
                               </select>
                             </div>
 
@@ -4693,6 +4791,43 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               const bRightSvgY = mapZ(bRightZ);
                               const talvegSvgY = mapZ(talvegPt.z);
 
+                              // Calculate thalweg relative offsets and bankfull spill width
+                              const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
+                              const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
+                              const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
+
+                              const spillElevation = Math.min(bLeftZ, bRightZ);
+                              let spillLeftX = sec.bankLeftX;
+                              if (bLeftZ > spillElevation) {
+                                const talvegIdx = sec.profile.indexOf(talvegPt);
+                                for (let k = talvegIdx; k >= 1; k--) {
+                                  const p1 = sec.profile[k];
+                                  const p2 = sec.profile[k - 1];
+                                  if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                    const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                    spillLeftX = p1.x + frac * (p2.x - p1.x);
+                                    break;
+                                  }
+                                }
+                              }
+                              let spillRightX = sec.bankRightX;
+                              if (bRightZ > spillElevation) {
+                                const talvegIdx = sec.profile.indexOf(talvegPt);
+                                for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
+                                  const p1 = sec.profile[k];
+                                  const p2 = sec.profile[k + 1];
+                                  if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                    const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                    spillRightX = p1.x + frac * (p2.x - p1.x);
+                                    break;
+                                  }
+                                }
+                              }
+                              const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
+                              const spillSvgL = mapX(spillLeftX);
+                              const spillSvgR = mapX(spillRightX);
+                              const spillSvgY = mapZ(spillElevation);
+
                               return (
                                 <>
                                   <defs>
@@ -4705,6 +4840,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     </marker>
                                     <marker id="arrowRPanel" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
                                       <polygon points="0 0, 6 3, 0 6" fill="#0284c7" />
+                                    </marker>
+                                    <marker id="spillArrowLPanel" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto">
+                                      <polygon points="6 0, 0 3, 6 6" fill="#ea580c" />
+                                    </marker>
+                                    <marker id="spillArrowRPanel" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
+                                      <polygon points="0 0, 6 3, 0 6" fill="#ea580c" />
                                     </marker>
                                   </defs>
 
@@ -4724,23 +4865,23 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     Sağ Taşkın Yt. (ROB)
                                   </text>
 
-                                  {/* Channel Width Dimension */}
+                                  {/* 1. Total Channel Width Dimension */}
                                   {bRightSvgX - bLeftSvgX > 25 && (
                                     <g>
                                       <line
                                         x1={bLeftSvgX + 4}
-                                        y1={48}
+                                        y1={46}
                                         x2={bRightSvgX - 4}
-                                        y2={48}
+                                        y2={46}
                                         stroke="#0284c7"
                                         strokeWidth="1.2"
                                         markerStart="url(#arrowLPanel)"
                                         markerEnd="url(#arrowRPanel)"
                                       />
                                       <rect
-                                        x={(bLeftSvgX + bRightSvgX) / 2 - 42}
-                                        y={41}
-                                        width={84}
+                                        x={(bLeftSvgX + bRightSvgX) / 2 - 50}
+                                        y={39}
+                                        width={100}
                                         height={14}
                                         rx={3}
                                         fill="#ffffff"
@@ -4749,13 +4890,58 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                       />
                                       <text
                                         x={(bLeftSvgX + bRightSvgX) / 2}
-                                        y={51}
-                                        fontSize="8"
+                                        y={49}
+                                        fontSize="7.5"
                                         textAnchor="middle"
                                         fill="#0369a1"
                                         fontWeight="bold"
                                       >
-                                        W = {(sec.bankRightX - sec.bankLeftX).toFixed(1)} m
+                                        Toplam Yatak: {totalChannelWidth.toFixed(1)} m
+                                      </text>
+                                    </g>
+                                  )}
+
+                                  {/* 2. Bankfull Spillway Width Dimension */}
+                                  {spillSvgR - spillSvgL > 25 && (
+                                    <g>
+                                      <line
+                                        x1={spillSvgL}
+                                        y1={spillSvgY}
+                                        x2={spillSvgR}
+                                        y2={spillSvgY}
+                                        stroke="#ea580c"
+                                        strokeWidth="1.5"
+                                        strokeDasharray="4 2"
+                                      />
+                                      <line
+                                        x1={spillSvgL + 4}
+                                        y1={60}
+                                        x2={spillSvgR - 4}
+                                        y2={60}
+                                        stroke="#ea580c"
+                                        strokeWidth="1.1"
+                                        markerStart="url(#spillArrowLPanel)"
+                                        markerEnd="url(#spillArrowRPanel)"
+                                      />
+                                      <rect
+                                        x={(spillSvgL + spillSvgR) / 2 - 52}
+                                        y={53}
+                                        width={104}
+                                        height={14}
+                                        rx={3}
+                                        fill="#fff7ed"
+                                        stroke="#fed7aa"
+                                        strokeWidth="1"
+                                      />
+                                      <text
+                                        x={(spillSvgL + spillSvgR) / 2}
+                                        y={63}
+                                        fontSize="7.5"
+                                        textAnchor="middle"
+                                        fill="#c2410c"
+                                        fontWeight="bold"
+                                      >
+                                        Taşma Genişliği: {bankfullWidth.toFixed(1)} m
                                       </text>
                                     </g>
                                   )}
@@ -4767,9 +4953,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   <line x1={bLeftSvgX} y1="18" x2={bLeftSvgX} y2="220" stroke="#059669" strokeWidth="2" strokeDasharray="4 3" />
                                   <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
                                   <g transform={`translate(${Math.max(45, bLeftSvgX)}, 16)`}>
-                                    <rect x="-42" y="-11" width="84" height="14" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
-                                    <text x="0" y="-1" fontSize="8" textAnchor="middle" fill="#065f46" fontWeight="bold">
-                                      🌿 Sol Şev ({sec.bankLeftX.toFixed(1)}m)
+                                    <rect x="-48" y="-11" width="96" height="14" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
+                                    <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#065f46" fontWeight="bold">
+                                      🌿 Sol (Talvege -{distLFromTalveg.toFixed(1)}m)
                                     </text>
                                   </g>
 
@@ -4777,9 +4963,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   <line x1={talvegSvgX} y1="20" x2={talvegSvgX} y2="220" stroke="#0284c7" strokeWidth="1.8" strokeDasharray="5 3" />
                                   <circle cx={talvegSvgX} cy={talvegSvgY} r="4.5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="1.8" />
                                   <g transform={`translate(${Math.max(65, Math.min(635, talvegSvgX))}, 216)`}>
-                                    <rect x="-40" y="-11" width="80" height="13" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
-                                    <text x="0" y="-1.5" fontSize="7.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                                      🌊 Taban ({talvegPt.z.toFixed(2)}m)
+                                    <rect x="-44" y="-11" width="88" height="13" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
+                                    <text x="0" y="-1.5" fontSize="7" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                      🌊 Talveg ({talvegPt.z.toFixed(2)}m)
                                     </text>
                                   </g>
 
@@ -4787,9 +4973,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   <line x1={bRightSvgX} y1="18" x2={bRightSvgX} y2="220" stroke="#d97706" strokeWidth="2" strokeDasharray="4 3" />
                                   <circle cx={bRightSvgX} cy={bRightSvgY} r="4.5" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
                                   <g transform={`translate(${Math.min(655, bRightSvgX)}, 16)`}>
-                                    <rect x="-42" y="-11" width="84" height="14" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
-                                    <text x="0" y="-1" fontSize="8" textAnchor="middle" fill="#92400e" fontWeight="bold">
-                                      🌾 Sağ Şev ({sec.bankRightX.toFixed(1)}m)
+                                    <rect x="-48" y="-11" width="96" height="14" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
+                                    <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#92400e" fontWeight="bold">
+                                      🌾 Sağ (Talvege +{distRFromTalveg.toFixed(1)}m)
                                     </text>
                                   </g>
 

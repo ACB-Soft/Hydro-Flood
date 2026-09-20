@@ -708,6 +708,42 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                     const bRightSvgY = mapZ(bRightZ);
                     const talvegSvgY = mapZ(talvegPt.z);
 
+                    const distLFromTalveg = Math.abs(talvegPt.x - bLeft);
+                    const distRFromTalveg = Math.abs(bRight - talvegPt.x);
+                    const totalChannelWidth = Math.abs(bRight - bLeft);
+
+                    const spillElevation = Math.min(bLeftZ, bRightZ);
+                    let spillLeftX = bLeft;
+                    if (bLeftZ > spillElevation) {
+                      const talvegIdx = profile.indexOf(talvegPt);
+                      for (let k = talvegIdx; k >= 1; k--) {
+                        const p1 = profile[k];
+                        const p2 = profile[k - 1];
+                        if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                          const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                          spillLeftX = p1.x + frac * (p2.x - p1.x);
+                          break;
+                        }
+                      }
+                    }
+                    let spillRightX = bRight;
+                    if (bRightZ > spillElevation) {
+                      const talvegIdx = profile.indexOf(talvegPt);
+                      for (let k = talvegIdx; k < profile.length - 1; k++) {
+                        const p1 = profile[k];
+                        const p2 = profile[k + 1];
+                        if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                          const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                          spillRightX = p1.x + frac * (p2.x - p1.x);
+                          break;
+                        }
+                      }
+                    }
+                    const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
+                    const spillSvgL = mapX(spillLeftX);
+                    const spillSvgR = mapX(spillRightX);
+                    const spillSvgY = mapZ(spillElevation);
+
                     const groundPath =
                       `M 30 195 ` +
                       profile.map((p) => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') +
@@ -733,6 +769,28 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                         <rect x={bLeftSvgX} y={15} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={180} fill="#ecfeff" fillOpacity="0.5" />
                         <rect x={bRightSvgX} y={15} width={Math.max(0, 470 - bRightSvgX)} height={180} fill="#fffbeb" fillOpacity="0.4" />
 
+                        {/* Total Channel Width Dimension */}
+                        {bRightSvgX - bLeftSvgX > 20 && (
+                          <g>
+                            <line x1={bLeftSvgX} y1={36} x2={bRightSvgX} y2={36} stroke="#0284c7" strokeWidth="1.2" />
+                            <rect x={(bLeftSvgX + bRightSvgX) / 2 - 40} y={29} width={80} height={13} rx={2} fill="#ffffff" stroke="#bae6fd" strokeWidth="1" />
+                            <text x={(bLeftSvgX + bRightSvgX) / 2} y={38} fontSize="7" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                              Toplam Yatak: {totalChannelWidth.toFixed(1)}m
+                            </text>
+                          </g>
+                        )}
+
+                        {/* Bankfull Spill Line */}
+                        {spillSvgR - spillSvgL > 20 && (
+                          <g>
+                            <line x1={spillSvgL} y1={spillSvgY} x2={spillSvgR} y2={spillSvgY} stroke="#ea580c" strokeWidth="1.4" strokeDasharray="3 2" />
+                            <rect x={(spillSvgL + spillSvgR) / 2 - 45} y={44} width={90} height={13} rx={2} fill="#fff7ed" stroke="#fed7aa" strokeWidth="1" />
+                            <text x={(spillSvgL + spillSvgR) / 2} y={53} fontSize="7" textAnchor="middle" fill="#c2410c" fontWeight="bold">
+                              Taşma: {bankfullWidth.toFixed(1)}m
+                            </text>
+                          </g>
+                        )}
+
                         <path
                           d={groundPath}
                           fill="url(#groundGradModal)"
@@ -753,9 +811,9 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                         />
                         <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
                         <g transform={`translate(${Math.max(35, bLeftSvgX)}, 14)`}>
-                          <rect x="-35" y="-10" width="70" height="13" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
-                          <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#065f46" fontWeight="bold">
-                            🌿 Sol ({bLeft.toFixed(1)}m)
+                          <rect x="-40" y="-10" width="80" height="13" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
+                          <text x="0" y="-1" fontSize="7" textAnchor="middle" fill="#065f46" fontWeight="bold">
+                            🌿 Sol (-{distLFromTalveg.toFixed(1)}m)
                           </text>
                         </g>
 
@@ -773,7 +831,7 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                         <g transform={`translate(${Math.max(50, Math.min(450, talvegSvgX))}, 192)`}>
                           <rect x="-35" y="-10" width="70" height="12" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
                           <text x="0" y="-1" fontSize="7" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                            🌊 Taban ({talvegPt.z.toFixed(2)}m)
+                            🌊 Talveg ({talvegPt.z.toFixed(2)}m)
                           </text>
                         </g>
 
@@ -789,9 +847,9 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                         />
                         <circle cx={bRightSvgX} cy={bRightSvgY} r="4" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
                         <g transform={`translate(${Math.min(465, bRightSvgX)}, 14)`}>
-                          <rect x="-35" y="-10" width="70" height="13" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
-                          <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#92400e" fontWeight="bold">
-                            🌾 Sağ ({bRight.toFixed(1)}m)
+                          <rect x="-40" y="-10" width="80" height="13" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
+                          <text x="0" y="-1" fontSize="7" textAnchor="middle" fill="#92400e" fontWeight="bold">
+                            🌾 Sağ (+{distRFromTalveg.toFixed(1)}m)
                           </text>
                         </g>
                       </svg>

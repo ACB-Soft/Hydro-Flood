@@ -717,6 +717,9 @@ export interface BankTopsDetectionResult {
   avgChannelWidth: number;              // Average top width in meters
   minChannelWidth: number;              // Minimum top width in meters
   maxChannelWidth: number;              // Maximum top width in meters
+  avgBankfullWidth?: number;            // Average spillway / bankfull width in meters
+  minBankfullWidth?: number;            // Minimum bankfull width in meters
+  maxBankfullWidth?: number;            // Maximum bankfull width in meters
   avgBankHeight: number;                // Average bank height above bed in meters
   pointsSampled: number;
   method: string;
@@ -736,7 +739,13 @@ export function detectBankStationsFromProfile(
   talvegZ: number;
   bankLeftZ: number;
   bankRightZ: number;
-  channelWidth: number;
+  channelWidth: number;          // Total bank-to-bank width (W_total = distLeftFromTalveg + distRightFromTalveg)
+  distLeftFromTalveg: number;    // Distance from Thalweg to Left Bank
+  distRightFromTalveg: number;   // Distance from Thalweg to Right Bank
+  spillElevation: number;        // Lower bank elevation (Z_min_bank)
+  bankfullWidth: number;         // Horizontal width at lower bank elevation (Taşma Genişliği)
+  spillLeftX: number;            // Left intersection station at spill elevation
+  spillRightX: number;           // Right intersection station at spill elevation
 } {
   const n = profilePoints.length;
   if (n < 3) {
@@ -749,7 +758,13 @@ export function detectBankStationsFromProfile(
       talvegZ: defaultZ,
       bankLeftZ: defaultZ,
       bankRightZ: defaultZ,
-      channelWidth: 0
+      channelWidth: 0,
+      distLeftFromTalveg: 0,
+      distRightFromTalveg: 0,
+      spillElevation: defaultZ,
+      bankfullWidth: 0,
+      spillLeftX: defaultX,
+      spillRightX: defaultX
     };
   }
 
@@ -889,8 +904,62 @@ export function detectBankStationsFromProfile(
     bankRightX = Math.min(maxX - 0.5, talvegX + 5);
   }
 
-  const bankLeftZ = profilePoints.find(p => Math.abs(p.x - bankLeftX) < 1.0)?.z ?? talvegZ + 1.0;
-  const bankRightZ = profilePoints.find(p => Math.abs(p.x - bankRightX) < 1.0)?.z ?? talvegZ + 1.0;
+  // Elevation helper for precise cross-profile interpolation
+  const getElevAt = (xVal: number) => {
+    if (xVal <= profilePoints[0].x) return profilePoints[0].z;
+    if (xVal >= profilePoints[n - 1].x) return profilePoints[n - 1].z;
+    for (let k = 0; k < n - 1; k++) {
+      const p1 = profilePoints[k];
+      const p2 = profilePoints[k + 1];
+      if (xVal >= p1.x && xVal <= p2.x) {
+        const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+        return p1.z + frac * (p2.z - p1.z);
+      }
+    }
+    return talvegZ;
+  };
+
+  const bankLeftZ = getElevAt(bankLeftX);
+  const bankRightZ = getElevAt(bankRightX);
+
+  // Distances relative to the Thalweg (Yatak Tabanı / Dere Ekseni)
+  const distLeftFromTalveg = Number(Math.abs(talvegX - bankLeftX).toFixed(2));
+  const distRightFromTalveg = Number(Math.abs(bankRightX - talvegX).toFixed(2));
+  const totalChannelWidth = Number((bankRightX - bankLeftX).toFixed(2));
+
+  // Spillway / Bankfull analysis:
+  // The lower of the two bank elevations defines the spill initiation level (Z_spill = min(Z_left, Z_right))
+  const spillElevation = Math.min(bankLeftZ, bankRightZ);
+  
+  // Find intersection on left side with spill elevation (from talveg moving left)
+  let spillLeftX = bankLeftX;
+  if (bankLeftZ > spillElevation) {
+    for (let k = minIdx; k >= 1; k--) {
+      const p1 = profilePoints[k];
+      const p2 = profilePoints[k - 1];
+      if (p1.z <= spillElevation && p2.z >= spillElevation) {
+        const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+        spillLeftX = p1.x + frac * (p2.x - p1.x);
+        break;
+      }
+    }
+  }
+
+  // Find intersection on right side with spill elevation (from talveg moving right)
+  let spillRightX = bankRightX;
+  if (bankRightZ > spillElevation) {
+    for (let k = minIdx; k < n - 1; k++) {
+      const p1 = profilePoints[k];
+      const p2 = profilePoints[k + 1];
+      if (p1.z <= spillElevation && p2.z >= spillElevation) {
+        const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+        spillRightX = p1.x + frac * (p2.x - p1.x);
+        break;
+      }
+    }
+  }
+
+  const bankfullWidth = Number(Math.max(0.5, spillRightX - spillLeftX).toFixed(2));
 
   return {
     bankLeftX: Number(bankLeftX.toFixed(2)),
@@ -899,7 +968,13 @@ export function detectBankStationsFromProfile(
     talvegZ: Number(talvegZ.toFixed(2)),
     bankLeftZ: Number(bankLeftZ.toFixed(2)),
     bankRightZ: Number(bankRightZ.toFixed(2)),
-    channelWidth: Number((bankRightX - bankLeftX).toFixed(2))
+    channelWidth: totalChannelWidth,
+    distLeftFromTalveg,
+    distRightFromTalveg,
+    spillElevation: Number(spillElevation.toFixed(2)),
+    bankfullWidth,
+    spillLeftX: Number(spillLeftX.toFixed(2)),
+    spillRightX: Number(spillRightX.toFixed(2))
   };
 }
 
@@ -995,6 +1070,7 @@ export async function detectBankTopsFromDEM(
   const rawLeftPoints: { coord: [number, number]; offset: number; height: number; distAlong: number }[] = [];
   const rawRightPoints: { coord: [number, number]; offset: number; height: number; distAlong: number }[] = [];
   const channelWidths: number[] = [];
+  const bankfullWidths: number[] = [];
   const bankHeights: number[] = [];
 
   const actualStep = Math.max(5, sampleInterval);
@@ -1087,6 +1163,7 @@ export async function detectBankTopsFromDEM(
     });
 
     channelWidths.push(width);
+    bankfullWidths.push(detected.bankfullWidth);
     bankHeights.push(Math.max(0.1, avgH));
   }
 
@@ -1120,6 +1197,9 @@ export async function detectBankTopsFromDEM(
   const avgWidth = channelWidths.length > 0 ? channelWidths.reduce((a, b) => a + b, 0) / channelWidths.length : 15;
   const minWidth = channelWidths.length > 0 ? Math.min(...channelWidths) : 10;
   const maxWidth = channelWidths.length > 0 ? Math.max(...channelWidths) : 25;
+  const avgBankfull = bankfullWidths.length > 0 ? bankfullWidths.reduce((a, b) => a + b, 0) / bankfullWidths.length : avgWidth;
+  const minBankfull = bankfullWidths.length > 0 ? Math.min(...bankfullWidths) : minWidth;
+  const maxBankfull = bankfullWidths.length > 0 ? Math.max(...bankfullWidths) : maxWidth;
   const avgHeight = bankHeights.length > 0 ? bankHeights.reduce((a, b) => a + b, 0) / bankHeights.length : 1.5;
 
   return {
@@ -1128,6 +1208,9 @@ export async function detectBankTopsFromDEM(
     avgChannelWidth: Number(avgWidth.toFixed(2)),
     minChannelWidth: Number(minWidth.toFixed(2)),
     maxChannelWidth: Number(maxWidth.toFixed(2)),
+    avgBankfullWidth: Number(avgBankfull.toFixed(2)),
+    minBankfullWidth: Number(minBankfull.toFixed(2)),
+    maxBankfullWidth: Number(maxBankfull.toFixed(2)),
     avgBankHeight: Number(avgHeight.toFixed(2)),
     pointsSampled: rawLeftPoints.length,
     method: `DEM şev eğimi ve bükeylik (curvature) analizi (±${halfCorridor}m koridor) ile otomatik tespit edildi.`
