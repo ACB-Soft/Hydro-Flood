@@ -623,7 +623,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
     setIsExtracting(true);
     try {
-      let data = await generateCrossSections(
+      const result = await generateCrossSections(
         demFile,
         centerlineFile,
         banksFile,
@@ -634,36 +634,46 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         autoDeconflictSections,
         maxAngleAdjustment
       );
+      let data = result.sections;
+      let deletedData = result.deletedSections || [];
+
       if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
         data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
+        if (deletedData.length > 0) {
+          deletedData = calibrateSectionsWithBankLines(deletedData, leftBankCoords, rightBankCoords);
+        }
       }
       setSections(data);
       setOriginalSections(data);
-      setDeletedSectionsList([]);
+      setDeletedSectionsList(deletedData);
       setSelectedSectionIdx(0);
       setIsFileOpened(true);
 
-      const check = checkCrossSectionIntersections(data);
-      if (check.hasIntersections) {
-        setDeconflictReport({
-          initialCollisions: check.totalIntersections,
-          angleAdjustedCount: data.filter(s => s.angleAdjustment).length,
-          trimmedCount: 0,
-          remainingCollisions: check.totalIntersections,
-          summary: `${check.totalIntersections} adet kesişme noktası mevcut.`
-        });
+      if (result.report) {
+        setDeconflictReport(result.report);
       } else {
-        const adjusted = data.filter(s => s.angleAdjustment).length;
-        if (adjusted > 0) {
+        const check = checkCrossSectionIntersections(data);
+        if (check.hasIntersections) {
           setDeconflictReport({
-            initialCollisions: adjusted,
-            angleAdjustedCount: adjusted,
+            initialCollisions: check.totalIntersections,
+            angleAdjustedCount: data.filter(s => s.angleAdjustment).length,
             trimmedCount: 0,
-            remainingCollisions: 0,
-            summary: `Tüm kesişmeler giderildi (${adjusted} kesite ±${maxAngleAdjustment}° açı düzeltmesi uygulandı, kesit boyları orijinal genişliklerinde korundu).`
+            remainingCollisions: check.totalIntersections,
+            summary: `${check.totalIntersections} adet kesişme noktası mevcut.`
           });
         } else {
-          setDeconflictReport(null);
+          const adjusted = data.filter(s => s.angleAdjustment).length;
+          if (adjusted > 0) {
+            setDeconflictReport({
+              initialCollisions: adjusted,
+              angleAdjustedCount: adjusted,
+              trimmedCount: 0,
+              remainingCollisions: 0,
+              summary: `Tüm kesişmeler giderildi (${adjusted} kesite ±${maxAngleAdjustment}° açı düzeltmesi uygulandı, kesit boyları orijinal genişliklerinde korundu).`
+            });
+          } else {
+            setDeconflictReport(null);
+          }
         }
       }
 

@@ -1366,7 +1366,7 @@ export async function generateCrossSections(
   crsDef?: string,
   autoDeconflict: boolean = true,
   maxAngleAdjustment: number = 10
-): Promise<CrossSection[]> {
+): Promise<{ sections: CrossSection[]; deletedSections: CrossSection[]; report?: DeconflictReport }> {
   const dem = await loadDEM(demFile);
   const centerline = await parseKML(centerlineFile);
   
@@ -1396,12 +1396,19 @@ export async function generateCrossSections(
     });
   }
 
-  // 2. If auto-deconflict is enabled, resolve intersections (±10° angle adjustment, then length trim)
-  if (autoDeconflict && drafts.length > 1) {
-    runDeconflictEngine(drafts, maxAngleAdjustment);
+  // Keep a copy of initial drafts to sample any auto-deleted sections so they can be viewed/restored in the UI
+  const initialDraftsMap = new Map<number, InternalSectionDraft>();
+  for (const draft of drafts) {
+    initialDraftsMap.set(draft.station, { ...draft });
   }
 
-  // 3. Sample DEM elevations along final cut-lines
+  // 2. If auto-deconflict is enabled, resolve intersections (±10° angle adjustment, then fallback deletion)
+  let report: DeconflictReport | undefined;
+  if (autoDeconflict && drafts.length > 1) {
+    report = runDeconflictEngine(drafts, maxAngleAdjustment);
+  }
+
+  // 3. Sample DEM elevations along final active cut-lines
   const sections: CrossSection[] = [];
 
   for (const draft of drafts) {
@@ -1429,7 +1436,37 @@ export async function generateCrossSections(
     });
   }
 
-  // 4. Mark remaining intersections if any
+  // 4. Sample DEM elevations for any auto-deleted sections so they appear in CrossSectionManagerModal & map
+  const deletedSections: CrossSection[] = [];
+  if (report?.deletedStations && report.deletedStations.length > 0) {
+    for (const delStation of report.deletedStations) {
+      const draft = initialDraftsMap.get(delStation);
+      if (draft) {
+        const sampled = sampleCrossSectionProfile(
+          dem,
+          draft.pt,
+          draft.bearing,
+          0, // original 0° angle
+          draft.leftLength,
+          draft.rightLength,
+          crsDef,
+          2
+        );
+        deletedSections.push({
+          station: draft.station,
+          profile: sampled.profile,
+          centerCoord: draft.centerCoord,
+          cutLine: sampled.cutLine,
+          minElevation: sampled.minElevation,
+          maxElevation: sampled.maxElevation,
+          bankLeftX: sampled.bankLeftX,
+          bankRightX: sampled.bankRightX
+        });
+      }
+    }
+  }
+
+  // 5. Mark remaining intersections if any
   const check = checkCrossSectionIntersections(sections);
   if (check.hasIntersections) {
     for (const idx of check.intersectingIndices) {
@@ -1437,7 +1474,7 @@ export async function generateCrossSections(
     }
   }
   
-  return sections;
+  return { sections, deletedSections, report };
 }
 
 /**
