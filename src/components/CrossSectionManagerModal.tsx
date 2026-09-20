@@ -669,8 +669,27 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                     const rangeX = maxX - minX || 1;
                     const rangeZ = maxZ - minZ || 1;
 
-                    const mapX = (x: number) => 25 + ((x - minX) / rangeX) * 450;
-                    const mapZ = (z: number) => 195 - ((z - minZ) / rangeZ) * 165;
+                    const mapX = (x: number) => 30 + ((x - minX) / rangeX) * 440;
+                    const mapZ = (z: number) => 195 - ((z - minZ) / rangeZ) * 155;
+
+                    const getElevAt = (xVal: number) => {
+                      if (xVal <= profile[0].x) return profile[0].z;
+                      if (xVal >= profile[profile.length - 1].x) return profile[profile.length - 1].z;
+                      for (let k = 0; k < profile.length - 1; k++) {
+                        const p1 = profile[k];
+                        const p2 = profile[k + 1];
+                        if (xVal >= p1.x && xVal <= p2.x) {
+                          const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+                          return p1.z + frac * (p2.z - p1.z);
+                        }
+                      }
+                      return minZ;
+                    };
+
+                    let talvegPt = profile[0];
+                    for (const pt of profile) {
+                      if (pt.z < talvegPt.z) talvegPt = pt;
+                    }
 
                     const bLeft = sec.bankLeftX != null && !isNaN(sec.bankLeftX)
                       ? sec.bankLeftX
@@ -679,10 +698,20 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                       ? sec.bankRightX
                       : minX + rangeX * 0.7;
 
+                    const bLeftZ = getElevAt(bLeft);
+                    const bRightZ = getElevAt(bRight);
+
+                    const bLeftSvgX = mapX(bLeft);
+                    const bRightSvgX = mapX(bRight);
+                    const talvegSvgX = mapX(talvegPt.x);
+                    const bLeftSvgY = mapZ(bLeftZ);
+                    const bRightSvgY = mapZ(bRightZ);
+                    const talvegSvgY = mapZ(talvegPt.z);
+
                     const groundPath =
-                      `M 25 195 ` +
+                      `M 30 195 ` +
                       profile.map((p) => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') +
-                      ` L 475 195 Z`;
+                      ` L 470 195 Z`;
 
                     return (
                       <svg
@@ -692,59 +721,79 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                         preserveAspectRatio="none"
                         className="w-full h-full"
                       >
+                        <defs>
+                          <linearGradient id="groundGradModal" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.9" />
+                            <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0.7" />
+                          </linearGradient>
+                        </defs>
+
+                        {/* Zone shading */}
+                        <rect x={30} y={15} width={Math.max(0, bLeftSvgX - 30)} height={180} fill="#f0fdf4" fillOpacity="0.4" />
+                        <rect x={bLeftSvgX} y={15} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={180} fill="#ecfeff" fillOpacity="0.5" />
+                        <rect x={bRightSvgX} y={15} width={Math.max(0, 470 - bRightSvgX)} height={180} fill="#fffbeb" fillOpacity="0.4" />
+
                         <path
                           d={groundPath}
-                          fill="#f8fafc"
+                          fill="url(#groundGradModal)"
                           stroke="#0f172a"
                           strokeWidth="2.5"
                           strokeLinejoin="round"
                         />
+
+                        {/* 1. Sol Şev Üstü */}
                         <line
-                          x1={mapX(bLeft)}
-                          y1="25"
-                          x2={mapX(bLeft)}
+                          x1={bLeftSvgX}
+                          y1="15"
+                          x2={bLeftSvgX}
                           y2="195"
-                          stroke="#ef4444"
-                          strokeWidth="1.5"
+                          stroke="#059669"
+                          strokeWidth="1.8"
                           strokeDasharray="4 3"
                         />
+                        <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
+                        <g transform={`translate(${Math.max(35, bLeftSvgX)}, 14)`}>
+                          <rect x="-35" y="-10" width="70" height="13" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
+                          <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#065f46" fontWeight="bold">
+                            🌿 Sol ({bLeft.toFixed(1)}m)
+                          </text>
+                        </g>
+
+                        {/* 2. Dere Ekseni / Taban */}
                         <line
-                          x1={mapX(bRight)}
-                          y1="25"
-                          x2={mapX(bRight)}
+                          x1={talvegSvgX}
+                          y1="18"
+                          x2={talvegSvgX}
                           y2="195"
-                          stroke="#ef4444"
-                          strokeWidth="1.5"
+                          stroke="#0284c7"
+                          strokeWidth="1.8"
+                          strokeDasharray="5 3"
+                        />
+                        <circle cx={talvegSvgX} cy={talvegSvgY} r="4.5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="1.5" />
+                        <g transform={`translate(${Math.max(50, Math.min(450, talvegSvgX))}, 192)`}>
+                          <rect x="-35" y="-10" width="70" height="12" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
+                          <text x="0" y="-1" fontSize="7" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                            🌊 Taban ({talvegPt.z.toFixed(2)}m)
+                          </text>
+                        </g>
+
+                        {/* 3. Sağ Şev Üstü */}
+                        <line
+                          x1={bRightSvgX}
+                          y1="15"
+                          x2={bRightSvgX}
+                          y2="195"
+                          stroke="#d97706"
+                          strokeWidth="1.8"
                           strokeDasharray="4 3"
                         />
-                        <text
-                          x={Math.max(10, mapX(bLeft) - 15)}
-                          y="20"
-                          fontSize="9"
-                          fill="#64748b"
-                          fontWeight="bold"
-                        >
-                          Sol
-                        </text>
-                        <text
-                          x={mapX((bLeft + bRight) / 2)}
-                          y="20"
-                          fontSize="9"
-                          textAnchor="middle"
-                          fill="#0284c7"
-                          fontWeight="bold"
-                        >
-                          Ana Yatak
-                        </text>
-                        <text
-                          x={Math.min(480, mapX(bRight) + 15)}
-                          y="20"
-                          fontSize="9"
-                          fill="#64748b"
-                          fontWeight="bold"
-                        >
-                          Sağ
-                        </text>
+                        <circle cx={bRightSvgX} cy={bRightSvgY} r="4" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
+                        <g transform={`translate(${Math.min(465, bRightSvgX)}, 14)`}>
+                          <rect x="-35" y="-10" width="70" height="13" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
+                          <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#92400e" fontWeight="bold">
+                            🌾 Sağ ({bRight.toFixed(1)}m)
+                          </text>
+                        </g>
                       </svg>
                     );
                   })()}

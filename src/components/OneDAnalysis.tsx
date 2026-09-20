@@ -60,6 +60,8 @@ import {
   detectBankTopsFromDEM,
   BankTopsDetectionResult,
   bankCoordsToKMLFile,
+  extractBankLinesFromSections,
+  detectBankStationsFromProfile,
   BankLineItem,
   BankLinesParseResult,
   CrossSection, 
@@ -503,6 +505,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         setSections(calibrated);
         setOriginalSections(calibrated);
       }
+      if (deletedSectionsList.length > 0) {
+        const calDeleted = calibrateSectionsWithBankLines(deletedSectionsList, result.leftBankCoords, result.rightBankCoords);
+        setDeletedSectionsList(calDeleted);
+      }
     } catch (err: any) {
       console.error("DEM Şev Üstü Tespiti Hatası:", err);
       alert("DEM verisinden dere şev üstleri tespit edilirken hata oluştu: " + (err.message || err));
@@ -558,8 +564,21 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
           // Calibrate with bank lines if available
           if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
             data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
+          } else {
+            const extracted = extractBankLinesFromSections(data);
+            setLeftBankCoords(extracted.leftBankCoords);
+            setRightBankCoords(extracted.rightBankCoords);
+            setBankCoords(extracted.leftBankCoords);
+            setBankLinesInfo({
+              leftName: 'Sol Şev Üstü (Manuel)',
+              rightName: 'Sağ Şev Üstü (Manuel)',
+              totalLines: 2,
+              totalPoints: extracted.leftBankCoords.length + extracted.rightBankCoords.length
+            });
           }
           setSections(data);
+          setOriginalSections(data);
+          setDeletedSectionsList([]);
           setSelectedSectionIdx(0);
           setIsFileOpened(true);
 
@@ -595,6 +614,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         let data = await parseManualCrossSections(demFile, manualKmlFile, selectedCRS.def);
         if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
           data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
+        } else {
+          const extracted = extractBankLinesFromSections(data);
+          setLeftBankCoords(extracted.leftBankCoords);
+          setRightBankCoords(extracted.rightBankCoords);
+          setBankCoords(extracted.leftBankCoords);
+          setBankLinesInfo({
+            leftName: 'Sol Şev Üstü (Manuel)',
+            rightName: 'Sağ Şev Üstü (Manuel)',
+            totalLines: 2,
+            totalPoints: extracted.leftBankCoords.length + extracted.rightBankCoords.length
+          });
         }
         setSections(data);
         setOriginalSections(data);
@@ -642,6 +672,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         if (deletedData.length > 0) {
           deletedData = calibrateSectionsWithBankLines(deletedData, leftBankCoords, rightBankCoords);
         }
+      } else {
+        const extracted = extractBankLinesFromSections(data);
+        setLeftBankCoords(extracted.leftBankCoords);
+        setRightBankCoords(extracted.rightBankCoords);
+        setBankCoords(extracted.leftBankCoords);
+        setBankLinesInfo({
+          leftName: 'Sol Şev Üstü (Otomatik)',
+          rightName: 'Sağ Şev Üstü (Otomatik)',
+          totalLines: 2,
+          totalPoints: extracted.leftBankCoords.length + extracted.rightBankCoords.length
+        });
       }
       setSections(data);
       setOriginalSections(data);
@@ -1854,10 +1895,41 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             const minZ = sec.minElevation;
                             const maxZ = Math.max(sec.maxElevation, wl + 1, matchedStruct ? matchedStruct.roadElevation + 0.5 : 0);
 
-                            const mapX = (x: number) => 30 + ((x - minX) / (maxX - minX || 1)) * 640;
-                            const mapZ = (z: number) => 250 - ((z - minZ) / (maxZ - minZ || 1)) * 200;
+                            const mapX = (x: number) => 35 + ((x - minX) / (maxX - minX || 1)) * 630;
+                            const mapZ = (z: number) => 245 - ((z - minZ) / (maxZ - minZ || 1)) * 190;
 
-                            const groundPath = `M 30 250 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 670 250 Z`;
+                            const groundPath = `M 35 245 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 665 245 Z`;
+
+                            // Interpolate elevation helper
+                            const getElevAt = (xVal: number) => {
+                              if (xVal <= sec.profile[0].x) return sec.profile[0].z;
+                              if (xVal >= sec.profile[sec.profile.length - 1].x) return sec.profile[sec.profile.length - 1].z;
+                              for (let k = 0; k < sec.profile.length - 1; k++) {
+                                const p1 = sec.profile[k];
+                                const p2 = sec.profile[k + 1];
+                                if (xVal >= p1.x && xVal <= p2.x) {
+                                  const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+                                  return p1.z + frac * (p2.z - p1.z);
+                                }
+                              }
+                              return minZ;
+                            };
+
+                            // Identify Thalweg Point
+                            let talvegPt = sec.profile[0];
+                            for (const pt of sec.profile) {
+                              if (pt.z < talvegPt.z) talvegPt = pt;
+                            }
+
+                            const bLeftZ = getElevAt(sec.bankLeftX);
+                            const bRightZ = getElevAt(sec.bankRightX);
+
+                            const bLeftSvgX = mapX(sec.bankLeftX);
+                            const bRightSvgX = mapX(sec.bankRightX);
+                            const talvegSvgX = mapX(talvegPt.x);
+                            const bLeftSvgY = mapZ(bLeftZ);
+                            const bRightSvgY = mapZ(bRightZ);
+                            const talvegSvgY = mapZ(talvegPt.z);
 
                             const wLeftX = (currentActiveResult.waterLeftX !== undefined && !isNaN(currentActiveResult.waterLeftX))
                               ? currentActiveResult.waterLeftX
@@ -1878,23 +1950,116 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 ` L ${lastWetX} ${waterTopY} Z`;
 
                               waterSvg = (
-                                <>
+                                <g>
                                   <path d={waterPath} fill={currentActiveResult.isOverbank ? "#ef4444" : "#0284c7"} fillOpacity="0.4" />
                                   <line x1={firstWetX} y1={waterTopY} x2={lastWetX} y2={waterTopY} stroke={currentActiveResult.isOverbank ? "#dc2626" : "#0284c7"} strokeWidth="2.5" />
-                                </>
+                                  <text x={Math.min(650, lastWetX - 5)} y={waterTopY - 5} fontSize="9" textAnchor="end" fill={currentActiveResult.isOverbank ? "#b91c1c" : "#0369a1"} fontWeight="bold">
+                                    Su Yüzeyi: {wl.toFixed(2)}m (h={currentActiveResult.maxDepth.toFixed(2)}m)
+                                  </text>
+                                </g>
                               );
                             }
 
                             return (
                               <>
-                                <path d={groundPath} fill="#f1f5f9" stroke="#334155" strokeWidth="2" strokeLinejoin="round" />
-                                {waterSvg}
-                                <line x1={mapX(sec.bankLeftX)} y1="40" x2={mapX(sec.bankLeftX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
-                                <line x1={mapX(sec.bankRightX)} y1="40" x2={mapX(sec.bankRightX)} y2="250" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
+                                <defs>
+                                  <linearGradient id="groundGradRes" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.9" />
+                                    <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0.7" />
+                                  </linearGradient>
+                                  <marker id="resArrowLeft" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto">
+                                    <polygon points="6 0, 0 3, 6 6" fill="#0284c7" />
+                                  </marker>
+                                  <marker id="resArrowRight" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
+                                    <polygon points="0 0, 6 3, 0 6" fill="#0284c7" />
+                                  </marker>
+                                </defs>
 
-                                <text x={mapX(sec.bankLeftX) - 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sol Taşkın Yt.</text>
-                                <text x={mapX((sec.bankLeftX + sec.bankRightX) / 2)} y="35" fontSize="10" textAnchor="middle" fill="#0284c7" fontWeight="bold">Ana Kanal</text>
-                                <text x={mapX(sec.bankRightX) + 30} y="35" fontSize="10" fill="#64748b" fontWeight="bold">Sağ Taşkın Yt.</text>
+                                {/* Background Zone Shading */}
+                                <rect x={35} y={25} width={Math.max(0, bLeftSvgX - 35)} height={220} fill="#f0fdf4" fillOpacity="0.35" />
+                                <rect x={bLeftSvgX} y={25} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={220} fill="#ecfeff" fillOpacity="0.5" />
+                                <rect x={bRightSvgX} y={25} width={Math.max(0, 665 - bRightSvgX)} height={220} fill="#fffbeb" fillOpacity="0.35" />
+
+                                {/* Zone Labels */}
+                                <text x={(35 + bLeftSvgX) / 2} y={38} fontSize="9.5" textAnchor="middle" fill="#047857" fontWeight="bold">
+                                  Sol Taşkın Yatağı (LOB)
+                                </text>
+                                <text x={(bLeftSvgX + bRightSvgX) / 2} y={38} fontSize="10" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                  Ana Yatak (Kanal)
+                                </text>
+                                <text x={(bRightSvgX + 665) / 2} y={38} fontSize="9.5" textAnchor="middle" fill="#b45309" fontWeight="bold">
+                                  Sağ Taşkın Yatağı (ROB)
+                                </text>
+
+                                {/* Channel Width Dimension Line */}
+                                {bRightSvgX - bLeftSvgX > 25 && (
+                                  <g>
+                                    <line
+                                      x1={bLeftSvgX + 4}
+                                      y1={52}
+                                      x2={bRightSvgX - 4}
+                                      y2={52}
+                                      stroke="#0284c7"
+                                      strokeWidth="1.5"
+                                      markerStart="url(#resArrowLeft)"
+                                      markerEnd="url(#resArrowRight)"
+                                    />
+                                    <rect
+                                      x={(bLeftSvgX + bRightSvgX) / 2 - 45}
+                                      y={44}
+                                      width={90}
+                                      height={15}
+                                      rx={3}
+                                      fill="#ffffff"
+                                      stroke="#bae6fd"
+                                      strokeWidth="1"
+                                    />
+                                    <text
+                                      x={(bLeftSvgX + bRightSvgX) / 2}
+                                      y={55}
+                                      fontSize="8.5"
+                                      textAnchor="middle"
+                                      fill="#0369a1"
+                                      fontWeight="bold"
+                                    >
+                                      W = {(sec.bankRightX - sec.bankLeftX).toFixed(1)} m
+                                    </text>
+                                  </g>
+                                )}
+
+                                {/* Ground Polyline */}
+                                <path d={groundPath} fill="url(#groundGradRes)" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
+                                {waterSvg}
+
+                                {/* 1. Sol Şev Üstü (Left Bank Top) Line & Marker */}
+                                <line x1={bLeftSvgX} y1="20" x2={bLeftSvgX} y2="245" stroke="#059669" strokeWidth="2" strokeDasharray="5 3" />
+                                <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
+                                <g transform={`translate(${Math.max(45, bLeftSvgX)}, 20)`}>
+                                  <rect x="-45" y="-12" width="90" height="15" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
+                                  <text x="0" y="-2" fontSize="8.5" textAnchor="middle" fill="#065f46" fontWeight="bold">
+                                    🌿 Sol Şev ({sec.bankLeftX.toFixed(1)}m)
+                                  </text>
+                                </g>
+
+                                {/* 2. Dere Ekseni / Taban (Thalweg & Centerline) Axis Line & Marker */}
+                                <line x1={talvegSvgX} y1="25" x2={talvegSvgX} y2="245" stroke="#0284c7" strokeWidth="2" strokeDasharray="6 3" />
+                                <circle cx={talvegSvgX} cy={talvegSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
+                                <g transform={`translate(${Math.max(65, Math.min(635, talvegSvgX))}, 242)`}>
+                                  <rect x="-44" y="-13" width="88" height="15" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
+                                  <text x="0" y="-2" fontSize="8.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                    🌊 Taban ({talvegPt.z.toFixed(2)}m)
+                                  </text>
+                                </g>
+
+                                {/* 3. Sağ Şev Üstü (Right Bank Top) Line & Marker */}
+                                <line x1={bRightSvgX} y1="20" x2={bRightSvgX} y2="245" stroke="#d97706" strokeWidth="2" strokeDasharray="5 3" />
+                                <circle cx={bRightSvgX} cy={bRightSvgY} r="4.5" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
+                                <g transform={`translate(${Math.min(655, bRightSvgX)}, 20)`}>
+                                  <rect x="-45" y="-12" width="90" height="15" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
+                                  <text x="0" y="-2" fontSize="8.5" textAnchor="middle" fill="#92400e" fontWeight="bold">
+                                    🌾 Sağ Şev ({sec.bankRightX.toFixed(1)}m)
+                                  </text>
+                                </g>
 
                                 {/* Render Bridge / Culvert Superstructure if present */}
                                 {matchedStruct && (() => {
@@ -4482,8 +4647,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           </div>
                         </div>
 
-                        <div className="flex-1 w-full my-2 flex items-center justify-center">
-                          <svg width="100%" height="100%" viewBox="0 0 700 240" preserveAspectRatio="none" className="w-full h-full">
+                        <div className="flex-1 w-full my-2 flex items-center justify-center bg-white border border-slate-200 rounded-xl p-2 relative overflow-hidden shadow-inner">
+                          <svg width="100%" height="100%" viewBox="0 0 700 250" preserveAspectRatio="none" className="w-full h-full">
                             {(() => {
                               const sec = currentActiveSection;
                               const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - sec.station) < 50);
@@ -4494,16 +4659,139 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               const minZ = sec.minElevation;
                               const maxZ = structTopZ + 2;
 
-                              const mapX = (x: number) => 30 + ((x - minX) / (maxX - minX || 1)) * 640;
-                              const mapZ = (z: number) => 220 - ((z - minZ) / (maxZ - minZ || 1)) * 180;
+                              const mapX = (x: number) => 35 + ((x - minX) / (maxX - minX || 1)) * 630;
+                              const mapZ = (z: number) => 220 - ((z - minZ) / (maxZ - minZ || 1)) * 165;
 
-                              const groundPath = `M 30 220 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 670 220 Z`;
+                              const groundPath = `M 35 220 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 665 220 Z`;
+
+                              const getElevAt = (xVal: number) => {
+                                if (xVal <= sec.profile[0].x) return sec.profile[0].z;
+                                if (xVal >= sec.profile[sec.profile.length - 1].x) return sec.profile[sec.profile.length - 1].z;
+                                for (let k = 0; k < sec.profile.length - 1; k++) {
+                                  const p1 = sec.profile[k];
+                                  const p2 = sec.profile[k + 1];
+                                  if (xVal >= p1.x && xVal <= p2.x) {
+                                    const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+                                    return p1.z + frac * (p2.z - p1.z);
+                                  }
+                                }
+                                return minZ;
+                              };
+
+                              let talvegPt = sec.profile[0];
+                              for (const pt of sec.profile) {
+                                if (pt.z < talvegPt.z) talvegPt = pt;
+                              }
+
+                              const bLeftZ = getElevAt(sec.bankLeftX);
+                              const bRightZ = getElevAt(sec.bankRightX);
+
+                              const bLeftSvgX = mapX(sec.bankLeftX);
+                              const bRightSvgX = mapX(sec.bankRightX);
+                              const talvegSvgX = mapX(talvegPt.x);
+                              const bLeftSvgY = mapZ(bLeftZ);
+                              const bRightSvgY = mapZ(bRightZ);
+                              const talvegSvgY = mapZ(talvegPt.z);
 
                               return (
                                 <>
-                                  <path d={groundPath} fill="#f1f5f9" stroke="#334155" strokeWidth="2.5" />
-                                  <line x1={mapX(sec.bankLeftX)} y1="20" x2={mapX(sec.bankLeftX)} y2="220" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
-                                  <line x1={mapX(sec.bankRightX)} y1="20" x2={mapX(sec.bankRightX)} y2="220" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
+                                  <defs>
+                                    <linearGradient id="groundGradPanel" x1="0" y1="0" x2="0" y2="1">
+                                      <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.9" />
+                                      <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0.7" />
+                                    </linearGradient>
+                                    <marker id="arrowLPanel" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto">
+                                      <polygon points="6 0, 0 3, 6 6" fill="#0284c7" />
+                                    </marker>
+                                    <marker id="arrowRPanel" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
+                                      <polygon points="0 0, 6 3, 0 6" fill="#0284c7" />
+                                    </marker>
+                                  </defs>
+
+                                  {/* Shaded Flow Zones */}
+                                  <rect x={35} y={20} width={Math.max(0, bLeftSvgX - 35)} height={200} fill="#f0fdf4" fillOpacity="0.35" />
+                                  <rect x={bLeftSvgX} y={20} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={200} fill="#ecfeff" fillOpacity="0.5" />
+                                  <rect x={bRightSvgX} y={20} width={Math.max(0, 665 - bRightSvgX)} height={200} fill="#fffbeb" fillOpacity="0.35" />
+
+                                  {/* Zone Titles */}
+                                  <text x={(35 + bLeftSvgX) / 2} y={34} fontSize="9" textAnchor="middle" fill="#047857" fontWeight="bold">
+                                    Sol Taşkın Yt. (LOB)
+                                  </text>
+                                  <text x={(bLeftSvgX + bRightSvgX) / 2} y={34} fontSize="9.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                    Ana Kanal
+                                  </text>
+                                  <text x={(bRightSvgX + 665) / 2} y={34} fontSize="9" textAnchor="middle" fill="#b45309" fontWeight="bold">
+                                    Sağ Taşkın Yt. (ROB)
+                                  </text>
+
+                                  {/* Channel Width Dimension */}
+                                  {bRightSvgX - bLeftSvgX > 25 && (
+                                    <g>
+                                      <line
+                                        x1={bLeftSvgX + 4}
+                                        y1={48}
+                                        x2={bRightSvgX - 4}
+                                        y2={48}
+                                        stroke="#0284c7"
+                                        strokeWidth="1.2"
+                                        markerStart="url(#arrowLPanel)"
+                                        markerEnd="url(#arrowRPanel)"
+                                      />
+                                      <rect
+                                        x={(bLeftSvgX + bRightSvgX) / 2 - 42}
+                                        y={41}
+                                        width={84}
+                                        height={14}
+                                        rx={3}
+                                        fill="#ffffff"
+                                        stroke="#bae6fd"
+                                        strokeWidth="1"
+                                      />
+                                      <text
+                                        x={(bLeftSvgX + bRightSvgX) / 2}
+                                        y={51}
+                                        fontSize="8"
+                                        textAnchor="middle"
+                                        fill="#0369a1"
+                                        fontWeight="bold"
+                                      >
+                                        W = {(sec.bankRightX - sec.bankLeftX).toFixed(1)} m
+                                      </text>
+                                    </g>
+                                  )}
+
+                                  {/* Ground Line */}
+                                  <path d={groundPath} fill="url(#groundGradPanel)" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
+
+                                  {/* 1. Sol Şev Üstü */}
+                                  <line x1={bLeftSvgX} y1="18" x2={bLeftSvgX} y2="220" stroke="#059669" strokeWidth="2" strokeDasharray="4 3" />
+                                  <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
+                                  <g transform={`translate(${Math.max(45, bLeftSvgX)}, 16)`}>
+                                    <rect x="-42" y="-11" width="84" height="14" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
+                                    <text x="0" y="-1" fontSize="8" textAnchor="middle" fill="#065f46" fontWeight="bold">
+                                      🌿 Sol Şev ({sec.bankLeftX.toFixed(1)}m)
+                                    </text>
+                                  </g>
+
+                                  {/* 2. Dere Ekseni / Taban */}
+                                  <line x1={talvegSvgX} y1="20" x2={talvegSvgX} y2="220" stroke="#0284c7" strokeWidth="1.8" strokeDasharray="5 3" />
+                                  <circle cx={talvegSvgX} cy={talvegSvgY} r="4.5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="1.8" />
+                                  <g transform={`translate(${Math.max(65, Math.min(635, talvegSvgX))}, 216)`}>
+                                    <rect x="-40" y="-11" width="80" height="13" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
+                                    <text x="0" y="-1.5" fontSize="7.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                      🌊 Taban ({talvegPt.z.toFixed(2)}m)
+                                    </text>
+                                  </g>
+
+                                  {/* 3. Sağ Şev Üstü */}
+                                  <line x1={bRightSvgX} y1="18" x2={bRightSvgX} y2="220" stroke="#d97706" strokeWidth="2" strokeDasharray="4 3" />
+                                  <circle cx={bRightSvgX} cy={bRightSvgY} r="4.5" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
+                                  <g transform={`translate(${Math.min(655, bRightSvgX)}, 16)`}>
+                                    <rect x="-42" y="-11" width="84" height="14" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
+                                    <text x="0" y="-1" fontSize="8" textAnchor="middle" fill="#92400e" fontWeight="bold">
+                                      🌾 Sağ Şev ({sec.bankRightX.toFixed(1)}m)
+                                    </text>
+                                  </g>
 
                                   {/* Structure Superstructure Overlay if at section */}
                                   {matchingStruct && (
@@ -4533,10 +4821,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                       </text>
                                     </g>
                                   )}
-
-                                  <text x={mapX(sec.bankLeftX) - 25} y="18" fontSize="10" fill="#64748b" fontWeight="bold">Sol Kıyı</text>
-                                  <text x={mapX((sec.bankLeftX + sec.bankRightX) / 2)} y="18" fontSize="10" textAnchor="middle" fill="#0284c7" fontWeight="bold">Ana Yatak</text>
-                                  <text x={mapX(sec.bankRightX) + 25} y="18" fontSize="10" fill="#64748b" fontWeight="bold">Sağ Kıyı</text>
                                 </>
                               );
                             })()}
