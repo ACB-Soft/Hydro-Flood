@@ -1148,6 +1148,8 @@ export interface DeconflictReport {
   initialCollisions: number;
   angleAdjustedCount: number;
   trimmedCount: number;
+  deletedCount?: number;
+  deletedStations?: number[];
   remainingCollisions: number;
   summary: string;
 }
@@ -1266,14 +1268,61 @@ function runDeconflictEngine(
     }
   }
 
-  // Count adjusted sections
+  // Count adjusted sections after rotational pass
   for (let i = 0; i < drafts.length; i++) {
     if (drafts[i].angleOffset !== 0) {
       angleAdjustedCount++;
     }
   }
 
-  // Count remaining collisions after rotational deconfliction
+  // Fallback deconfliction logic:
+  // "Açı düzeltmesine rağmen kesişen enkesitler varsa önce çizilen enkesiti koru sonraki enkesiti sil.
+  // Önceki enkesiti ise orijinal açısına (0°) geri getir."
+  const deletedStations: number[] = [];
+  let hasIntersections = true;
+  let safetyLoop = 0;
+
+  while (hasIntersections && drafts.length > 1 && safetyLoop < 500) {
+    safetyLoop++;
+    hasIntersections = false;
+
+    for (let i = 0; i < drafts.length; i++) {
+      const maxN = Math.min(drafts.length, i + 6);
+      let foundPairIdx = -1;
+
+      for (let j = i + 1; j < maxN; j++) {
+        if (checkDraftsIntersection(drafts[i], drafts[j])) {
+          foundPairIdx = j;
+          break;
+        }
+      }
+
+      if (foundPairIdx !== -1) {
+        hasIntersections = true;
+        // 1. Önce çizilen kesitin (i) açısını orijinal açısına (0° normal) geri getir
+        drafts[i].angleOffset = 0;
+
+        // 2. Kesişen sonraki kesiti (foundPairIdx) sil
+        const deletedDraft = drafts.splice(foundPairIdx, 1)[0];
+        if (deletedDraft) {
+          deletedStations.push(deletedDraft.station);
+        }
+
+        // Listeden silme yapıldığı için indekslerin kaymaması adına döngüyü baştan kontrol et
+        break;
+      }
+    }
+  }
+
+  // Recalculate adjusted count after fallback restorations
+  angleAdjustedCount = 0;
+  for (let i = 0; i < drafts.length; i++) {
+    if (drafts[i].angleOffset !== 0) {
+      angleAdjustedCount++;
+    }
+  }
+
+  // Count final remaining collisions
   let remainingCollisions = 0;
   for (let i = 0; i < drafts.length; i++) {
     const maxN = Math.min(drafts.length, i + 5);
@@ -1284,15 +1333,24 @@ function runDeconflictEngine(
     }
   }
 
-  const resolved = Math.max(0, initialCollisions - remainingCollisions);
-  const summary = remainingCollisions === 0
-    ? `Kesişen ${initialCollisions} adet enkesit, sadece açı düzeltmesiyle (maks ±${maxAngleAdjustment}°) başarıyla giderildi. Kesit boyları orijinal genişliklerinde korundu.`
-    : `${initialCollisions} adet kesişmeden ${resolved} adedi açı düzeltmesiyle (maks ±${maxAngleAdjustment}°) giderildi. ${remainingCollisions} kesişim haritada işaretlendi.`;
+  const deletedCount = deletedStations.length;
+  let summary = "";
+  if (remainingCollisions === 0) {
+    if (deletedCount === 0) {
+      summary = `Kesişen ${initialCollisions} adet enkesit, sadece açı düzeltmesiyle (maks ±${maxAngleAdjustment}°) başarıyla giderildi. Kesit boyları orijinal genişliklerinde korundu.`;
+    } else {
+      summary = `Açı düzeltmesine rağmen kesişen ${deletedCount} adet sonraki enkesit silindi, önceki enkesitler orijinal açısına geri getirilerek tüm çakışmalar başarıyla çözüldü (${angleAdjustedCount} kesitte açı düzeltmesi korundu).`;
+    }
+  } else {
+    summary = `${initialCollisions} adet kesişmeden ${initialCollisions - remainingCollisions} adedi çözüldü (${deletedCount} kesit silindi). ${remainingCollisions} kesişim haritada işaretlendi.`;
+  }
 
   return {
     initialCollisions,
     angleAdjustedCount,
     trimmedCount: 0,
+    deletedCount,
+    deletedStations,
     remainingCollisions,
     summary
   };

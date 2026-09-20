@@ -647,20 +647,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         setDeconflictReport({
           initialCollisions: check.totalIntersections,
           angleAdjustedCount: data.filter(s => s.angleAdjustment).length,
-          trimmedCount: data.filter(s => s.isTrimmed).length,
+          trimmedCount: 0,
           remainingCollisions: check.totalIntersections,
           summary: `${check.totalIntersections} adet kesişme noktası mevcut.`
         });
       } else {
         const adjusted = data.filter(s => s.angleAdjustment).length;
-        const trimmed = data.filter(s => s.isTrimmed).length;
-        if (adjusted > 0 || trimmed > 0) {
+        if (adjusted > 0) {
           setDeconflictReport({
-            initialCollisions: adjusted + trimmed,
+            initialCollisions: adjusted,
             angleAdjustedCount: adjusted,
-            trimmedCount: trimmed,
+            trimmedCount: 0,
             remainingCollisions: 0,
-            summary: `Tüm kesişmeler giderildi (${adjusted} kesite ±10° açı düzeltmesi, ${trimmed} kesite boy kısaltma uygulandı).`
+            summary: `Tüm kesişmeler giderildi (${adjusted} kesite ±${maxAngleAdjustment}° açı düzeltmesi uygulandı, kesit boyları orijinal genişliklerinde korundu).`
           });
         } else {
           setDeconflictReport(null);
@@ -699,9 +698,32 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         selectedCRS?.def,
         maxAngleAdjustment
       );
+
+      // If any sections were deleted by fallback logic, track them in deletedSectionsList
+      if (report.deletedStations && report.deletedStations.length > 0) {
+        const deletedSet = new Set(report.deletedStations);
+        const removedFromCurrent = sections.filter(s => deletedSet.has(s.station));
+        if (removedFromCurrent.length > 0) {
+          setDeletedSectionsList(prev => [
+            ...removedFromCurrent,
+            ...prev.filter(d => !deletedSet.has(d.station))
+          ]);
+        }
+      }
+
       setSections(resolvedSections);
       setOriginalSections(resolvedSections);
       setDeconflictReport(report);
+
+      if (selectedSectionIdx >= resolvedSections.length) {
+        setSelectedSectionIdx(Math.max(0, resolvedSections.length - 1));
+      }
+
+      if (resolvedSections.length >= 2) {
+        const slopeCalc = calculateDownstreamSlopeFromDEM(resolvedSections);
+        setDownstreamSlope(slopeCalc.slope);
+        setSlopeCalculationInfo(slopeCalc);
+      }
     } catch (err: any) {
       console.error(err);
       alert("Kesişme düzeltme sırasında hata oluştu: " + err.message);
