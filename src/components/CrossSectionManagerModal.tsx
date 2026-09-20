@@ -76,6 +76,7 @@ interface CrossSectionManagerModalProps {
   onRestoreAll: () => void;
   selectedSectionIdx: number;
   onSelectSection: (index: number) => void;
+  onUpdateBankTops?: (station: number, bankLeftX: number, bankRightX: number) => void;
 }
 
 // Format utilities with null / NaN checks
@@ -101,7 +102,8 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
   onRestoreSection,
   onRestoreAll,
   selectedSectionIdx,
-  onSelectSection
+  onSelectSection,
+  onUpdateBankTops
 }) => {
   const [activeTab, setActiveTab] = useState<'active' | 'deleted'>('active');
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -871,17 +873,35 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                       {fmtNum(focusedSection.maxElevation)} m
                     </span>
                   </div>
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <span className="text-slate-500 block">Sol Bank İstasyonu:</span>
-                    <span className="font-bold text-slate-800 text-xs">
-                      {fmtNum(focusedSection.bankLeftX, 1)} m
-                    </span>
+                  <div className="bg-emerald-50/80 p-2 rounded-lg border border-emerald-300">
+                    <span className="text-emerald-900 font-bold block mb-1">🌿 Sol Şev Üstü Offset (m):</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={focusedSection.bankLeftX}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val) && onUpdateBankTops) {
+                          onUpdateBankTops(focusedSection.station, val, focusedSection.bankRightX);
+                        }
+                      }}
+                      className="w-full bg-white border border-emerald-400 rounded px-2 py-1 text-xs font-bold text-emerald-900 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-2xs"
+                    />
                   </div>
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <span className="text-slate-500 block">Sağ Bank İstasyonu:</span>
-                    <span className="font-bold text-slate-800 text-xs">
-                      {fmtNum(focusedSection.bankRightX, 1)} m
-                    </span>
+                  <div className="bg-amber-50/80 p-2 rounded-lg border border-amber-300">
+                    <span className="text-amber-900 font-bold block mb-1">🌾 Sağ Şev Üstü Offset (m):</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={focusedSection.bankRightX}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val) && onUpdateBankTops) {
+                          onUpdateBankTops(focusedSection.station, focusedSection.bankLeftX, val);
+                        }
+                      }}
+                      className="w-full bg-white border border-amber-400 rounded px-2 py-1 text-xs font-bold text-amber-900 focus:outline-none focus:ring-1 focus:ring-amber-600 shadow-2xs"
+                    />
                   </div>
                 </div>
               </div>

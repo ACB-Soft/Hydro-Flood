@@ -187,6 +187,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isDetectingBankTops, setIsDetectingBankTops] = useState<boolean>(false);
   const [bankTopsResult, setBankTopsResult] = useState<BankTopsDetectionResult | null>(null);
   const [bankTopsCorridorWidth, setBankTopsCorridorWidth] = useState<number>(80);
+  const [bankEditSectionIdx, setBankEditSectionIdx] = useState<number>(0);
+  const [bankSaveMessage, setBankSaveMessage] = useState<string | null>(null);
 
   // Manning Library Modal State
   const [isManningModalOpen, setIsManningModalOpen] = useState<boolean>(false);
@@ -533,6 +535,37 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  // Update bank tops for a specific station or index and refresh bank lines
+  const handleUpdateSectionBankTops = (stationOrIndex: number, newBankLeftX: number, newBankRightX: number) => {
+    setSections(prevSections => {
+      const updated = prevSections.map((sec, idx) => {
+        if (sec.station === stationOrIndex || idx === stationOrIndex) {
+          const validLeftX = Math.min(newBankLeftX, newBankRightX - 0.5);
+          const validRightX = Math.max(newBankRightX, newBankLeftX + 0.5);
+          return {
+            ...sec,
+            bankLeftX: validLeftX,
+            bankRightX: validRightX
+          };
+        }
+        return sec;
+      });
+
+      setOriginalSections(updated);
+
+      // Re-extract bank coordinates along section cut lines
+      const extracted = extractBankLinesFromSections(updated);
+      setLeftBankCoords(extracted.leftBankCoords);
+      setRightBankCoords(extracted.rightBankCoords);
+      setBankCoords(extracted.leftBankCoords);
+
+      return updated;
+    });
+
+    setBankSaveMessage("Şev üstü konumları başarıyla kaydedildi ve haritada güncellendi.");
+    setTimeout(() => setBankSaveMessage(null), 3000);
   };
 
   // Manual Trigger: Compute Downstream Slope from DEM Cross-Sections
@@ -2955,12 +2988,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
               }`}
             >
-              {/* 1. TOPOGRAFYA VE KOORDİNAT SİSTEMİ (CRS) */}
-              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
+              {/* 1. DEM SEÇİMİ */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <FileText size={14} className="text-cyan-700" />
-                    <span>1. Topografya & Koordinat Sistemi</span>
+                    <span>1. Dem Seçimi</span>
                   </h2>
                   {demFile && (
                     <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-0.5">
@@ -2972,9 +3005,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                 {/* DEM File Input */}
                 <div>
-                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                    Topografya Dosyası (DEM):
-                  </label>
                   {demFile ? (
                     <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex items-center justify-between gap-2">
                       <div className="space-y-0.5 overflow-hidden">
@@ -3020,12 +3050,21 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     </label>
                   )}
                 </div>
+              </section>
 
-                {/* DEM Koordinat Sistemi (CRS) Seçimi - Identical to Statik Taşkın */}
+              {/* 2. KOORDİNAT SİSTEMİ SEÇİMİ */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2 shrink-0">
+                <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
+                  <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Compass size={14} className="text-cyan-700" />
+                    <span>2. Koordinat Sistemi Seçimi</span>
+                  </h2>
+                  <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">
+                    {selectedCRS.code}
+                  </span>
+                </div>
+
                 <div>
-                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                    Koordinat Sistemi (CRS):
-                  </label>
                   <div className="relative">
                     <select
                       value={selectedCRS.code}
@@ -3072,6 +3111,22 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </optgroup>
                     </select>
                   </div>
+                </div>
+              </section>
+
+              {/* 3. DERE EKSENİ SEÇİMİ */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2 shrink-0">
+                <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
+                  <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <SplitSquareVertical size={14} className="text-cyan-700" />
+                    <span>3. Dere Ekseni Seçimi</span>
+                  </h2>
+                  {centerlineFile && (
+                    <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-0.5">
+                      <CheckCircle2 size={10} />
+                      {centerlineCoords.length} Nokta
+                    </span>
+                  )}
                 </div>
 
                 {/* River Centerline KML Input */}
@@ -3233,233 +3288,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     </label>
                   )}
                 </div>
-
-                {/* Bank Stations & Automatic Bank Tops Detection */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-slate-700 block">
-                      Dere Şev Üstleri / Kıyı Hatları:
-                    </label>
-                    {demFile && (centerlineFile || centerlineCoords.length > 0) && (
-                      <span className="text-[9px] text-cyan-800 font-bold bg-cyan-100 px-1.5 py-0.2 rounded">
-                        DEM Otomatik Tespiti Destekleniyor
-                      </span>
-                    )}
-                  </div>
-
-                  {/* 1. DEM ile Otomatik Tespit Sonucu Kartı */}
-                  {bankTopsResult ? (
-                    <div className="bg-emerald-50/80 border border-emerald-300/80 p-2.5 rounded-xl space-y-2 shadow-2xs">
-                      <div className="flex items-center justify-between gap-2 border-b border-emerald-200/60 pb-1.5">
-                        <div className="flex items-center gap-1.5 overflow-hidden">
-                          <div className="p-1 bg-emerald-600 text-white rounded-md shrink-0">
-                            <Sparkles size={11} />
-                          </div>
-                          <div className="overflow-hidden">
-                            <span className="font-bold text-slate-900 text-xs truncate block">
-                              DEM Otomatik Şev Üstü Tespiti
-                            </span>
-                            <span className="text-[9px] text-emerald-800 font-medium truncate block">
-                              {bankTopsResult.pointsSampled} kesitte şev kırığı analiz edildi
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={handleDownloadBankTopsKML}
-                            className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-md text-[9px] font-bold cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
-                            title="Tespit edilen şev üstü çizgilerini KML olarak indir"
-                          >
-                            <Download size={10} />
-                            <span>KML İndir</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* İstatistik Göstergeleri - Toplam Kanal Genişliği & Taşma Genişliği Ayrık */}
-                      <div className="grid grid-cols-2 gap-1.5 text-center py-0.5">
-                        <div className="bg-white p-1.5 rounded-lg border border-blue-200">
-                          <span className="text-slate-500 block text-[9px] font-medium">Ort. Toplam Kanal Genişliği</span>
-                          <span className="font-bold text-blue-900 text-xs">
-                            {bankTopsResult.avgChannelWidth} m
-                          </span>
-                          <span className="text-[8px] text-slate-400 block">
-                            (Min: {bankTopsResult.minChannelWidth}m - Maks: {bankTopsResult.maxChannelWidth}m)
-                          </span>
-                        </div>
-
-                        <div className="bg-white p-1.5 rounded-lg border border-orange-200">
-                          <span className="text-orange-700 block text-[9px] font-medium">Ort. Taşma (Bankfull) Genişliği</span>
-                          <span className="font-bold text-orange-900 text-xs">
-                            {bankTopsResult.avgBankfullWidth ?? bankTopsResult.avgChannelWidth} m
-                          </span>
-                          <span className="text-[8px] text-orange-600/80 block font-medium">
-                            (Alt Şev Kotu Bazlı)
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="bg-white px-2 py-1 rounded-lg border border-emerald-200 flex items-center justify-between text-[9px]">
-                        <span className="text-slate-600 font-medium">Ortalama Şev Yüksekliği:</span>
-                        <span className="font-bold text-emerald-800 text-[10px]">
-                          +{bankTopsResult.avgBankHeight} m
-                        </span>
-                      </div>
-
-                      {/* Sol ve Sağ Sahil Nokta Bilgisi */}
-                      <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-emerald-200">
-                          <span className="font-bold text-emerald-800">🌿 Sol Şev Üstü</span>
-                          <span className="font-bold text-emerald-700">{leftBankCoords.length} nokta</span>
-                        </div>
-                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-amber-200">
-                          <span className="font-bold text-amber-800">🌾 Sağ Şev Üstü</span>
-                          <span className="font-bold text-amber-700">{rightBankCoords.length} nokta</span>
-                        </div>
-                      </div>
-
-                      {/* Alt Aksiyon Butonları */}
-                      <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 gap-1.5">
-                        <button
-                          type="button"
-                          onClick={handleSwapBankLines}
-                          className="text-[10px] text-slate-700 hover:text-slate-900 font-bold bg-white hover:bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 flex items-center gap-1 cursor-pointer transition-all shadow-2xs"
-                          title="Sol ve sağ kıyı atamalarını yer değiştir"
-                        >
-                          <ArrowUpDown size={10} />
-                          <span>Sol ⇄ Sağ Değiştir</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDetectBankTops(bankTopsCorridorWidth)}
-                          disabled={isDetectingBankTops}
-                          className="text-[10px] text-emerald-900 hover:text-emerald-950 font-bold bg-emerald-200/60 hover:bg-emerald-200 px-2 py-1 rounded-lg border border-emerald-300 flex items-center gap-1 cursor-pointer transition-all"
-                        >
-                          <RefreshCw size={10} className={isDetectingBankTops ? 'animate-spin' : ''} />
-                          <span>{isDetectingBankTops ? 'Taranıyor...' : 'Yeniden Tara'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  ) : banksFile ? (
-                    /* 2. Manuel KML ile Yüklenmiş Kıyı Hatları */
-                    <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="space-y-0.5 overflow-hidden">
-                          <div className="flex items-center gap-1.5">
-                            <CheckCircle2 size={13} className="text-amber-600 shrink-0" />
-                            <span className="font-bold text-slate-900 text-xs truncate">{banksFile.name}</span>
-                          </div>
-                          <p className="text-[10px] text-amber-700 truncate">
-                            {bankLinesInfo?.totalLines || 0} Hat ({bankLinesInfo?.totalPoints || 0} Koordinat)
-                          </p>
-                        </div>
-                        <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shrink-0 transition-all shadow-xs">
-                          Değiştir
-                          <input type="file" accept=".kml" onChange={handleBanksUpload} className="hidden" />
-                        </label>
-                      </div>
-
-                      {/* Sol ve Sağ Sahil Durumu */}
-                      <div className="grid grid-cols-2 gap-1.5 text-[10px] pt-1 border-t border-amber-200/60">
-                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-emerald-200">
-                          <span className="font-bold text-emerald-800">🌿 {bankLinesInfo?.leftName || 'Sol Kıyı'}</span>
-                          <span className="font-bold text-emerald-700">{leftBankCoords.length} nokta</span>
-                        </div>
-                        <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-amber-200">
-                          <span className="font-bold text-amber-800">🌾 {bankLinesInfo?.rightName || 'Sağ Kıyı'}</span>
-                          <span className="font-bold text-amber-700">{rightBankCoords.length} nokta</span>
-                        </div>
-                      </div>
-
-                      {/* Swap button if both exist */}
-                      {leftBankCoords.length > 0 && rightBankCoords.length > 0 && (
-                        <div className="flex items-center justify-between pt-1">
-                          <button
-                            type="button"
-                            onClick={handleSwapBankLines}
-                            className="text-[10px] text-amber-900 hover:text-amber-950 font-bold bg-amber-100/80 hover:bg-amber-200 px-2 py-0.5 rounded-lg border border-amber-300 flex items-center gap-1 cursor-pointer transition-all"
-                            title="Sol ve sağ kıyı atamalarını yer değiştir"
-                          >
-                            <ArrowUpDown size={10} />
-                            <span>Sol ⇄ Sağ Sahili Değiştir</span>
-                          </button>
-                          <span className="text-[9px] text-amber-700 font-medium italic">Enkesitlere uygulandı</span>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    /* 3. Henüz Kıyı Çizgisi Yokken - Otomatik Tespit veya KML Yükleme Seçeneği */
-                    <div className="space-y-1.5">
-                      {demFile && (centerlineFile || centerlineCoords.length > 0) ? (
-                        <div className="bg-gradient-to-br from-emerald-50 to-cyan-50 border border-emerald-200/90 rounded-xl p-2.5 space-y-2 shadow-2xs">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="space-y-0.5">
-                              <span className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
-                                <Sparkles size={13} className="text-emerald-600" />
-                                Otomatik Dere Şev Üstü Tespiti
-                              </span>
-                              <p className="text-[10px] text-slate-600 leading-tight">
-                                DEM eğrilik ve yatak profili analiziyle dere sol ve sağ şev üstü kırıklarını (bank tops) otomatik tespit eder.
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between gap-2 pt-1 border-t border-emerald-200/50">
-                            <div className="flex items-center gap-1.5 text-[10px] text-slate-600">
-                              <span className="text-[9px]">Tarama:</span>
-                              <select
-                                value={bankTopsCorridorWidth}
-                                onChange={(e) => setBankTopsCorridorWidth(Number(e.target.value))}
-                                className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-800"
-                              >
-                                <option value={20}>±10m (Çok Dar Hendek/Kanal)</option>
-                                <option value={30}>±15m (Dar Dere Yatağı)</option>
-                                <option value={40}>±20m (Küçük Yatak)</option>
-                                <option value={50}>±25m (Dar Vadi)</option>
-                                <option value={80}>±40m (Standart Yatak)</option>
-                                <option value={120}>±60m (Geniş Vadi)</option>
-                                <option value={200}>±100m (Geniş Taşkın Ovası)</option>
-                              </select>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => handleDetectBankTops(bankTopsCorridorWidth)}
-                              disabled={isDetectingBankTops}
-                              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold text-[10px] cursor-pointer shadow-sm transition-all flex items-center gap-1.5 shrink-0"
-                            >
-                              <Wand2 size={12} className={isDetectingBankTops ? 'animate-spin' : ''} />
-                              <span>{isDetectingBankTops ? 'Şev Üstü Taranıyor...' : 'Şev Üstlerini Tespit Et'}</span>
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {/* Alternatif Manuel KML Yükleme Butonu */}
-                      <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
-                        <div className="flex items-center gap-2 overflow-hidden">
-                          <div className="p-1 bg-amber-100 text-amber-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
-                            <Activity size={14} />
-                          </div>
-                          <span className="font-bold text-xs text-slate-800 truncate">Kıyı Çizgileri KML Yükle (Opsiyonel)</span>
-                        </div>
-                        <span className="px-2 py-0.5 bg-amber-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
-                          Gözat
-                        </span>
-                        <input type="file" accept=".kml" onChange={handleBanksUpload} className="hidden" />
-                      </label>
-                    </div>
-                  )}
-                </div>
               </section>
 
-              {/* 2. ENKESİT ÇIKARIMI (OTOMATİK VEYA MANUEL KML) */}
+              {/* 4. ENKESİT ÜRETİMİ & GEOMETRİSİ */}
               <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <Ruler size={14} className="text-cyan-700" />
-                    <span>2. Enkesit Geometrisi & Çıkarımı</span>
+                    <span>4. Enkesit Üretimi & Geometrisi</span>
                   </h2>
                   {sections.length > 0 && (
                     <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300">
@@ -3761,12 +3597,350 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 )}
               </section>
 
-              {/* 3. MANNING PÜRÜZLÜLÜK KATSAYILARI */}
+              {/* 5. ŞEV ÜSTÜ SEÇİMİ VE PROFİL DÜZENLEME */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
+                <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
+                  <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Activity size={14} className="text-cyan-700" />
+                    <span>5. Şev Üstü Seçimi & Profil Düzenleme</span>
+                  </h2>
+                  {demFile && (centerlineFile || centerlineCoords.length > 0) && (
+                    <span className="text-[9px] text-cyan-800 font-bold bg-cyan-100 px-1.5 py-0.2 rounded">
+                      DEM Otomatik Tespiti Destekleniyor
+                    </span>
+                  )}
+                </div>
+
+                {/* 1. DEM ile Otomatik Tespit Sonucu Kartı */}
+                {bankTopsResult ? (
+                  <div className="bg-emerald-50/80 border border-emerald-300/80 p-2.5 rounded-xl space-y-2 shadow-2xs">
+                    <div className="flex items-center justify-between gap-2 border-b border-emerald-200/60 pb-1.5">
+                      <div className="flex items-center gap-1.5 overflow-hidden">
+                        <div className="p-1 bg-emerald-600 text-white rounded-md shrink-0">
+                          <Sparkles size={11} />
+                        </div>
+                        <div className="overflow-hidden">
+                          <span className="font-bold text-slate-900 text-xs truncate block">
+                            DEM Otomatik Şev Üstü Tespiti
+                          </span>
+                          <span className="text-[9px] text-emerald-800 font-medium truncate block">
+                            {bankTopsResult.pointsSampled} kesitte şev kırığı analiz edildi
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleDownloadBankTopsKML}
+                          className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-md text-[9px] font-bold cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                          title="Tespit edilen şev üstü çizgilerini KML olarak indir"
+                        >
+                          <Download size={10} />
+                          <span>KML İndir</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* İstatistik Göstergeleri */}
+                    <div className="grid grid-cols-2 gap-1.5 text-center py-0.5">
+                      <div className="bg-white p-1.5 rounded-lg border border-blue-200">
+                        <span className="text-slate-500 block text-[9px] font-medium">Ort. Toplam Kanal Genişliği</span>
+                        <span className="font-bold text-blue-900 text-xs">
+                          {bankTopsResult.avgChannelWidth} m
+                        </span>
+                        <span className="text-[8px] text-slate-400 block">
+                          (Min: {bankTopsResult.minChannelWidth}m - Maks: {bankTopsResult.maxChannelWidth}m)
+                        </span>
+                      </div>
+
+                      <div className="bg-white p-1.5 rounded-lg border border-orange-200">
+                        <span className="text-orange-700 block text-[9px] font-medium">Ort. Taşma Genişliği</span>
+                        <span className="font-bold text-orange-900 text-xs">
+                          {bankTopsResult.avgBankfullWidth ?? bankTopsResult.avgChannelWidth} m
+                        </span>
+                        <span className="text-[8px] text-orange-600/80 block font-medium">
+                          (Alt Şev Kotu Bazlı)
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Sol ve Sağ Sahil Nokta Bilgisi */}
+                    <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                      <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-emerald-200">
+                        <span className="font-bold text-emerald-800">🌿 Sol Şev Üstü</span>
+                        <span className="font-bold text-emerald-700">{leftBankCoords.length} nokta</span>
+                      </div>
+                      <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-amber-200">
+                        <span className="font-bold text-amber-800">🌾 Sağ Şev Üstü</span>
+                        <span className="font-bold text-amber-700">{rightBankCoords.length} nokta</span>
+                      </div>
+                    </div>
+
+                    {/* Alt Aksiyon Butonları */}
+                    <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleSwapBankLines}
+                        className="text-[10px] text-slate-700 hover:text-slate-900 font-bold bg-white hover:bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 flex items-center gap-1 cursor-pointer transition-all shadow-2xs"
+                        title="Sol ve sağ kıyı atamalarını yer değiştir"
+                      >
+                        <ArrowUpDown size={10} />
+                        <span>Sol ⇄ Sağ Değiştir</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDetectBankTops(bankTopsCorridorWidth)}
+                        disabled={isDetectingBankTops}
+                        className="text-[10px] text-emerald-900 hover:text-emerald-950 font-bold bg-emerald-200/60 hover:bg-emerald-200 px-2 py-1 rounded-lg border border-emerald-300 flex items-center gap-1 cursor-pointer transition-all"
+                      >
+                        <RefreshCw size={10} className={isDetectingBankTops ? 'animate-spin' : ''} />
+                        <span>{isDetectingBankTops ? 'Taranıyor...' : 'Yeniden Tara'}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {demFile && (centerlineFile || centerlineCoords.length > 0) ? (
+                      <div className="bg-gradient-to-br from-emerald-50 to-cyan-50 border border-emerald-200/90 rounded-xl p-2.5 space-y-2 shadow-2xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="space-y-0.5">
+                            <span className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                              <Sparkles size={13} className="text-emerald-600" />
+                              Otomatik Dere Şev Üstü Tespiti
+                            </span>
+                            <p className="text-[10px] text-slate-600 leading-tight">
+                              DEM eğrilik ve yatak profili analiziyle dere sol ve sağ şev üstü kırıklarını (bank tops) otomatik tespit eder.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-1 border-t border-emerald-200/50">
+                          <div className="flex items-center gap-1.5 text-[10px] text-slate-600">
+                            <span className="text-[9px]">Tarama:</span>
+                            <select
+                              value={bankTopsCorridorWidth}
+                              onChange={(e) => setBankTopsCorridorWidth(Number(e.target.value))}
+                              className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-800"
+                            >
+                              <option value={20}>±10m (Çok Dar Hendek/Kanal)</option>
+                              <option value={30}>±15m (Dar Dere Yatağı)</option>
+                              <option value={40}>±20m (Küçük Yatak)</option>
+                              <option value={50}>±25m (Dar Vadi)</option>
+                              <option value={80}>±40m (Standart Yatak)</option>
+                              <option value={120}>±60m (Geniş Vadi)</option>
+                              <option value={200}>±100m (Geniş Taşkın Ovası)</option>
+                            </select>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDetectBankTops(bankTopsCorridorWidth)}
+                            disabled={isDetectingBankTops}
+                            className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold text-[10px] cursor-pointer shadow-sm transition-all flex items-center gap-1.5 shrink-0"
+                          >
+                            <Wand2 size={12} className={isDetectingBankTops ? 'animate-spin' : ''} />
+                            <span>{isDetectingBankTops ? 'Şev Üstü Taranıyor...' : 'Şev Üstlerini Tespit Et'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <div className="p-1 bg-amber-100 text-amber-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
+                          <Activity size={14} />
+                        </div>
+                        <span className="font-bold text-xs text-slate-800 truncate">Kıyı Çizgileri KML Yükle (Opsiyonel)</span>
+                      </div>
+                      <span className="px-2 py-0.5 bg-amber-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
+                        Gözat
+                      </span>
+                      <input type="file" accept=".kml" onChange={handleBanksUpload} className="hidden" />
+                    </label>
+                  </div>
+                )}
+
+                {/* 2. Interactive Bank Top Shifting & Saving Tool */}
+                {sections.length > 0 && (
+                  <div className="mt-3 bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-white space-y-2.5 shadow-sm">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                      <span className="font-bold text-cyan-300 text-[11px] flex items-center gap-1.5">
+                        <Edit3 size={12} className="text-cyan-400" />
+                        Enkesit Profilinde Şev Üstünü Kaydır & Kaydet
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsSectionManagerModalOpen(true)}
+                        className="text-[9px] font-bold text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                      >
+                        Tümünü Yönet Modalında Aç
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-1.5">
+                      <label className="text-[10px] text-slate-300 font-bold shrink-0">Kesit Seçin:</label>
+                      <div className="flex items-center gap-1 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setBankEditSectionIdx(Math.max(0, bankEditSectionIdx - 1))}
+                          disabled={bankEditSectionIdx === 0}
+                          className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[10px] font-bold disabled:opacity-30 cursor-pointer"
+                        >
+                          ‹ Önceki
+                        </button>
+                        <select
+                          value={bankEditSectionIdx}
+                          onChange={(e) => setBankEditSectionIdx(Number(e.target.value))}
+                          className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] font-bold text-cyan-200 truncate max-w-[140px]"
+                        >
+                          {sections.map((sec, idx) => (
+                            <option key={sec.station} value={idx}>
+                              Kesit #{idx + 1} - Km {(sec.station / 1000).toFixed(3)}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => setBankEditSectionIdx(Math.min(sections.length - 1, bankEditSectionIdx + 1))}
+                          disabled={bankEditSectionIdx >= sections.length - 1}
+                          className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[10px] font-bold disabled:opacity-30 cursor-pointer"
+                        >
+                          Sonraki ›
+                        </button>
+                      </div>
+                    </div>
+
+                    {sections[bankEditSectionIdx] && (
+                      <div className="space-y-2 bg-slate-950 p-2 rounded-lg border border-slate-800 text-[10px]">
+                        {/* Sol and Sağ Bank Top Inputs */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1 bg-emerald-950/40 p-1.5 rounded border border-emerald-800/60">
+                            <span className="font-bold text-emerald-400 block text-[10px]">🌿 Sol Şev Üstü Offset:</span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                step="0.5"
+                                value={sections[bankEditSectionIdx].bankLeftX}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, val, sections[bankEditSectionIdx].bankRightX);
+                                }}
+                                className="w-full bg-slate-900 border border-emerald-700 rounded px-1.5 py-0.5 text-xs font-bold text-emerald-200 text-center"
+                              />
+                              <span className="text-slate-400 font-mono text-[9px]">m</span>
+                            </div>
+                            <div className="flex justify-between gap-1 text-[8px] font-mono">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX - 1, sections[bankEditSectionIdx].bankRightX)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                -1m
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX - 0.5, sections[bankEditSectionIdx].bankRightX)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                -0.5m
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX + 0.5, sections[bankEditSectionIdx].bankRightX)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                +0.5m
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX + 1, sections[bankEditSectionIdx].bankRightX)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                +1m
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1 bg-amber-950/40 p-1.5 rounded border border-amber-800/60">
+                            <span className="font-bold text-amber-400 block text-[10px]">🌾 Sağ Şev Üstü Offset:</span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                step="0.5"
+                                value={sections[bankEditSectionIdx].bankRightX}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, val);
+                                }}
+                                className="w-full bg-slate-900 border border-amber-700 rounded px-1.5 py-0.5 text-xs font-bold text-amber-200 text-center"
+                              />
+                              <span className="text-slate-400 font-mono text-[9px]">m</span>
+                            </div>
+                            <div className="flex justify-between gap-1 text-[8px] font-mono">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX - 1)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                -1m
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX - 0.5)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                -0.5m
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX + 0.5)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                +0.5m
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX + 1)}
+                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
+                              >
+                                +1m
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Save Trigger Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const activeSec = sections[bankEditSectionIdx];
+                            if (activeSec) {
+                              handleUpdateSectionBankTops(activeSec.station, activeSec.bankLeftX, activeSec.bankRightX);
+                            }
+                          }}
+                          className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold text-[10px] transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <CheckCircle2 size={12} />
+                          <span>Şev Üstü Konumlarını Kaydet</span>
+                        </button>
+
+                        {bankSaveMessage && (
+                          <div className="bg-emerald-900/80 border border-emerald-500 text-emerald-200 text-[9px] p-1.5 rounded font-bold text-center animate-fade-in">
+                            {bankSaveMessage}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {/* 6. PÜRÜZLÜLÜK SEÇİMİ (MANNING n) */}
               <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <Droplets size={14} className="text-cyan-700" />
-                    <span>3. Manning Pürüzlülüğü (n)</span>
+                    <span>6. Pürüzlülük Seçimi (Manning n)</span>
                   </h2>
                   <button
                     type="button"
@@ -3828,12 +4002,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </button>
               </section>
 
-              {/* 4. HİDROLOJİK SINIR ŞARTLARI & DEBİ HİDROGRAFI */}
+              {/* 7. HİDROLOJİK SINIR ŞARTLARI SEÇİMİ */}
               <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <Activity size={14} className="text-cyan-700" />
-                    <span>4. Hidrolojik & Sınır Şartları</span>
+                    <span>7. Hidrolojik Sınır Şartları Seçimi</span>
                   </h2>
                   {flowMode === 'hydrograph' && hydrographData.length > 0 && (
                     <span className="text-[9px] font-bold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-300">
@@ -4046,7 +4220,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </div>
               </section>
 
-              {/* 5. SANAT YAPILARI (KÖPRÜ VE MENFEZ GEÇİŞLERİ) */}
+              {/* 8. SANAT YAPILARI SEÇİMİ (KÖPRÜ VE MENFEZ GEÇİŞLERİ) */}
               <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-3 shrink-0">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -4054,7 +4228,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       <LayersIcon size={14} />
                     </div>
                     <div>
-                      <h3 className="text-xs font-bold text-slate-900">5. Sanat Yapıları (Köprü & Menfez)</h3>
+                      <h3 className="text-xs font-bold text-slate-900">8. Sanat Yapıları Seçimi (Köprü & Menfez)</h3>
                       <p className="text-[10px] text-slate-500">Kiriş altı kotu, açıklık ve kabarma (backwater) analizi</p>
                     </div>
                   </div>
@@ -5371,6 +5545,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         onBulkDeleteSections={(stations) => handleBulkDeleteSections(stations)}
         onRestoreSection={(station) => handleRestoreSection(station)}
         onRestoreAll={handleRestoreAllDeletedSections}
+        onUpdateBankTops={handleUpdateSectionBankTops}
       />
     </div>
   );
