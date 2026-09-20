@@ -212,9 +212,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number>(0);
 
-  // Cross-Section Deconfliction Settings (±10° Açı Düzeltmesi & Boy Kısaltma)
+  // Cross-Section Deconfliction Settings (Açı Düzeltmesi, Boy Kısaltma Yok)
   const [autoDeconflictSections, setAutoDeconflictSections] = useState<boolean>(true);
-  const [maxAngleAdjustment, setMaxAngleAdjustment] = useState<number>(10);
+  const [maxAngleAdjustment, setMaxAngleAdjustment] = useState<number>(15);
   const [isDeconflicting, setIsDeconflicting] = useState<boolean>(false);
   const [deconflictReport, setDeconflictReport] = useState<DeconflictReport | null>(null);
 
@@ -3171,36 +3171,40 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                       {autoDeconflictSections && (
                         <div className="space-y-1.5 pt-1.5 border-t border-slate-200/60 text-[10px] text-slate-600">
-                          <div className="flex items-center justify-between">
-                            <span className="text-slate-600 font-medium">Açı Düzeltme Toleransı:</span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setMaxAngleAdjustment(5)}
-                                className={`px-2 py-0.5 rounded-lg text-[9px] font-bold cursor-pointer transition-all ${
-                                  maxAngleAdjustment === 5
-                                    ? 'bg-cyan-700 text-white shadow-2xs'
-                                    : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
-                                }`}
-                              >
-                                ±5° (85°-95°)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setMaxAngleAdjustment(10)}
-                                className={`px-2 py-0.5 rounded-lg text-[9px] font-bold cursor-pointer transition-all ${
-                                  maxAngleAdjustment === 10
-                                    ? 'bg-cyan-700 text-white shadow-2xs'
-                                    : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
-                                }`}
-                              >
-                                ±10° (80°-100°)
-                              </button>
+                          <div className="flex items-center justify-between gap-1 flex-wrap">
+                            <span className="text-slate-600 font-medium">Maks. Açı Sapması:</span>
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {[5, 10, 15, 20, 30].map((ang) => (
+                                <button
+                                  key={ang}
+                                  type="button"
+                                  onClick={() => setMaxAngleAdjustment(ang)}
+                                  className={`px-1.5 py-0.5 rounded-lg text-[9px] font-bold cursor-pointer transition-all ${
+                                    maxAngleAdjustment === ang
+                                      ? 'bg-cyan-700 text-white shadow-2xs'
+                                      : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                                  }`}
+                                  title={
+                                    ang === 15
+                                      ? 'Önerilen Bilimsel Standart (Alan sapması <%3.4)'
+                                      : ang === 30
+                                      ? 'HEC-RAS 1B Modeli Maksimum Bilimsel Üst Sınırı'
+                                      : `±${ang}° rotasyon toleransı`
+                                  }
+                                >
+                                  ±{ang}°{ang === 15 ? ' ★' : ang === 30 ? ' (Maks)' : ''}
+                                </button>
+                              ))}
                             </div>
                           </div>
-                          <p className="text-[9px] text-slate-500 leading-tight">
-                            Kesitler nehir eksenine 90° dik çizilir; virajlarda kesişenler ±{maxAngleAdjustment}° döndürülür. Çakışma sürerse kesit boyu güvenle kısaltılır.
-                          </p>
+                          <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200 space-y-0.5">
+                            <p className="text-[9px] text-slate-700 leading-tight">
+                              Virajlarda kesişen enkesitler <strong>boyları kısaltılmadan</strong> yalnızca ±{maxAngleAdjustment}° eksen döndürmesi ile dekonflikte edilir.
+                            </p>
+                            <p className="text-[8.5px] text-slate-500 leading-tight">
+                              💡 <strong>Bilimsel Sınır:</strong> HEC-RAS/USACE hidrolik standardına göre önerilen güvenli açı sapması <strong>±15°</strong>, 1B modeller için tolere edilen maksimum üst sınır <strong>±30°</strong>'dir.
+                            </p>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -3352,10 +3356,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           onClick={handleResolveIntersections}
                           disabled={isDeconflicting || !demFile}
                           className="w-full py-1.5 px-2 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 text-white rounded-lg text-[10px] font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                          title="Virajlardaki kesişen enkesitleri ±10° döndür ve gerekirse boyunu kısalt"
+                          title={`Virajlardaki kesişen enkesitleri boylarını kısaltmadan ±${maxAngleAdjustment}° açı düzeltmesi ile dekonflikte et`}
                         >
                           <RefreshCw size={11} className={isDeconflicting ? 'animate-spin' : ''} />
-                          <span>{isDeconflicting ? 'Kesişmeler Düzeltiliyor...' : 'Kesişmeleri Düzelt (±10° Açı & Kırpma)'}</span>
+                          <span>{isDeconflicting ? 'Açı Düzeltmesi Uygulanıyor...' : `Kesişmeleri Düzelt (±${maxAngleAdjustment}° Açı Düzeltmesi)`}</span>
                         </button>
                       </div>
                     ) : deconflictReport ? (
@@ -4034,7 +4038,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   <div className="text-[10px] font-bold">
                                     {isIntersecting && '⚠️ '}Kesit Km {(sec.station / 1000).toFixed(3)}
                                     {sec.angleAdjustment ? ` [Açı: ${sec.angleAdjustment > 0 ? '+' : ''}${sec.angleAdjustment}°]` : ''}
-                                    {sec.isTrimmed ? ' [Kırpıldı]' : ''}
                                   </div>
                                 </Tooltip>
                                 <Popup>
@@ -4062,12 +4065,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     )}
                                     {sec.angleAdjustment && (
                                       <div className="text-[9px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
-                                        📐 Açı Düzeltmesi: <strong>{sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}°</strong> (80°-100° aralığı)
-                                      </div>
-                                    )}
-                                    {sec.isTrimmed && (
-                                      <div className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                                        ✂️ Boy Kısaltma: <strong>Kol boyu güvenle kısaltıldı</strong>
+                                        📐 Açı Düzeltmesi: <strong>{sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}°</strong>
                                       </div>
                                     )}
 

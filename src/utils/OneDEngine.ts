@@ -1181,21 +1181,20 @@ function checkDraftsIntersection(draftA: InternalSectionDraft, draftB: InternalS
 
 /**
  * Core deconfliction logic:
- * 1. Checks intersections between adjacent / near-neighbor sections.
- * 2. Tries rotational adjustment (within ±10° from 90° normal) to resolve collision.
- * 3. If rotation alone does not clear the collision, safely trims the intersecting arm length.
+ * Performs PURELY rotational angle adjustment (within ±maxAngleAdjustment from 90° normal).
+ * Absolutely NO length trimming or cutline shortening is performed.
+ * Max scientific limit for 1D river hydraulics (HEC-RAS standard) is ±30°, recommended safe limit is ±15°.
  */
 function runDeconflictEngine(
   drafts: InternalSectionDraft[],
-  maxAngleAdjustment: number = 10
+  maxAngleAdjustment: number = 15
 ): DeconflictReport {
   let initialCollisions = 0;
   let angleAdjustedCount = 0;
-  let trimmedCount = 0;
 
   // Count initial collisions
   for (let i = 0; i < drafts.length; i++) {
-    const maxN = Math.min(drafts.length, i + 4);
+    const maxN = Math.min(drafts.length, i + 5);
     for (let j = i + 1; j < maxN; j++) {
       if (checkDraftsIntersection(drafts[i], drafts[j])) {
         initialCollisions++;
@@ -1213,125 +1212,71 @@ function runDeconflictEngine(
     };
   }
 
-  // --- PASS 1: Rotational Angle Adjustment (±10° aralığında arama) ---
+  // Generate angle candidate deviations (fine 1-degree steps from center outwards)
   const angleCandidates: number[] = [0];
-  for (let a = 2; a <= maxAngleAdjustment; a += 2) {
+  for (let a = 1; a <= maxAngleAdjustment; a += 1) {
     angleCandidates.push(a);
     angleCandidates.push(-a);
   }
 
-  for (let i = 0; i < drafts.length - 1; i++) {
-    const j = i + 1;
-    if (checkDraftsIntersection(drafts[i], drafts[j])) {
-      let resolved = false;
-      const origI = drafts[i].angleOffset;
-      const origJ = drafts[j].angleOffset;
-
-      // Try combinations sorted by total deviation
-      const candidatePairs: [number, number, number][] = [];
-      for (const dI of angleCandidates) {
-        for (const dJ of angleCandidates) {
-          if (dI === 0 && dJ === 0) continue;
-          candidatePairs.push([dI, dJ, Math.abs(dI) + Math.abs(dJ)]);
-        }
-      }
-      candidatePairs.sort((a, b) => a[2] - b[2]);
-
-      for (const [dI, dJ] of candidatePairs) {
-        drafts[i].angleOffset = dI;
-        drafts[j].angleOffset = dJ;
-
-        // Check if i and j no longer collide
-        if (!checkDraftsIntersection(drafts[i], drafts[j])) {
-          // Check collision with outer neighbors
-          const collidesPrev = i > 0 && checkDraftsIntersection(drafts[i - 1], drafts[i]);
-          const collidesNext = j < drafts.length - 1 && checkDraftsIntersection(drafts[j], drafts[j + 1]);
-
-          if (!collidesPrev && !collidesNext) {
-            resolved = true;
-            angleAdjustedCount++;
-            break;
-          }
-        }
-      }
-
-      if (!resolved) {
-        // Revert to original angles if rotation could not resolve it
-        drafts[i].angleOffset = origI;
-        drafts[j].angleOffset = origJ;
-      }
-    }
-  }
-
-  // --- PASS 2: Safe Length Trimming for Remaining Intersections ---
+  // Multi-pass iterative rotational relaxation across all drafts
   for (let pass = 0; pass < 3; pass++) {
-    let hadIntersection = false;
     for (let i = 0; i < drafts.length; i++) {
-      const maxN = Math.min(drafts.length, i + 4);
-      for (let j = i + 1; j < maxN; j++) {
-        const isectPt = checkDraftsIntersection(drafts[i], drafts[j]);
-        if (!isectPt) continue;
+      // Check if draft i collides with any close neighbor
+      const minN = Math.max(0, i - 4);
+      const maxN = Math.min(drafts.length, i + 5);
 
-        hadIntersection = true;
-
-        // Trim intersecting arm of section i
-        const d_i = turf.distance(drafts[i].pt, isectPt, { units: 'meters' });
-        const line_i = getDraftGeoLine(drafts[i]);
-        const pLeft_i = turf.point(line_i.geometry.coordinates[0]);
-        const pRight_i = turf.point(line_i.geometry.coordinates[1]);
-        const distToLeft_i = turf.distance(pLeft_i, isectPt);
-        const distToRight_i = turf.distance(pRight_i, isectPt);
-
-        const minSafe_i = Math.max(drafts[i].channelHalfW + 3, 10);
-        const targetLen_i = Math.max(minSafe_i, Number((d_i - 3).toFixed(1))); // 3m buffer before intersection
-
-        if (distToLeft_i < distToRight_i) {
-          if (targetLen_i < drafts[i].leftLength) {
-            drafts[i].leftLength = targetLen_i;
-            drafts[i].isTrimmed = true;
-            trimmedCount++;
+      const hasCollision = () => {
+        for (let k = minN; k < maxN; k++) {
+          if (k !== i && checkDraftsIntersection(drafts[i], drafts[k])) {
+            return true;
           }
-        } else {
-          if (targetLen_i < drafts[i].rightLength) {
-            drafts[i].rightLength = targetLen_i;
-            drafts[i].isTrimmed = true;
-            trimmedCount++;
+        }
+        return false;
+      };
+
+      if (hasCollision()) {
+        const origAngle = drafts[i].angleOffset;
+        let bestAngle = origAngle;
+        let bestCollisions = 999;
+
+        for (const cand of angleCandidates) {
+          drafts[i].angleOffset = cand;
+          let colls = 0;
+          for (let k = minN; k < maxN; k++) {
+            if (k !== i && checkDraftsIntersection(drafts[i], drafts[k])) {
+              colls++;
+            }
+          }
+
+          if (colls === 0) {
+            bestAngle = cand;
+            bestCollisions = 0;
+            break; // Found complete resolution for this section
+          }
+
+          if (colls < bestCollisions) {
+            bestCollisions = colls;
+            bestAngle = cand;
           }
         }
 
-        // Trim intersecting arm of section j
-        const d_j = turf.distance(drafts[j].pt, isectPt, { units: 'meters' });
-        const line_j = getDraftGeoLine(drafts[j]);
-        const pLeft_j = turf.point(line_j.geometry.coordinates[0]);
-        const pRight_j = turf.point(line_j.geometry.coordinates[1]);
-        const distToLeft_j = turf.distance(pLeft_j, isectPt);
-        const distToRight_j = turf.distance(pRight_j, isectPt);
-
-        const minSafe_j = Math.max(drafts[j].channelHalfW + 3, 10);
-        const targetLen_j = Math.max(minSafe_j, Number((d_j - 3).toFixed(1)));
-
-        if (distToLeft_j < distToRight_j) {
-          if (targetLen_j < drafts[j].leftLength) {
-            drafts[j].leftLength = targetLen_j;
-            drafts[j].isTrimmed = true;
-            trimmedCount++;
-          }
-        } else {
-          if (targetLen_j < drafts[j].rightLength) {
-            drafts[j].rightLength = targetLen_j;
-            drafts[j].isTrimmed = true;
-            trimmedCount++;
-          }
-        }
+        drafts[i].angleOffset = bestAngle;
       }
     }
-    if (!hadIntersection) break;
   }
 
-  // Count remaining collisions after deconfliction
+  // Count adjusted sections
+  for (let i = 0; i < drafts.length; i++) {
+    if (drafts[i].angleOffset !== 0) {
+      angleAdjustedCount++;
+    }
+  }
+
+  // Count remaining collisions after rotational deconfliction
   let remainingCollisions = 0;
   for (let i = 0; i < drafts.length; i++) {
-    const maxN = Math.min(drafts.length, i + 4);
+    const maxN = Math.min(drafts.length, i + 5);
     for (let j = i + 1; j < maxN; j++) {
       if (checkDraftsIntersection(drafts[i], drafts[j])) {
         remainingCollisions++;
@@ -1339,14 +1284,15 @@ function runDeconflictEngine(
     }
   }
 
+  const resolved = Math.max(0, initialCollisions - remainingCollisions);
   const summary = remainingCollisions === 0
-    ? `Kesişen ${initialCollisions} adet enkesit başarıyla düzeltildi (${angleAdjustedCount} kesitte ±10° açı düzeltmesi, ${trimmedCount} kolda güvenli boy kısaltma uygulandı).`
-    : `${initialCollisions} adet kesişmeden ${initialCollisions - remainingCollisions} adedi giderildi (${angleAdjustedCount} açı düzeltmesi, ${trimmedCount} kısaltma).`;
+    ? `Kesişen ${initialCollisions} adet enkesit, sadece açı düzeltmesiyle (maks ±${maxAngleAdjustment}°) başarıyla giderildi. Kesit boyları orijinal genişliklerinde korundu.`
+    : `${initialCollisions} adet kesişmeden ${resolved} adedi açı düzeltmesiyle (maks ±${maxAngleAdjustment}°) giderildi. ${remainingCollisions} kesişim haritada işaretlendi.`;
 
   return {
     initialCollisions,
     angleAdjustedCount,
-    trimmedCount,
+    trimmedCount: 0,
     remainingCollisions,
     summary
   };
@@ -1421,8 +1367,7 @@ export async function generateCrossSections(
       maxElevation: sampled.maxElevation,
       bankLeftX: sampled.bankLeftX,
       bankRightX: sampled.bankRightX,
-      angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined,
-      isTrimmed: draft.isTrimmed ? true : undefined
+      angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined
     });
   }
 
@@ -1525,8 +1470,7 @@ export async function deconflictExistingCrossSections(
       maxElevation: sampled.maxElevation,
       bankLeftX: sampled.bankLeftX,
       bankRightX: sampled.bankRightX,
-      angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined,
-      isTrimmed: draft.isTrimmed ? true : undefined
+      angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined
     });
   }
 

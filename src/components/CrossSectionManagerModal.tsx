@@ -1,26 +1,75 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, Component, ErrorInfo, ReactNode } from 'react';
 import {
   X,
   Trash2,
   RotateCcw,
-  CheckSquare,
-  Square,
   Search,
-  Eye,
   Ruler,
   Layers,
-  ArrowDownUp,
-  AlertTriangle,
-  Check,
-  Sparkles
+  Sparkles,
+  AlertCircle
 } from 'lucide-react';
 import { CrossSection } from '../utils/OneDEngine';
+
+interface ModalErrorBoundaryProps {
+  children: ReactNode;
+  onClose: () => void;
+}
+
+interface ModalErrorBoundaryState {
+  hasError: boolean;
+  errorMessage: string;
+}
+
+class ModalErrorBoundary extends Component<ModalErrorBoundaryProps, ModalErrorBoundaryState> {
+  public override state: ModalErrorBoundaryState = {
+    hasError: false,
+    errorMessage: ''
+  };
+
+  public static getDerivedStateFromError(error: Error): ModalErrorBoundaryState {
+    return { hasError: true, errorMessage: error.message || 'Bilinmeyen bir hata' };
+  }
+
+  public override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('CrossSectionManagerModal error:', error, errorInfo);
+  }
+
+  public override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-red-200 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+              <AlertCircle size={24} />
+            </div>
+            <h3 className="text-base font-bold text-slate-900">Enkesit Yöneticisi Yüklenemedi</h3>
+            <p className="text-xs text-slate-600">
+              Kesit verileri listelenirken bir hata ile karşılaşıldı:
+            </p>
+            <div className="p-2.5 bg-red-50 text-red-800 text-[11px] font-mono rounded-lg border border-red-100 text-left overflow-x-auto max-h-24">
+              {this.state.errorMessage}
+            </div>
+            <button
+              type="button"
+              onClick={this.props.onClose}
+              className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+            >
+              Pencereyi Kapat
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface CrossSectionManagerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  sections: CrossSection[];
-  deletedSections: CrossSection[];
+  sections?: CrossSection[];
+  deletedSections?: CrossSection[];
   onDeleteSection: (indexOrStation: number) => void;
   onBulkDeleteSections: (stations: number[]) => void;
   onRestoreSection: (station: number) => void;
@@ -29,11 +78,24 @@ interface CrossSectionManagerModalProps {
   onSelectSection: (index: number) => void;
 }
 
-export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> = ({
+// Format utilities with null / NaN checks
+const fmtNum = (val: number | undefined | null, dec: number = 2, fallback: string = '-'): string => {
+  return val != null && !isNaN(val) ? val.toFixed(dec) : fallback;
+};
+
+const fmtKm = (station: number | undefined | null): string => {
+  return station != null && !isNaN(station) ? (station / 1000).toFixed(3) : '-';
+};
+
+const fmtM = (station: number | undefined | null): string => {
+  return station != null && !isNaN(station) ? station.toFixed(0) : '-';
+};
+
+const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> = ({
   isOpen,
   onClose,
-  sections,
-  deletedSections,
+  sections = [],
+  deletedSections = [],
   onDeleteSection,
   onBulkDeleteSections,
   onRestoreSection,
@@ -50,15 +112,15 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
   const [rangeStartKm, setRangeStartKm] = useState<string>('');
   const [rangeEndKm, setRangeEndKm] = useState<string>('');
 
-  if (!isOpen) return null;
-
   // Filtered active sections based on search term
   const filteredActiveSections = useMemo(() => {
-    if (!searchTerm.trim()) return sections;
+    const list = Array.isArray(sections) ? sections : [];
+    if (!searchTerm.trim()) return list;
     const term = searchTerm.toLowerCase().trim();
-    return sections.filter((s, idx) => {
-      const kmStr = (s.station / 1000).toFixed(3);
-      const mStr = s.station.toFixed(0);
+    return list.filter((s, idx) => {
+      if (!s) return false;
+      const kmStr = fmtKm(s.station);
+      const mStr = fmtM(s.station);
       const idxStr = (idx + 1).toString();
       return kmStr.includes(term) || mStr.includes(term) || idxStr === term;
     });
@@ -66,17 +128,20 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
 
   // Filtered deleted sections
   const filteredDeletedSections = useMemo(() => {
-    if (!searchTerm.trim()) return deletedSections;
+    const list = Array.isArray(deletedSections) ? deletedSections : [];
+    if (!searchTerm.trim()) return list;
     const term = searchTerm.toLowerCase().trim();
-    return deletedSections.filter((s) => {
-      const kmStr = (s.station / 1000).toFixed(3);
-      const mStr = s.station.toFixed(0);
+    return list.filter((s) => {
+      if (!s) return false;
+      const kmStr = fmtKm(s.station);
+      const mStr = fmtM(s.station);
       return kmStr.includes(term) || mStr.includes(term);
     });
   }, [deletedSections, searchTerm]);
 
   // Handle single checkbox toggle
-  const toggleSelectStation = (station: number) => {
+  const toggleSelectStation = (station: number | undefined) => {
+    if (station == null) return;
     const next = new Set(selectedStations);
     if (next.has(station)) {
       next.delete(station);
@@ -89,7 +154,9 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
   // Select all visible
   const selectAllVisible = () => {
     const next = new Set(selectedStations);
-    filteredActiveSections.forEach((s) => next.add(s.station));
+    filteredActiveSections.forEach((s) => {
+      if (s && s.station != null) next.add(s.station);
+    });
     setSelectedStations(next);
   };
 
@@ -102,8 +169,10 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
   const selectAlternate = (mode: 'even' | 'odd') => {
     const next = new Set<number>();
     filteredActiveSections.forEach((s, i) => {
-      if (mode === 'even' && i % 2 === 0) next.add(s.station);
-      if (mode === 'odd' && i % 2 !== 0) next.add(s.station);
+      if (s && s.station != null) {
+        if (mode === 'even' && i % 2 === 0) next.add(s.station);
+        if (mode === 'odd' && i % 2 !== 0) next.add(s.station);
+      }
     });
     setSelectedStations(next);
   };
@@ -119,7 +188,7 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
 
     const next = new Set(selectedStations);
     sections.forEach((s) => {
-      if (s.station >= minM && s.station <= maxM) {
+      if (s && s.station != null && s.station >= minM && s.station <= maxM) {
         next.add(s.station);
       }
     });
@@ -143,14 +212,17 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
   const focusedSection = useMemo(() => {
     if (previewStation !== null) {
       return (
-        sections.find((s) => s.station === previewStation) ||
-        deletedSections.find((s) => s.station === previewStation) ||
+        sections.find((s) => s && s.station === previewStation) ||
+        deletedSections.find((s) => s && s.station === previewStation) ||
         sections[selectedSectionIdx] ||
-        sections[0]
+        sections[0] ||
+        null
       );
     }
-    return sections[selectedSectionIdx] || sections[0];
+    return sections[selectedSectionIdx] || sections[0] || null;
   }, [previewStation, sections, deletedSections, selectedSectionIdx]);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[9999] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
@@ -181,6 +253,7 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
           </div>
 
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
             title="Kapat"
@@ -233,6 +306,7 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
             />
             {searchTerm && (
               <button
+                type="button"
                 onClick={() => setSearchTerm('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
               >
@@ -316,7 +390,7 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
               <span className="font-bold text-slate-600 text-[11px]">Km Aralığı:</span>
               <input
                 type="text"
-                placeholder="Başlangıç Km (örn 0.2)"
+                placeholder="Başlangıç Km"
                 value={rangeStartKm}
                 onChange={(e) => setRangeStartKm(e.target.value)}
                 className="w-20 bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-[11px] font-mono text-center font-bold"
@@ -324,7 +398,7 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
               <span>-</span>
               <input
                 type="text"
-                placeholder="Bitiş Km (örn 0.6)"
+                placeholder="Bitiş Km"
                 value={rangeEndKm}
                 onChange={(e) => setRangeEndKm(e.target.value)}
                 className="w-20 bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-[11px] font-mono text-center font-bold"
@@ -363,7 +437,7 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                             type="checkbox"
                             checked={
                               filteredActiveSections.length > 0 &&
-                              filteredActiveSections.every((s) => selectedStations.has(s.station))
+                              filteredActiveSections.every((s) => s && selectedStations.has(s.station))
                             }
                             onChange={(e) => {
                               if (e.target.checked) selectAllVisible();
@@ -383,19 +457,21 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                     </thead>
                     <tbody className="divide-y divide-slate-200">
                       {filteredActiveSections.map((sec, idx) => {
-                        const originalIndex = sections.findIndex((s) => s.station === sec.station);
+                        if (!sec) return null;
+                        const originalIndex = sections.findIndex((s) => s && s.station === sec.station);
                         const isSelected = selectedStations.has(sec.station);
                         const isFocused = focusedSection?.station === sec.station;
+                        const profile = Array.isArray(sec.profile) ? sec.profile : [];
                         const width =
-                          sec.profile.length > 1
-                            ? sec.profile[sec.profile.length - 1].x - sec.profile[0].x
+                          profile.length > 1
+                            ? Math.abs(profile[profile.length - 1].x - profile[0].x)
                             : 0;
 
                         return (
                           <tr
-                            key={sec.station}
+                            key={sec.station ?? idx}
                             onClick={() => {
-                              setPreviewStation(sec.station);
+                              if (sec.station != null) setPreviewStation(sec.station);
                               if (originalIndex !== -1) onSelectSection(originalIndex);
                             }}
                             className={`cursor-pointer transition-colors ${
@@ -423,26 +499,21 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                             <td className="py-2 px-3 font-bold text-slate-900">
                               <div className="flex flex-col">
                                 <div className="flex items-center gap-1.5">
-                                  <span>Km {(sec.station / 1000).toFixed(3)}</span>
+                                  <span>Km {fmtKm(sec.station)}</span>
                                   <span className="text-[10px] text-slate-400 font-normal">
-                                    ({sec.station.toFixed(0)}m)
+                                    ({fmtM(sec.station)}m)
                                   </span>
                                 </div>
-                                {(sec.angleAdjustment || sec.isTrimmed || sec.isIntersecting) && (
+                                {(sec.angleAdjustment || sec.isIntersecting) && (
                                   <div className="flex items-center gap-1 mt-0.5">
                                     {sec.isIntersecting && (
-                                      <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.2 rounded font-bold">
+                                      <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.2 rounded font-bold">
                                         Kesişiyor
                                       </span>
                                     )}
                                     {sec.angleAdjustment && (
-                                      <span className="text-[9px] bg-blue-100 text-blue-800 px-1 py-0.2 rounded font-bold font-mono">
-                                        {sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}°
-                                      </span>
-                                    )}
-                                    {sec.isTrimmed && (
-                                      <span className="text-[9px] bg-amber-100 text-amber-800 px-1 py-0.2 rounded font-bold">
-                                        Kırpıldı
+                                      <span className="text-[9px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-bold font-mono">
+                                        {sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}° Açı
                                       </span>
                                     )}
                                   </div>
@@ -450,16 +521,16 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                               </div>
                             </td>
                             <td className="py-2 px-3 font-mono font-bold text-cyan-900">
-                              {sec.minElevation.toFixed(2)} m
+                              {fmtNum(sec.minElevation)} m
                             </td>
                             <td className="py-2 px-3 font-mono text-slate-600">
-                              {sec.maxElevation.toFixed(2)} m
+                              {fmtNum(sec.maxElevation)} m
                             </td>
                             <td className="py-2 px-3 font-mono text-slate-700">
-                              {width.toFixed(1)} m
+                              {fmtNum(width, 1)} m
                             </td>
                             <td className="py-2 px-3 text-slate-500 text-[11px]">
-                              {sec.profile.length} nokta
+                              {profile.length} nokta
                             </td>
                             <td className="py-2 px-3 text-right" onClick={(e) => e.stopPropagation()}>
                               <button
@@ -497,17 +568,21 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
-                      {filteredDeletedSections.map((sec) => {
+                      {filteredDeletedSections.map((sec, idx) => {
+                        if (!sec) return null;
                         const isFocused = focusedSection?.station === sec.station;
+                        const profile = Array.isArray(sec.profile) ? sec.profile : [];
                         const width =
-                          sec.profile.length > 1
-                            ? sec.profile[sec.profile.length - 1].x - sec.profile[0].x
+                          profile.length > 1
+                            ? Math.abs(profile[profile.length - 1].x - profile[0].x)
                             : 0;
 
                         return (
                           <tr
-                            key={sec.station}
-                            onClick={() => setPreviewStation(sec.station)}
+                            key={sec.station ?? idx}
+                            onClick={() => {
+                              if (sec.station != null) setPreviewStation(sec.station);
+                            }}
                             className={`cursor-pointer transition-colors ${
                               isFocused ? 'bg-amber-50 font-medium' : 'hover:bg-slate-50'
                             }`}
@@ -515,18 +590,18 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                             <td className="py-2 px-3 font-bold text-slate-800">
                               <div className="flex items-center gap-1.5">
                                 <span className="line-through text-slate-400">
-                                  Km {(sec.station / 1000).toFixed(3)}
+                                  Km {fmtKm(sec.station)}
                                 </span>
                                 <span className="text-[10px] text-slate-500 font-mono">
-                                  ({sec.station.toFixed(0)}m)
+                                  ({fmtM(sec.station)}m)
                                 </span>
                               </div>
                             </td>
                             <td className="py-2 px-3 font-mono text-slate-700">
-                              {sec.minElevation.toFixed(2)} m
+                              {fmtNum(sec.minElevation)} m
                             </td>
-                            <td className="py-2 px-3 font-mono text-slate-700">{width.toFixed(1)} m</td>
-                            <td className="py-2 px-3 text-slate-500">{sec.profile.length} nokta</td>
+                            <td className="py-2 px-3 font-mono text-slate-700">{fmtNum(width, 1)} m</td>
+                            <td className="py-2 px-3 text-slate-500">{profile.length} nokta</td>
                             <td className="py-2 px-3 text-right" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
@@ -555,100 +630,118 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                 <div className="border-b border-slate-200 pb-2 flex items-center justify-between">
                   <div>
                     <span className="text-xs font-bold text-slate-900 block">
-                      Enkesit Önizleme: Km {(focusedSection.station / 1000).toFixed(3)}
+                      Enkesit Önizleme: Km {fmtKm(focusedSection.station)}
                     </span>
                     <span className="text-[10px] text-slate-500 font-mono">
-                      İstasyon: {focusedSection.station.toFixed(0)} m
+                      İstasyon: {fmtM(focusedSection.station)} m
                     </span>
                   </div>
                   <span className="bg-cyan-100 text-cyan-900 text-[10px] font-bold px-2 py-0.5 rounded-full border border-cyan-200">
-                    Taban: {focusedSection.minElevation.toFixed(2)}m
+                    Taban: {fmtNum(focusedSection.minElevation)}m
                   </span>
                 </div>
 
                 {/* SVG Visualizer */}
                 <div className="flex-1 w-full bg-white border border-slate-300 rounded-xl p-3 flex items-center justify-center relative overflow-hidden shadow-inner min-h-[160px]">
-                  <svg
-                    width="100%"
-                    height="100%"
-                    viewBox="0 0 500 220"
-                    preserveAspectRatio="none"
-                    className="w-full h-full"
-                  >
-                    {(() => {
-                      const sec = focusedSection;
-                      const minX = Math.min(...sec.profile.map((p) => p.x));
-                      const maxX = Math.max(...sec.profile.map((p) => p.x));
-                      const minZ = sec.minElevation;
-                      const maxZ = sec.maxElevation + 1;
-
-                      const mapX = (x: number) => 25 + ((x - minX) / (maxX - minX || 1)) * 450;
-                      const mapZ = (z: number) => 195 - ((z - minZ) / (maxZ - minZ || 1)) * 165;
-
-                      const groundPath =
-                        `M 25 195 ` +
-                        sec.profile.map((p) => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') +
-                        ` L 475 195 Z`;
-
+                  {(() => {
+                    const sec = focusedSection;
+                    const profile = Array.isArray(sec.profile) ? sec.profile : [];
+                    if (profile.length < 2) {
                       return (
-                        <>
-                          <path
-                            d={groundPath}
-                            fill="#f8fafc"
-                            stroke="#0f172a"
-                            strokeWidth="2.5"
-                            strokeLinejoin="round"
-                          />
-                          <line
-                            x1={mapX(sec.bankLeftX)}
-                            y1="25"
-                            x2={mapX(sec.bankLeftX)}
-                            y2="195"
-                            stroke="#ef4444"
-                            strokeWidth="1.5"
-                            strokeDasharray="4 3"
-                          />
-                          <line
-                            x1={mapX(sec.bankRightX)}
-                            y1="25"
-                            x2={mapX(sec.bankRightX)}
-                            y2="195"
-                            stroke="#ef4444"
-                            strokeWidth="1.5"
-                            strokeDasharray="4 3"
-                          />
-                          <text
-                            x={mapX(sec.bankLeftX) - 15}
-                            y="20"
-                            fontSize="9"
-                            fill="#64748b"
-                            fontWeight="bold"
-                          >
-                            Sol
-                          </text>
-                          <text
-                            x={mapX((sec.bankLeftX + sec.bankRightX) / 2)}
-                            y="20"
-                            fontSize="9"
-                            textAnchor="middle"
-                            fill="#0284c7"
-                            fontWeight="bold"
-                          >
-                            Ana Yatak
-                          </text>
-                          <text
-                            x={mapX(sec.bankRightX) + 15}
-                            y="20"
-                            fontSize="9"
-                            fill="#64748b"
-                            fontWeight="bold"
-                          >
-                            Sağ
-                          </text>
-                        </>
+                        <div className="text-slate-400 text-xs text-center p-4">
+                          Profil noktaları yetersiz.
+                        </div>
                       );
-                    })()}
-                  </svg>
+                    }
+
+                    const xs = profile.map((p) => p.x);
+                    const zs = profile.map((p) => p.z);
+                    const minX = Math.min(...xs);
+                    const maxX = Math.max(...xs);
+                    const minZ = sec.minElevation != null ? sec.minElevation : Math.min(...zs);
+                    const maxZ = (sec.maxElevation != null ? sec.maxElevation : Math.max(...zs)) + 1;
+                    const rangeX = maxX - minX || 1;
+                    const rangeZ = maxZ - minZ || 1;
+
+                    const mapX = (x: number) => 25 + ((x - minX) / rangeX) * 450;
+                    const mapZ = (z: number) => 195 - ((z - minZ) / rangeZ) * 165;
+
+                    const bLeft = sec.bankLeftX != null && !isNaN(sec.bankLeftX)
+                      ? sec.bankLeftX
+                      : minX + rangeX * 0.3;
+                    const bRight = sec.bankRightX != null && !isNaN(sec.bankRightX)
+                      ? sec.bankRightX
+                      : minX + rangeX * 0.7;
+
+                    const groundPath =
+                      `M 25 195 ` +
+                      profile.map((p) => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') +
+                      ` L 475 195 Z`;
+
+                    return (
+                      <svg
+                        width="100%"
+                        height="100%"
+                        viewBox="0 0 500 220"
+                        preserveAspectRatio="none"
+                        className="w-full h-full"
+                      >
+                        <path
+                          d={groundPath}
+                          fill="#f8fafc"
+                          stroke="#0f172a"
+                          strokeWidth="2.5"
+                          strokeLinejoin="round"
+                        />
+                        <line
+                          x1={mapX(bLeft)}
+                          y1="25"
+                          x2={mapX(bLeft)}
+                          y2="195"
+                          stroke="#ef4444"
+                          strokeWidth="1.5"
+                          strokeDasharray="4 3"
+                        />
+                        <line
+                          x1={mapX(bRight)}
+                          y1="25"
+                          x2={mapX(bRight)}
+                          y2="195"
+                          stroke="#ef4444"
+                          strokeWidth="1.5"
+                          strokeDasharray="4 3"
+                        />
+                        <text
+                          x={Math.max(10, mapX(bLeft) - 15)}
+                          y="20"
+                          fontSize="9"
+                          fill="#64748b"
+                          fontWeight="bold"
+                        >
+                          Sol
+                        </text>
+                        <text
+                          x={mapX((bLeft + bRight) / 2)}
+                          y="20"
+                          fontSize="9"
+                          textAnchor="middle"
+                          fill="#0284c7"
+                          fontWeight="bold"
+                        >
+                          Ana Yatak
+                        </text>
+                        <text
+                          x={Math.min(480, mapX(bRight) + 15)}
+                          y="20"
+                          fontSize="9"
+                          fill="#64748b"
+                          fontWeight="bold"
+                        >
+                          Sağ
+                        </text>
+                      </svg>
+                    );
+                  })()}
                 </div>
 
                 {/* Section Stats Grid */}
@@ -656,25 +749,25 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                   <div className="bg-white p-2 rounded-lg border border-slate-200">
                     <span className="text-slate-500 block">Taban / Zmin:</span>
                     <span className="font-bold text-slate-800 text-xs">
-                      {focusedSection.minElevation.toFixed(2)} m
+                      {fmtNum(focusedSection.minElevation)} m
                     </span>
                   </div>
                   <div className="bg-white p-2 rounded-lg border border-slate-200">
                     <span className="text-slate-500 block">Tepe / Zmax:</span>
                     <span className="font-bold text-slate-800 text-xs">
-                      {focusedSection.maxElevation.toFixed(2)} m
+                      {fmtNum(focusedSection.maxElevation)} m
                     </span>
                   </div>
                   <div className="bg-white p-2 rounded-lg border border-slate-200">
                     <span className="text-slate-500 block">Sol Bank İstasyonu:</span>
                     <span className="font-bold text-slate-800 text-xs">
-                      {focusedSection.bankLeftX.toFixed(1)} m
+                      {fmtNum(focusedSection.bankLeftX, 1)} m
                     </span>
                   </div>
                   <div className="bg-white p-2 rounded-lg border border-slate-200">
                     <span className="text-slate-500 block">Sağ Bank İstasyonu:</span>
                     <span className="font-bold text-slate-800 text-xs">
-                      {focusedSection.bankRightX.toFixed(1)} m
+                      {fmtNum(focusedSection.bankRightX, 1)} m
                     </span>
                   </div>
                 </div>
@@ -707,5 +800,14 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
 
       </div>
     </div>
+  );
+};
+
+export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> = (props) => {
+  if (!props.isOpen) return null;
+  return (
+    <ModalErrorBoundary onClose={props.onClose}>
+      <CrossSectionManagerModalContent {...props} />
+    </ModalErrorBoundary>
   );
 };
