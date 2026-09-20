@@ -66,7 +66,11 @@ import {
   RoutingResult,
   HydraulicStructure,
   StructureHydraulicResult,
-  StructureType
+  StructureType,
+  checkCrossSectionIntersections,
+  deconflictExistingCrossSections,
+  DeconflictReport,
+  IntersectionCheckResult
 } from '../utils/OneDEngine';
 import { CRS_LIST, CRSItem } from '../utils/crsList';
 import { MapAutoCenter } from './MapHelpers';
@@ -207,6 +211,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isSectionManagerModalOpen, setIsSectionManagerModalOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number>(0);
+
+  // Cross-Section Deconfliction Settings (±10° Açı Düzeltmesi & Boy Kısaltma)
+  const [autoDeconflictSections, setAutoDeconflictSections] = useState<boolean>(true);
+  const [maxAngleAdjustment, setMaxAngleAdjustment] = useState<number>(10);
+  const [isDeconflicting, setIsDeconflicting] = useState<boolean>(false);
+  const [deconflictReport, setDeconflictReport] = useState<DeconflictReport | null>(null);
+
+  // Real-time intersection analysis across all active cross-sections
+  const intersectionCheck = useMemo<IntersectionCheckResult>(() => {
+    return checkCrossSectionIntersections(sections);
+  }, [sections]);
 
   // Manning Roughness Coefficients (n)
   const [manningLOB, setManningLOB] = useState<number>(0.060); // Sol Taşkın Yatağı
@@ -614,7 +629,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         null,
         crossSectionInterval,
         sectionWidth,
-        selectedCRS.def
+        selectedCRS?.def,
+        autoDeconflictSections,
+        maxAngleAdjustment
       );
       if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
         data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
@@ -624,6 +641,31 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       setDeletedSectionsList([]);
       setSelectedSectionIdx(0);
       setIsFileOpened(true);
+
+      const check = checkCrossSectionIntersections(data);
+      if (check.hasIntersections) {
+        setDeconflictReport({
+          initialCollisions: check.totalIntersections,
+          angleAdjustedCount: data.filter(s => s.angleAdjustment).length,
+          trimmedCount: data.filter(s => s.isTrimmed).length,
+          remainingCollisions: check.totalIntersections,
+          summary: `${check.totalIntersections} adet kesişme noktası mevcut.`
+        });
+      } else {
+        const adjusted = data.filter(s => s.angleAdjustment).length;
+        const trimmed = data.filter(s => s.isTrimmed).length;
+        if (adjusted > 0 || trimmed > 0) {
+          setDeconflictReport({
+            initialCollisions: adjusted + trimmed,
+            angleAdjustedCount: adjusted,
+            trimmedCount: trimmed,
+            remainingCollisions: 0,
+            summary: `Tüm kesişmeler giderildi (${adjusted} kesite ±10° açı düzeltmesi, ${trimmed} kesite boy kısaltma uygulandı).`
+          });
+        } else {
+          setDeconflictReport(null);
+        }
+      }
 
       // Auto-calculate downstream slope from DEM
       if (data.length >= 2) {
@@ -636,6 +678,35 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       alert("Enkesit çıkarımı sırasında hata oluştu: " + err.message);
     } finally {
       setIsExtracting(false);
+    }
+  };
+
+  // Manual deconflict trigger for existing or manual cross-sections
+  const handleResolveIntersections = async () => {
+    if (!demFile) {
+      alert("Enkesit kotlarını yeniden hesaplamak için bir DEM (GeoTIFF) dosyası gereklidir.");
+      return;
+    }
+    if (sections.length < 2) {
+      alert("Düzeltilecek enkesit bulunamadı.");
+      return;
+    }
+    setIsDeconflicting(true);
+    try {
+      const { sections: resolvedSections, report } = await deconflictExistingCrossSections(
+        sections,
+        demFile,
+        selectedCRS?.def,
+        maxAngleAdjustment
+      );
+      setSections(resolvedSections);
+      setOriginalSections(resolvedSections);
+      setDeconflictReport(report);
+    } catch (err: any) {
+      console.error(err);
+      alert("Kesişme düzeltme sırasında hata oluştu: " + err.message);
+    } finally {
+      setIsDeconflicting(false);
     }
   };
 
@@ -3078,6 +3149,62 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </div>
                     </div>
 
+                    {/* Kesişme Önleme & Düzeltme Kontrolü (±10° Açı & Boy Kısaltma) */}
+                    <div className="bg-slate-50 border border-slate-200/90 rounded-xl p-2.5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={autoDeconflictSections}
+                            onChange={(e) => setAutoDeconflictSections(e.target.checked)}
+                            className="w-3.5 h-3.5 rounded text-cyan-700 focus:ring-cyan-600 border-slate-300 cursor-pointer"
+                          />
+                          <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
+                            <span>Kesişme Önleme & Düzeltme</span>
+                            <span className="text-[9px] bg-cyan-100 text-cyan-800 px-1.5 py-0.2 rounded font-mono font-bold border border-cyan-200">
+                              ±{maxAngleAdjustment}°
+                            </span>
+                          </span>
+                        </label>
+                        <span className="text-[9px] text-slate-500 font-medium">80° - 100° Aralığı</span>
+                      </div>
+
+                      {autoDeconflictSections && (
+                        <div className="space-y-1.5 pt-1.5 border-t border-slate-200/60 text-[10px] text-slate-600">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-600 font-medium">Açı Düzeltme Toleransı:</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setMaxAngleAdjustment(5)}
+                                className={`px-2 py-0.5 rounded-lg text-[9px] font-bold cursor-pointer transition-all ${
+                                  maxAngleAdjustment === 5
+                                    ? 'bg-cyan-700 text-white shadow-2xs'
+                                    : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                                }`}
+                              >
+                                ±5° (85°-95°)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMaxAngleAdjustment(10)}
+                                className={`px-2 py-0.5 rounded-lg text-[9px] font-bold cursor-pointer transition-all ${
+                                  maxAngleAdjustment === 10
+                                    ? 'bg-cyan-700 text-white shadow-2xs'
+                                    : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                                }`}
+                              >
+                                ±10° (80°-100°)
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-[9px] text-slate-500 leading-tight">
+                            Kesitler nehir eksenine 90° dik çizilir; virajlarda kesişenler ±{maxAngleAdjustment}° döndürülür. Çakışma sürerse kesit boyu güvenle kısaltılır.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
                     <button
                       onClick={handleGenerateSections}
                       disabled={isExtracting || !demFile || !centerlineFile}
@@ -3204,6 +3331,52 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </button>
                       )}
                     </div>
+
+                    {/* Intersection Status & Resolution Alert */}
+                    {intersectionCheck.hasIntersections ? (
+                      <div className="bg-amber-50 border border-amber-300 rounded-xl p-2 space-y-1.5 shadow-2xs">
+                        <div className="flex items-start justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5 text-amber-900 font-bold text-[11px]">
+                            <AlertCircle size={13} className="text-amber-600 shrink-0" />
+                            <span>{intersectionCheck.totalIntersections} Kesişme Noktası ({intersectionCheck.intersectingIndices.length} Kesit)</span>
+                          </div>
+                          <span className="text-[9px] bg-amber-200 text-amber-900 font-bold px-1.5 py-0.2 rounded">
+                            Çakışma Var
+                          </span>
+                        </div>
+                        <p className="text-[9px] text-amber-700 leading-tight">
+                          Virajdaki komşu enkesitler birbirini kesiyor. Hidrolik model doğruluğu için kesitlerin çakışması önlenmelidir.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleResolveIntersections}
+                          disabled={isDeconflicting || !demFile}
+                          className="w-full py-1.5 px-2 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 text-white rounded-lg text-[10px] font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                          title="Virajlardaki kesişen enkesitleri ±10° döndür ve gerekirse boyunu kısalt"
+                        >
+                          <RefreshCw size={11} className={isDeconflicting ? 'animate-spin' : ''} />
+                          <span>{isDeconflicting ? 'Kesişmeler Düzeltiliyor...' : 'Kesişmeleri Düzelt (±10° Açı & Kırpma)'}</span>
+                        </button>
+                      </div>
+                    ) : deconflictReport ? (
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2 space-y-1 shadow-2xs">
+                        <div className="flex items-center gap-1.5 text-emerald-900 font-bold text-[10px]">
+                          <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                          <span>Kesişmeler Başarıyla Giderildi</span>
+                        </div>
+                        <p className="text-[9px] text-emerald-700 leading-tight">
+                          {deconflictReport.summary}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="bg-emerald-50/70 border border-emerald-200/60 rounded-xl px-2 py-1.5 flex items-center justify-between">
+                        <span className="text-[10px] text-emerald-800 font-bold flex items-center gap-1">
+                          <CheckCircle2 size={11} className="text-emerald-600" />
+                          <span>Kesişen kesit yok</span>
+                        </span>
+                        <span className="text-[9px] text-emerald-700 font-medium">Hidrolik geometri uygun</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </section>
@@ -3833,19 +4006,39 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           {sections.map((sec, idx) => {
                             if (!sec.cutLine) return null;
                             const isSelected = idx === selectedSectionIdx;
+                            const isIntersecting = !!sec.isIntersecting || intersectionCheck.intersectingIndices.includes(idx);
+                            const isModified = !!sec.angleAdjustment || !!sec.isTrimmed;
+
+                            let strokeColor = '#10b981'; // normal green
+                            if (isSelected) {
+                              strokeColor = '#06b6d4'; // cyan
+                            } else if (isIntersecting) {
+                              strokeColor = '#ef4444'; // red warning
+                            } else if (isModified) {
+                              strokeColor = '#2563eb'; // blue adjusted
+                            }
+
                             return (
                               <Polyline
                                 key={`${sec.station}-${idx}`}
                                 positions={sec.cutLine}
-                                color={isSelected ? '#06b6d4' : '#10b981'}
-                                weight={isSelected ? 4 : 2}
-                                opacity={0.85}
+                                color={strokeColor}
+                                weight={isSelected ? 4 : isIntersecting ? 3 : 2}
+                                dashArray={isIntersecting ? '4, 4' : undefined}
+                                opacity={0.9}
                                 eventHandlers={{
                                   click: () => setSelectedSectionIdx(idx)
                                 }}
                               >
+                                <Tooltip sticky>
+                                  <div className="text-[10px] font-bold">
+                                    {isIntersecting && '⚠️ '}Kesit Km {(sec.station / 1000).toFixed(3)}
+                                    {sec.angleAdjustment ? ` [Açı: ${sec.angleAdjustment > 0 ? '+' : ''}${sec.angleAdjustment}°]` : ''}
+                                    {sec.isTrimmed ? ' [Kırpıldı]' : ''}
+                                  </div>
+                                </Tooltip>
                                 <Popup>
-                                  <div className="p-1 space-y-1.5 min-w-[160px]">
+                                  <div className="p-1 space-y-1.5 min-w-[175px]">
                                     <div className="flex items-center justify-between border-b border-slate-200 pb-1">
                                       <span className="font-bold text-xs text-slate-800">
                                         Kesit Km {(sec.station / 1000).toFixed(3)}
@@ -3859,6 +4052,25 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                       <div>Maks Kot: <strong>{sec.maxElevation.toFixed(2)} m</strong></div>
                                       <div>Nokta Sayısı: <strong>{sec.profile.length}</strong></div>
                                     </div>
+
+                                    {/* Deconfliction status badges */}
+                                    {isIntersecting && (
+                                      <div className="text-[9px] text-red-700 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 font-bold flex items-center gap-1">
+                                        <AlertCircle size={10} className="shrink-0" />
+                                        <span>Komşu kesitle çakışma/kesişim var!</span>
+                                      </div>
+                                    )}
+                                    {sec.angleAdjustment && (
+                                      <div className="text-[9px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                                        📐 Açı Düzeltmesi: <strong>{sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}°</strong> (80°-100° aralığı)
+                                      </div>
+                                    )}
+                                    {sec.isTrimmed && (
+                                      <div className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                        ✂️ Boy Kısaltma: <strong>Kol boyu güvenle kısaltıldı</strong>
+                                      </div>
+                                    )}
+
                                     <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
                                       <button
                                         type="button"

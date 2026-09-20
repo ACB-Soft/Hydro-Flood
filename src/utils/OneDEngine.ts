@@ -18,6 +18,9 @@ export interface CrossSection {
   maxElevation: number;
   bankLeftX: number;
   bankRightX: number;
+  angleAdjustment?: number; // deg rotasyon sapması (örn: -7°, +9°)
+  isTrimmed?: boolean;      // kesişmeyi önlemek için boyu güvenle kısaltıldı mı?
+  isIntersecting?: boolean; // hâlâ komşu bir kesitle kesişiyor mu?
 }
 
 export interface RoutingResult {
@@ -980,6 +983,375 @@ export function bankCoordsToKMLFile(
   return new File([blob], fileName, { type: 'application/vnd.google-earth.kml+xml' });
 }
 
+export interface IntersectionCheckResult {
+  hasIntersections: boolean;
+  intersectingPairs: [number, number][]; // index pairs of intersecting sections
+  intersectingIndices: number[];         // unique list of intersecting section indices
+  totalIntersections: number;
+}
+
+/**
+ * Checks all adjacent and near-neighbor cross-sections for mutual cut-line intersections.
+ */
+export function checkCrossSectionIntersections(sections: CrossSection[]): IntersectionCheckResult {
+  const intersectingPairs: [number, number][] = [];
+  const indexSet = new Set<number>();
+
+  for (let i = 0; i < sections.length; i++) {
+    const secA = sections[i];
+    if (!secA.cutLine || secA.cutLine.length < 2) continue;
+    const lineA = turf.lineString([
+      [secA.cutLine[0][1], secA.cutLine[0][0]],
+      [secA.cutLine[1][1], secA.cutLine[1][0]]
+    ]);
+
+    // Check against near neighbors (up to 4 sections upstream/downstream)
+    const maxNeighbor = Math.min(sections.length, i + 5);
+    for (let j = i + 1; j < maxNeighbor; j++) {
+      const secB = sections[j];
+      if (!secB.cutLine || secB.cutLine.length < 2) continue;
+      const lineB = turf.lineString([
+        [secB.cutLine[0][1], secB.cutLine[0][0]],
+        [secB.cutLine[1][1], secB.cutLine[1][0]]
+      ]);
+
+      const isect = turf.lineIntersect(lineA, lineB);
+      if (isect.features.length > 0) {
+        intersectingPairs.push([i, j]);
+        indexSet.add(i);
+        indexSet.add(j);
+      }
+    }
+  }
+
+  const intersectingIndices = Array.from(indexSet).sort((a, b) => a - b);
+  return {
+    hasIntersections: intersectingPairs.length > 0,
+    intersectingPairs,
+    intersectingIndices,
+    totalIntersections: intersectingPairs.length
+  };
+}
+
+/**
+ * Samples DEM elevations along a straight cut-line defined by center point, streamwise bearing,
+ * angle offset (±10° relative to normal 90°), and left/right arm lengths.
+ */
+export function sampleCrossSectionProfile(
+  dem: any,
+  pt: Feature<any>,
+  bearing: number,
+  angleOffset: number,
+  leftLength: number,
+  rightLength: number,
+  crsDef?: string,
+  resolution: number = 2
+): {
+  profile: ProfilePoint[];
+  cutLine: [[number, number], [number, number]];
+  minElevation: number;
+  maxElevation: number;
+  bankLeftX: number;
+  bankRightX: number;
+} {
+  const angleLeft = bearing - 90 + angleOffset;
+  const angleRight = bearing + 90 + angleOffset;
+
+  const rawSamples: { x: number; z: number }[] = [];
+
+  // Left arm samples (from -leftLength to 0)
+  for (let dist = -leftLength; dist < 0; dist += resolution) {
+    const samplePt = turf.destination(pt, Math.abs(dist), angleLeft, { units: 'meters' });
+    const [lon, lat] = samplePt.geometry.coordinates;
+    const z = getElevation(dem, lon, lat, crsDef);
+    rawSamples.push({ x: dist + leftLength, z });
+  }
+
+  // Center point
+  const [cLon, cLat] = pt.geometry.coordinates;
+  rawSamples.push({ x: leftLength, z: getElevation(dem, cLon, cLat, crsDef) });
+
+  // Right arm samples (from resolution to rightLength)
+  for (let dist = resolution; dist <= rightLength; dist += resolution) {
+    const samplePt = turf.destination(pt, dist, angleRight, { units: 'meters' });
+    const [lon, lat] = samplePt.geometry.coordinates;
+    const z = getElevation(dem, lon, lat, crsDef);
+    rawSamples.push({ x: leftLength + dist, z });
+  }
+
+  // Ensure right endpoint is included
+  if (rawSamples[rawSamples.length - 1].x < leftLength + rightLength - 0.5) {
+    const endPt = turf.destination(pt, rightLength, angleRight, { units: 'meters' });
+    const [lon, lat] = endPt.geometry.coordinates;
+    rawSamples.push({ x: leftLength + rightLength, z: getElevation(dem, lon, lat, crsDef) });
+  }
+
+  // Fill any NaN elevations
+  const validElevs = rawSamples.filter(s => !isNaN(s.z)).map(s => s.z);
+  const avgValid = validElevs.length > 0 ? validElevs.reduce((a, b) => a + b, 0) / validElevs.length : 100;
+
+  for (let i = 0; i < rawSamples.length; i++) {
+    if (isNaN(rawSamples[i].z)) {
+      let leftZ: number | null = null;
+      for (let l = i - 1; l >= 0; l--) { if (!isNaN(rawSamples[l].z)) { leftZ = rawSamples[l].z; break; } }
+      let rightZ: number | null = null;
+      for (let r = i + 1; r < rawSamples.length; r++) { if (!isNaN(rawSamples[r].z)) { rightZ = rawSamples[r].z; break; } }
+      if (leftZ !== null && rightZ !== null) rawSamples[i].z = (leftZ + rightZ) / 2;
+      else if (leftZ !== null) rawSamples[i].z = leftZ;
+      else if (rightZ !== null) rawSamples[i].z = rightZ;
+      else rawSamples[i].z = avgValid;
+    }
+  }
+
+  // Identify Thalweg (lowest bed elevation)
+  let minIdx = 0;
+  let minZ = rawSamples[0].z;
+  for (let i = 0; i < rawSamples.length; i++) {
+    if (rawSamples[i].z < minZ) {
+      minZ = rawSamples[i].z;
+      minIdx = i;
+    }
+  }
+  const talvegX = rawSamples[minIdx].x;
+  const totalWidth = leftLength + rightLength;
+
+  const channelHalfW = Math.min(totalWidth * 0.2, Math.max(10, totalWidth * 0.08));
+  const bankLeftX = Math.max(rawSamples[1].x, talvegX - channelHalfW);
+  const bankRightX = Math.min(rawSamples[rawSamples.length - 2].x, talvegX + channelHalfW);
+
+  const profile: ProfilePoint[] = rawSamples.map(s => {
+    let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
+    if (s.x < bankLeftX) type = 'LOB';
+    else if (s.x > bankRightX) type = 'ROB';
+    return { x: Number(s.x.toFixed(2)), z: Number(s.z.toFixed(2)), type };
+  });
+
+  const ptLeft = turf.destination(pt, leftLength, angleLeft, { units: 'meters' });
+  const ptRight = turf.destination(pt, rightLength, angleRight, { units: 'meters' });
+  const cutLine: [[number, number], [number, number]] = [
+    [ptLeft.geometry.coordinates[1], ptLeft.geometry.coordinates[0]],
+    [ptRight.geometry.coordinates[1], ptRight.geometry.coordinates[0]]
+  ];
+
+  const elevations = profile.map(p => p.z);
+  return {
+    profile,
+    cutLine,
+    minElevation: Math.min(...elevations),
+    maxElevation: Math.max(...elevations),
+    bankLeftX: Number(bankLeftX.toFixed(2)),
+    bankRightX: Number(bankRightX.toFixed(2))
+  };
+}
+
+export interface DeconflictReport {
+  initialCollisions: number;
+  angleAdjustedCount: number;
+  trimmedCount: number;
+  remainingCollisions: number;
+  summary: string;
+}
+
+interface InternalSectionDraft {
+  station: number;
+  pt: Feature<any>;
+  centerCoord: [number, number];
+  bearing: number;
+  angleOffset: number; // starts at 0° (90° normal)
+  leftLength: number;
+  rightLength: number;
+  channelHalfW: number;
+  isTrimmed: boolean;
+}
+
+function getDraftGeoLine(draft: InternalSectionDraft): Feature<LineString> {
+  const aL = draft.bearing - 90 + draft.angleOffset;
+  const aR = draft.bearing + 90 + draft.angleOffset;
+  const pL = turf.destination(draft.pt, draft.leftLength, aL, { units: 'meters' });
+  const pR = turf.destination(draft.pt, draft.rightLength, aR, { units: 'meters' });
+  return turf.lineString([pL.geometry.coordinates, pR.geometry.coordinates]);
+}
+
+function checkDraftsIntersection(draftA: InternalSectionDraft, draftB: InternalSectionDraft): Feature<any> | null {
+  const lA = getDraftGeoLine(draftA);
+  const lB = getDraftGeoLine(draftB);
+  const isect = turf.lineIntersect(lA, lB);
+  return isect.features.length > 0 ? isect.features[0] : null;
+}
+
+/**
+ * Core deconfliction logic:
+ * 1. Checks intersections between adjacent / near-neighbor sections.
+ * 2. Tries rotational adjustment (within ±10° from 90° normal) to resolve collision.
+ * 3. If rotation alone does not clear the collision, safely trims the intersecting arm length.
+ */
+function runDeconflictEngine(
+  drafts: InternalSectionDraft[],
+  maxAngleAdjustment: number = 10
+): DeconflictReport {
+  let initialCollisions = 0;
+  let angleAdjustedCount = 0;
+  let trimmedCount = 0;
+
+  // Count initial collisions
+  for (let i = 0; i < drafts.length; i++) {
+    const maxN = Math.min(drafts.length, i + 4);
+    for (let j = i + 1; j < maxN; j++) {
+      if (checkDraftsIntersection(drafts[i], drafts[j])) {
+        initialCollisions++;
+      }
+    }
+  }
+
+  if (initialCollisions === 0) {
+    return {
+      initialCollisions: 0,
+      angleAdjustedCount: 0,
+      trimmedCount: 0,
+      remainingCollisions: 0,
+      summary: "Kesişen enkesit tespit edilmedi. Tüm kesitler akış eksenine tam 90° dik konumlandırıldı."
+    };
+  }
+
+  // --- PASS 1: Rotational Angle Adjustment (±10° aralığında arama) ---
+  const angleCandidates: number[] = [0];
+  for (let a = 2; a <= maxAngleAdjustment; a += 2) {
+    angleCandidates.push(a);
+    angleCandidates.push(-a);
+  }
+
+  for (let i = 0; i < drafts.length - 1; i++) {
+    const j = i + 1;
+    if (checkDraftsIntersection(drafts[i], drafts[j])) {
+      let resolved = false;
+      const origI = drafts[i].angleOffset;
+      const origJ = drafts[j].angleOffset;
+
+      // Try combinations sorted by total deviation
+      const candidatePairs: [number, number, number][] = [];
+      for (const dI of angleCandidates) {
+        for (const dJ of angleCandidates) {
+          if (dI === 0 && dJ === 0) continue;
+          candidatePairs.push([dI, dJ, Math.abs(dI) + Math.abs(dJ)]);
+        }
+      }
+      candidatePairs.sort((a, b) => a[2] - b[2]);
+
+      for (const [dI, dJ] of candidatePairs) {
+        drafts[i].angleOffset = dI;
+        drafts[j].angleOffset = dJ;
+
+        // Check if i and j no longer collide
+        if (!checkDraftsIntersection(drafts[i], drafts[j])) {
+          // Check collision with outer neighbors
+          const collidesPrev = i > 0 && checkDraftsIntersection(drafts[i - 1], drafts[i]);
+          const collidesNext = j < drafts.length - 1 && checkDraftsIntersection(drafts[j], drafts[j + 1]);
+
+          if (!collidesPrev && !collidesNext) {
+            resolved = true;
+            angleAdjustedCount++;
+            break;
+          }
+        }
+      }
+
+      if (!resolved) {
+        // Revert to original angles if rotation could not resolve it
+        drafts[i].angleOffset = origI;
+        drafts[j].angleOffset = origJ;
+      }
+    }
+  }
+
+  // --- PASS 2: Safe Length Trimming for Remaining Intersections ---
+  for (let pass = 0; pass < 3; pass++) {
+    let hadIntersection = false;
+    for (let i = 0; i < drafts.length; i++) {
+      const maxN = Math.min(drafts.length, i + 4);
+      for (let j = i + 1; j < maxN; j++) {
+        const isectPt = checkDraftsIntersection(drafts[i], drafts[j]);
+        if (!isectPt) continue;
+
+        hadIntersection = true;
+
+        // Trim intersecting arm of section i
+        const d_i = turf.distance(drafts[i].pt, isectPt, { units: 'meters' });
+        const line_i = getDraftGeoLine(drafts[i]);
+        const pLeft_i = turf.point(line_i.geometry.coordinates[0]);
+        const pRight_i = turf.point(line_i.geometry.coordinates[1]);
+        const distToLeft_i = turf.distance(pLeft_i, isectPt);
+        const distToRight_i = turf.distance(pRight_i, isectPt);
+
+        const minSafe_i = Math.max(drafts[i].channelHalfW + 3, 10);
+        const targetLen_i = Math.max(minSafe_i, Number((d_i - 3).toFixed(1))); // 3m buffer before intersection
+
+        if (distToLeft_i < distToRight_i) {
+          if (targetLen_i < drafts[i].leftLength) {
+            drafts[i].leftLength = targetLen_i;
+            drafts[i].isTrimmed = true;
+            trimmedCount++;
+          }
+        } else {
+          if (targetLen_i < drafts[i].rightLength) {
+            drafts[i].rightLength = targetLen_i;
+            drafts[i].isTrimmed = true;
+            trimmedCount++;
+          }
+        }
+
+        // Trim intersecting arm of section j
+        const d_j = turf.distance(drafts[j].pt, isectPt, { units: 'meters' });
+        const line_j = getDraftGeoLine(drafts[j]);
+        const pLeft_j = turf.point(line_j.geometry.coordinates[0]);
+        const pRight_j = turf.point(line_j.geometry.coordinates[1]);
+        const distToLeft_j = turf.distance(pLeft_j, isectPt);
+        const distToRight_j = turf.distance(pRight_j, isectPt);
+
+        const minSafe_j = Math.max(drafts[j].channelHalfW + 3, 10);
+        const targetLen_j = Math.max(minSafe_j, Number((d_j - 3).toFixed(1)));
+
+        if (distToLeft_j < distToRight_j) {
+          if (targetLen_j < drafts[j].leftLength) {
+            drafts[j].leftLength = targetLen_j;
+            drafts[j].isTrimmed = true;
+            trimmedCount++;
+          }
+        } else {
+          if (targetLen_j < drafts[j].rightLength) {
+            drafts[j].rightLength = targetLen_j;
+            drafts[j].isTrimmed = true;
+            trimmedCount++;
+          }
+        }
+      }
+    }
+    if (!hadIntersection) break;
+  }
+
+  // Count remaining collisions after deconfliction
+  let remainingCollisions = 0;
+  for (let i = 0; i < drafts.length; i++) {
+    const maxN = Math.min(drafts.length, i + 4);
+    for (let j = i + 1; j < maxN; j++) {
+      if (checkDraftsIntersection(drafts[i], drafts[j])) {
+        remainingCollisions++;
+      }
+    }
+  }
+
+  const summary = remainingCollisions === 0
+    ? `Kesişen ${initialCollisions} adet enkesit başarıyla düzeltildi (${angleAdjustedCount} kesitte ±10° açı düzeltmesi, ${trimmedCount} kolda güvenli boy kısaltma uygulandı).`
+    : `${initialCollisions} adet kesişmeden ${initialCollisions - remainingCollisions} adedi giderildi (${angleAdjustedCount} açı düzeltmesi, ${trimmedCount} kısaltma).`;
+
+  return {
+    initialCollisions,
+    angleAdjustedCount,
+    trimmedCount,
+    remainingCollisions,
+    summary
+  };
+}
+
 export async function generateCrossSections(
   demFile: File,
   centerlineFile: File,
@@ -987,117 +1359,185 @@ export async function generateCrossSections(
   rightBankFile: File | null,
   dx: number,
   sectionWidth: number = 200, // Default 200m width
-  crsDef?: string
+  crsDef?: string,
+  autoDeconflict: boolean = true,
+  maxAngleAdjustment: number = 10
 ): Promise<CrossSection[]> {
   const dem = await loadDEM(demFile);
   const centerline = await parseKML(centerlineFile);
   
   const length = turf.length(centerline, { units: 'meters' });
-  const sections: CrossSection[] = [];
-  
+  const halfWidth = sectionWidth / 2;
+  const channelHalfW = Math.min(sectionWidth * 0.2, Math.max(10, sectionWidth * 0.08));
+
+  // 1. Initial 90° normal section drafts along centerline
+  const drafts: InternalSectionDraft[] = [];
+
   for (let d = 0; d <= length; d += dx) {
     const pt = turf.along(centerline, d, { units: 'meters' });
     const ptNext = turf.along(centerline, Math.min(d + 1, length), { units: 'meters' });
     const bearing = turf.bearing(pt, ptNext);
-    
-    const angleLeft = bearing - 90;
-    const angleRight = bearing + 90;
-    
-    const halfWidth = sectionWidth / 2;
-    const resolution = 2; // sample DEM every 2 meters
-    const rawSamples: { x: number; z: number }[] = [];
-    
-    for (let dist = -halfWidth; dist <= halfWidth; dist += resolution) {
-      let samplePt;
-      if (dist < 0) {
-        samplePt = turf.destination(pt, Math.abs(dist), angleLeft, { units: 'meters' });
-      } else if (dist > 0) {
-        samplePt = turf.destination(pt, dist, angleRight, { units: 'meters' });
-      } else {
-        samplePt = pt;
-      }
-      
-      const [lon, lat] = samplePt.geometry.coordinates;
-      const z = getElevation(dem, lon, lat, crsDef);
-      rawSamples.push({ x: dist + halfWidth, z });
-    }
-
-    // Clean any NaN elevations by linear interpolation or nearest valid
-    const validElevs = rawSamples.filter(s => !isNaN(s.z)).map(s => s.z);
-    const avgValid = validElevs.length > 0 ? validElevs.reduce((a, b) => a + b, 0) / validElevs.length : 100;
-
-    for (let i = 0; i < rawSamples.length; i++) {
-      if (isNaN(rawSamples[i].z)) {
-        // Find nearest valid left and right
-        let leftZ: number | null = null;
-        for (let l = i - 1; l >= 0; l--) {
-          if (!isNaN(rawSamples[l].z)) { leftZ = rawSamples[l].z; break; }
-        }
-        let rightZ: number | null = null;
-        for (let r = i + 1; r < rawSamples.length; r++) {
-          if (!isNaN(rawSamples[r].z)) { rightZ = rawSamples[r].z; break; }
-        }
-        if (leftZ !== null && rightZ !== null) {
-          rawSamples[i].z = (leftZ + rightZ) / 2;
-        } else if (leftZ !== null) {
-          rawSamples[i].z = leftZ;
-        } else if (rightZ !== null) {
-          rawSamples[i].z = rightZ;
-        } else {
-          rawSamples[i].z = avgValid;
-        }
-      }
-    }
-
-    // Identify Talveg (deepest point)
-    let minIdx = 0;
-    let minZ = rawSamples[0].z;
-    for (let i = 0; i < rawSamples.length; i++) {
-      if (rawSamples[i].z < minZ) {
-        minZ = rawSamples[i].z;
-        minIdx = i;
-      }
-    }
-    const talvegX = rawSamples[minIdx].x;
-
-    // Define main channel banks around the talveg
-    // Main channel typically spans 15-35m around the talveg for natural streams
-    const channelHalfW = Math.min(sectionWidth * 0.2, Math.max(10, sectionWidth * 0.08));
-    const bankLeftX = Math.max(rawSamples[1].x, talvegX - channelHalfW);
-    const bankRightX = Math.min(rawSamples[rawSamples.length - 2].x, talvegX + channelHalfW);
-
-    const profile: ProfilePoint[] = rawSamples.map(s => {
-      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
-      if (s.x < bankLeftX) type = 'LOB';
-      else if (s.x > bankRightX) type = 'ROB';
-      return { x: s.x, z: s.z, type };
-    });
-    
     const [centerLon, centerLat] = pt.geometry.coordinates;
-    const ptLeft = turf.destination(pt, halfWidth, angleLeft, { units: 'meters' });
-    const ptRight = turf.destination(pt, halfWidth, angleRight, { units: 'meters' });
-    const cutLine: [[number, number], [number, number]] = [
-      [ptLeft.geometry.coordinates[1], ptLeft.geometry.coordinates[0]],
-      [ptRight.geometry.coordinates[1], ptRight.geometry.coordinates[0]]
-    ];
 
-    const elevations = profile.map(p => p.z);
-    const minElevation = Math.min(...elevations);
-    const maxElevation = Math.max(...elevations);
+    drafts.push({
+      station: Math.round(d),
+      pt,
+      centerCoord: [centerLat, centerLon],
+      bearing,
+      angleOffset: 0,
+      leftLength: halfWidth,
+      rightLength: halfWidth,
+      channelHalfW,
+      isTrimmed: false
+    });
+  }
+
+  // 2. If auto-deconflict is enabled, resolve intersections (±10° angle adjustment, then length trim)
+  if (autoDeconflict && drafts.length > 1) {
+    runDeconflictEngine(drafts, maxAngleAdjustment);
+  }
+
+  // 3. Sample DEM elevations along final cut-lines
+  const sections: CrossSection[] = [];
+
+  for (const draft of drafts) {
+    const sampled = sampleCrossSectionProfile(
+      dem,
+      draft.pt,
+      draft.bearing,
+      draft.angleOffset,
+      draft.leftLength,
+      draft.rightLength,
+      crsDef,
+      2
+    );
 
     sections.push({
-      station: Math.round(d),
-      profile,
-      centerCoord: [centerLat, centerLon],
-      cutLine,
-      minElevation,
-      maxElevation,
-      bankLeftX,
-      bankRightX
+      station: draft.station,
+      profile: sampled.profile,
+      centerCoord: draft.centerCoord,
+      cutLine: sampled.cutLine,
+      minElevation: sampled.minElevation,
+      maxElevation: sampled.maxElevation,
+      bankLeftX: sampled.bankLeftX,
+      bankRightX: sampled.bankRightX,
+      angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined,
+      isTrimmed: draft.isTrimmed ? true : undefined
     });
+  }
+
+  // 4. Mark remaining intersections if any
+  const check = checkCrossSectionIntersections(sections);
+  if (check.hasIntersections) {
+    for (const idx of check.intersectingIndices) {
+      sections[idx].isIntersecting = true;
+    }
   }
   
   return sections;
+}
+
+/**
+ * Resolves intersections on existing cross-sections (e.g. from manual KML or previously generated)
+ * applying the ±10° angle adjustment and safe trimming rules.
+ */
+export async function deconflictExistingCrossSections(
+  sections: CrossSection[],
+  demFile: File,
+  crsDef?: string,
+  maxAngleAdjustment: number = 10
+): Promise<{ sections: CrossSection[]; report: DeconflictReport }> {
+  if (sections.length < 2) {
+    return {
+      sections,
+      report: {
+        initialCollisions: 0,
+        angleAdjustedCount: 0,
+        trimmedCount: 0,
+        remainingCollisions: 0,
+        summary: "Düzeltilecek yeterli enkesit yok."
+      }
+    };
+  }
+
+  const dem = await loadDEM(demFile);
+  const drafts: InternalSectionDraft[] = [];
+
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    if (!sec.cutLine || sec.cutLine.length < 2) continue;
+
+    const [ptL, ptR] = sec.cutLine; // [[latL, lonL], [latR, lonR]]
+    const pLeft = turf.point([ptL[1], ptL[0]]);
+    const pRight = turf.point([ptR[1], ptR[0]]);
+
+    let centerPt: Feature<any>;
+    if (sec.centerCoord) {
+      centerPt = turf.point([sec.centerCoord[1], sec.centerCoord[0]]);
+    } else {
+      centerPt = turf.midpoint(pLeft, pRight);
+    }
+
+    const [cLon, cLat] = centerPt.geometry.coordinates;
+    const leftLen = turf.distance(centerPt, pLeft, { units: 'meters' });
+    const rightLen = turf.distance(centerPt, pRight, { units: 'meters' });
+
+    // Approximate stream bearing perpendicular to cut-line
+    const cutBearing = turf.bearing(pLeft, pRight);
+    const bearing = cutBearing - 90; // river flowing perpendicular
+    const channelHalfW = Math.max(10, (sec.bankRightX - sec.bankLeftX) / 2 || 15);
+
+    drafts.push({
+      station: sec.station,
+      pt: centerPt,
+      centerCoord: [cLat, cLon],
+      bearing,
+      angleOffset: sec.angleAdjustment || 0,
+      leftLength: leftLen,
+      rightLength: rightLen,
+      channelHalfW,
+      isTrimmed: sec.isTrimmed || false
+    });
+  }
+
+  const report = runDeconflictEngine(drafts, maxAngleAdjustment);
+
+  const updatedSections: CrossSection[] = [];
+  for (let i = 0; i < drafts.length; i++) {
+    const draft = drafts[i];
+    const sampled = sampleCrossSectionProfile(
+      dem,
+      draft.pt,
+      draft.bearing,
+      draft.angleOffset,
+      draft.leftLength,
+      draft.rightLength,
+      crsDef,
+      2
+    );
+
+    updatedSections.push({
+      station: draft.station,
+      profile: sampled.profile,
+      centerCoord: draft.centerCoord,
+      cutLine: sampled.cutLine,
+      minElevation: sampled.minElevation,
+      maxElevation: sampled.maxElevation,
+      bankLeftX: sampled.bankLeftX,
+      bankRightX: sampled.bankRightX,
+      angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined,
+      isTrimmed: draft.isTrimmed ? true : undefined
+    });
+  }
+
+  const check = checkCrossSectionIntersections(updatedSections);
+  if (check.hasIntersections) {
+    for (const idx of check.intersectingIndices) {
+      updatedSections[idx].isIntersecting = true;
+    }
+  }
+
+  return { sections: updatedSections, report };
 }
 
 export async function parseManualCrossSections(

@@ -421,11 +421,32 @@ export const CrossSectionManagerModal: React.FC<CrossSectionManagerModalProps> =
                               {originalIndex + 1}
                             </td>
                             <td className="py-2 px-3 font-bold text-slate-900">
-                              <div className="flex items-center gap-1.5">
-                                <span>Km {(sec.station / 1000).toFixed(3)}</span>
-                                <span className="text-[10px] text-slate-400 font-normal">
-                                  ({sec.station.toFixed(0)}m)
-                                </span>
+                              <div className="flex flex-col">
+                                <div className="flex items-center gap-1.5">
+                                  <span>Km {(sec.station / 1000).toFixed(3)}</span>
+                                  <span className="text-[10px] text-slate-400 font-normal">
+                                    ({sec.station.toFixed(0)}m)
+                                  </span>
+                                </div>
+                                {(sec.angleAdjustment || sec.isTrimmed || sec.isIntersecting) && (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    {sec.isIntersecting && (
+                                      <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.2 rounded font-bold">
+                                        Kesişiyor
+                                      </span>
+                                    )}
+                                    {sec.angleAdjustment && (
+                                      <span className="text-[9px] bg-blue-100 text-blue-800 px-1 py-0.2 rounded font-bold font-mono">
+                                        {sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}°
+                                      </span>
+                                    )}
+                                    {sec.isTrimmed && (
+                                      <span className="text-[9px] bg-amber-100 text-amber-800 px-1 py-0.2 rounded font-bold">
+                                        Kırpıldı
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             </td>
                             <td className="py-2 px-3 font-mono font-bold text-cyan-900">
