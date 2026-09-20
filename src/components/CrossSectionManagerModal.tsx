@@ -746,16 +746,28 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                     const spillSvgR = mapX(spillRightX);
                     const spillSvgY = mapZ(spillElevation);
 
+                    const zRange = Math.max(1, maxZ - minZ);
+                    const yTicks = [0, 0.33, 0.66, 1].map(ratio => {
+                      const zVal = minZ + ratio * zRange;
+                      return { zVal, yPos: mapZ(zVal) };
+                    });
+
+                    const xRange = Math.max(1, maxX - minX);
+                    const xTicks = [0, 0.25, 0.5, 0.75, 1].map(ratio => {
+                      const xVal = minX + ratio * xRange;
+                      return { xVal, xPos: mapX(xVal) };
+                    });
+
                     const groundPath =
-                      `M 30 195 ` +
+                      `M 35 185 ` +
                       profile.map((p) => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') +
-                      ` L 470 195 Z`;
+                      ` L 465 185 Z`;
 
                     return (
                       <svg
                         width="100%"
                         height="100%"
-                        viewBox="0 0 500 220"
+                        viewBox="0 0 500 210"
                         preserveAspectRatio="none"
                         className="w-full h-full"
                       >
@@ -767,93 +779,94 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                         </defs>
 
                         {/* Zone shading */}
-                        <rect x={30} y={15} width={Math.max(0, bLeftSvgX - 30)} height={180} fill="#f0fdf4" fillOpacity="0.4" />
-                        <rect x={bLeftSvgX} y={15} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={180} fill="#ecfeff" fillOpacity="0.5" />
-                        <rect x={bRightSvgX} y={15} width={Math.max(0, 470 - bRightSvgX)} height={180} fill="#fffbeb" fillOpacity="0.4" />
+                        <rect x={35} y={15} width={Math.max(0, bLeftSvgX - 35)} height={170} fill="#f0fdf4" fillOpacity="0.35" />
+                        <rect x={bLeftSvgX} y={15} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={170} fill="#ecfeff" fillOpacity="0.45" />
+                        <rect x={bRightSvgX} y={15} width={Math.max(0, 465 - bRightSvgX)} height={170} fill="#fffbeb" fillOpacity="0.35" />
 
-                        {/* Total Channel Width Dimension */}
-                        {bRightSvgX - bLeftSvgX > 20 && (
-                          <g>
-                            <line x1={bLeftSvgX} y1={36} x2={bRightSvgX} y2={36} stroke="#0284c7" strokeWidth="1.2" />
-                            <rect x={(bLeftSvgX + bRightSvgX) / 2 - 40} y={29} width={80} height={13} rx={2} fill="#ffffff" stroke="#bae6fd" strokeWidth="1" />
-                            <text x={(bLeftSvgX + bRightSvgX) / 2} y={38} fontSize="7" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                              Toplam Yatak: {totalChannelWidth.toFixed(1)}m
+                        {/* Y-Axis Grid & Elevation Ticks */}
+                        {yTicks.map((t, i) => (
+                          <g key={`modal-y-${i}`}>
+                            <line x1={35} y1={t.yPos} x2={465} y2={t.yPos} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="2 2" />
+                            <text x={32} y={t.yPos + 3} fontSize="7" textAnchor="end" fill="#64748b" fontFamily="monospace">
+                              {t.zVal.toFixed(1)}m
                             </text>
                           </g>
-                        )}
+                        ))}
 
-                        {/* Bankfull Spill Line */}
-                        {spillSvgR - spillSvgL > 20 && (
-                          <g>
-                            <line x1={spillSvgL} y1={spillSvgY} x2={spillSvgR} y2={spillSvgY} stroke="#ea580c" strokeWidth="1.4" strokeDasharray="3 2" />
-                            <rect x={(spillSvgL + spillSvgR) / 2 - 45} y={44} width={90} height={13} rx={2} fill="#fff7ed" stroke="#fed7aa" strokeWidth="1" />
-                            <text x={(spillSvgL + spillSvgR) / 2} y={53} fontSize="7" textAnchor="middle" fill="#c2410c" fontWeight="bold">
-                              Taşma: {bankfullWidth.toFixed(1)}m
+                        {/* Axes */}
+                        <line x1={35} y1={185} x2={465} y2={185} stroke="#94a3b8" strokeWidth="1.2" />
+                        <line x1={35} y1={15} x2={35} y2={185} stroke="#94a3b8" strokeWidth="1.2" />
+
+                        {/* X-Axis Grid & Distance Ticks */}
+                        {xTicks.map((t, i) => (
+                          <g key={`modal-x-${i}`}>
+                            <line x1={t.xPos} y1={185} x2={t.xPos} y2={189} stroke="#64748b" strokeWidth="1" />
+                            <text x={t.xPos} y={199} fontSize="7" textAnchor="middle" fill="#64748b" fontFamily="monospace">
+                              {t.xVal.toFixed(0)}m
                             </text>
                           </g>
-                        )}
+                        ))}
 
+                        {/* Zone Titles */}
+                        <text x={(35 + bLeftSvgX) / 2} y={12} fontSize="8" textAnchor="middle" fill="#047857" fontWeight="bold">
+                          LOB
+                        </text>
+                        <text x={(bLeftSvgX + bRightSvgX) / 2} y={12} fontSize="8.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                          ANA KANAL
+                        </text>
+                        <text x={(bRightSvgX + 465) / 2} y={12} fontSize="8" textAnchor="middle" fill="#b45309" fontWeight="bold">
+                          ROB
+                        </text>
+
+                        {/* Ground Path */}
                         <path
                           d={groundPath}
                           fill="url(#groundGradModal)"
                           stroke="#0f172a"
-                          strokeWidth="2.5"
+                          strokeWidth="2.2"
                           strokeLinejoin="round"
                         />
 
-                        {/* 1. Sol Şev Üstü */}
+                        {/* 1. Sol Şev Üstü Line & Dot */}
                         <line
                           x1={bLeftSvgX}
                           y1="15"
                           x2={bLeftSvgX}
-                          y2="195"
+                          y2="185"
                           stroke="#059669"
                           strokeWidth="1.8"
                           strokeDasharray="4 3"
                         />
                         <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
-                        <g transform={`translate(${Math.max(35, bLeftSvgX)}, 14)`}>
-                          <rect x="-40" y="-10" width="80" height="13" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
-                          <text x="0" y="-1" fontSize="7" textAnchor="middle" fill="#065f46" fontWeight="bold">
-                            🌿 Sol (-{distLFromTalveg.toFixed(1)}m)
-                          </text>
-                        </g>
 
-                        {/* 2. Dere Ekseni / Taban */}
+                        {/* 2. Dere Ekseni / Talveg Line & Dot */}
                         <line
                           x1={talvegSvgX}
-                          y1="18"
+                          y1="15"
                           x2={talvegSvgX}
-                          y2="195"
+                          y2="185"
                           stroke="#0284c7"
                           strokeWidth="1.8"
                           strokeDasharray="5 3"
                         />
                         <circle cx={talvegSvgX} cy={talvegSvgY} r="4.5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="1.5" />
-                        <g transform={`translate(${Math.max(50, Math.min(450, talvegSvgX))}, 192)`}>
-                          <rect x="-35" y="-10" width="70" height="12" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
-                          <text x="0" y="-1" fontSize="7" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                            🌊 Talveg ({talvegPt.z.toFixed(2)}m)
-                          </text>
-                        </g>
 
-                        {/* 3. Sağ Şev Üstü */}
+                        {/* 3. Sağ Şev Üstü Line & Dot */}
                         <line
                           x1={bRightSvgX}
                           y1="15"
                           x2={bRightSvgX}
-                          y2="195"
+                          y2="185"
                           stroke="#d97706"
                           strokeWidth="1.8"
                           strokeDasharray="4 3"
                         />
                         <circle cx={bRightSvgX} cy={bRightSvgY} r="4" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
-                        <g transform={`translate(${Math.min(465, bRightSvgX)}, 14)`}>
-                          <rect x="-40" y="-10" width="80" height="13" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
-                          <text x="0" y="-1" fontSize="7" textAnchor="middle" fill="#92400e" fontWeight="bold">
-                            🌾 Sağ (+{distRFromTalveg.toFixed(1)}m)
-                          </text>
-                        </g>
+
+                        {/* Bankfull Spill Line */}
+                        {spillSvgR - spillSvgL > 15 && (
+                          <line x1={spillSvgL} y1={spillSvgY} x2={spillSvgR} y2={spillSvgY} stroke="#ea580c" strokeWidth="1.2" strokeDasharray="3 2" />
+                        )}
                       </svg>
                     );
                   })()}

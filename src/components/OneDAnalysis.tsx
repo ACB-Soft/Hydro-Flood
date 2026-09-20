@@ -4919,278 +4919,332 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           </div>
                         </div>
 
-                        <div className="flex-1 w-full my-2 flex items-center justify-center bg-white border border-slate-200 rounded-xl p-2 relative overflow-hidden shadow-inner">
-                          <svg width="100%" height="100%" viewBox="0 0 700 250" preserveAspectRatio="none" className="w-full h-full">
-                            {(() => {
-                              const sec = currentActiveSection;
-                              const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - sec.station) < 50);
+                        <div className="flex-1 w-full my-2 flex flex-col bg-white border border-slate-200 rounded-xl p-2 relative overflow-hidden shadow-inner gap-2">
+                          <div className="flex-1 w-full min-h-[220px] relative">
+                            <svg width="100%" height="100%" viewBox="0 0 700 240" preserveAspectRatio="none" className="w-full h-full">
+                              {(() => {
+                                const sec = currentActiveSection;
+                                const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - sec.station) < 50);
 
-                              const minX = Math.min(...sec.profile.map(p => p.x));
-                              const maxX = Math.max(...sec.profile.map(p => p.x));
-                              const structTopZ = matchingStruct ? Math.max(matchingStruct.roadElevation, sec.maxElevation) : sec.maxElevation;
-                              const minZ = sec.minElevation;
-                              const maxZ = structTopZ + 2;
+                                const minX = Math.min(...sec.profile.map(p => p.x));
+                                const maxX = Math.max(...sec.profile.map(p => p.x));
+                                const structTopZ = matchingStruct ? Math.max(matchingStruct.roadElevation, sec.maxElevation) : sec.maxElevation;
+                                const minZ = sec.minElevation;
+                                const maxZ = structTopZ + 2;
 
-                              const mapX = (x: number) => 35 + ((x - minX) / (maxX - minX || 1)) * 630;
-                              const mapZ = (z: number) => 220 - ((z - minZ) / (maxZ - minZ || 1)) * 165;
+                                const mapX = (x: number) => 45 + ((x - minX) / (maxX - minX || 1)) * 615;
+                                const mapZ = (z: number) => 205 - ((z - minZ) / (maxZ - minZ || 1)) * 165;
 
-                              const groundPath = `M 35 220 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 665 220 Z`;
+                                const groundPath = `M 45 205 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 660 205 Z`;
 
-                              const getElevAt = (xVal: number) => {
-                                if (xVal <= sec.profile[0].x) return sec.profile[0].z;
-                                if (xVal >= sec.profile[sec.profile.length - 1].x) return sec.profile[sec.profile.length - 1].z;
-                                for (let k = 0; k < sec.profile.length - 1; k++) {
-                                  const p1 = sec.profile[k];
-                                  const p2 = sec.profile[k + 1];
-                                  if (xVal >= p1.x && xVal <= p2.x) {
-                                    const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
-                                    return p1.z + frac * (p2.z - p1.z);
+                                const getElevAt = (xVal: number) => {
+                                  if (xVal <= sec.profile[0].x) return sec.profile[0].z;
+                                  if (xVal >= sec.profile[sec.profile.length - 1].x) return sec.profile[sec.profile.length - 1].z;
+                                  for (let k = 0; k < sec.profile.length - 1; k++) {
+                                    const p1 = sec.profile[k];
+                                    const p2 = sec.profile[k + 1];
+                                    if (xVal >= p1.x && xVal <= p2.x) {
+                                      const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+                                      return p1.z + frac * (p2.z - p1.z);
+                                    }
+                                  }
+                                  return minZ;
+                                };
+
+                                let talvegPt = sec.profile[0];
+                                for (const pt of sec.profile) {
+                                  if (pt.z < talvegPt.z) talvegPt = pt;
+                                }
+
+                                const bLeftZ = getElevAt(sec.bankLeftX);
+                                const bRightZ = getElevAt(sec.bankRightX);
+
+                                const bLeftSvgX = mapX(sec.bankLeftX);
+                                const bRightSvgX = mapX(sec.bankRightX);
+                                const talvegSvgX = mapX(talvegPt.x);
+                                const bLeftSvgY = mapZ(bLeftZ);
+                                const bRightSvgY = mapZ(bRightZ);
+                                const talvegSvgY = mapZ(talvegPt.z);
+
+                                const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
+                                const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
+                                const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
+
+                                const spillElevation = Math.min(bLeftZ, bRightZ);
+                                let spillLeftX = sec.bankLeftX;
+                                if (bLeftZ > spillElevation) {
+                                  const talvegIdx = sec.profile.indexOf(talvegPt);
+                                  for (let k = talvegIdx; k >= 1; k--) {
+                                    const p1 = sec.profile[k];
+                                    const p2 = sec.profile[k - 1];
+                                    if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                      const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                      spillLeftX = p1.x + frac * (p2.x - p1.x);
+                                      break;
+                                    }
                                   }
                                 }
-                                return minZ;
-                              };
-
-                              let talvegPt = sec.profile[0];
-                              for (const pt of sec.profile) {
-                                if (pt.z < talvegPt.z) talvegPt = pt;
-                              }
-
-                              const bLeftZ = getElevAt(sec.bankLeftX);
-                              const bRightZ = getElevAt(sec.bankRightX);
-
-                              const bLeftSvgX = mapX(sec.bankLeftX);
-                              const bRightSvgX = mapX(sec.bankRightX);
-                              const talvegSvgX = mapX(talvegPt.x);
-                              const bLeftSvgY = mapZ(bLeftZ);
-                              const bRightSvgY = mapZ(bRightZ);
-                              const talvegSvgY = mapZ(talvegPt.z);
-
-                              // Calculate thalweg relative offsets and bankfull spill width
-                              const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
-                              const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
-                              const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
-
-                              const spillElevation = Math.min(bLeftZ, bRightZ);
-                              let spillLeftX = sec.bankLeftX;
-                              if (bLeftZ > spillElevation) {
-                                const talvegIdx = sec.profile.indexOf(talvegPt);
-                                for (let k = talvegIdx; k >= 1; k--) {
-                                  const p1 = sec.profile[k];
-                                  const p2 = sec.profile[k - 1];
-                                  if (p1.z <= spillElevation && p2.z >= spillElevation) {
-                                    const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
-                                    spillLeftX = p1.x + frac * (p2.x - p1.x);
-                                    break;
+                                let spillRightX = sec.bankRightX;
+                                if (bRightZ > spillElevation) {
+                                  const talvegIdx = sec.profile.indexOf(talvegPt);
+                                  for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
+                                    const p1 = sec.profile[k];
+                                    const p2 = sec.profile[k + 1];
+                                    if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                      const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                      spillRightX = p1.x + frac * (p2.x - p1.x);
+                                      break;
+                                    }
                                   }
                                 }
-                              }
-                              let spillRightX = sec.bankRightX;
-                              if (bRightZ > spillElevation) {
-                                const talvegIdx = sec.profile.indexOf(talvegPt);
-                                for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
-                                  const p1 = sec.profile[k];
-                                  const p2 = sec.profile[k + 1];
-                                  if (p1.z <= spillElevation && p2.z >= spillElevation) {
-                                    const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
-                                    spillRightX = p1.x + frac * (p2.x - p1.x);
-                                    break;
-                                  }
+                                const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
+                                const spillSvgL = mapX(spillLeftX);
+                                const spillSvgR = mapX(spillRightX);
+                                const spillSvgY = mapZ(spillElevation);
+
+                                // Y-Axis Elevation Ticks (4 Ticks)
+                                const zRange = Math.max(1, maxZ - minZ);
+                                const yTicks = [0, 0.33, 0.66, 1].map(ratio => {
+                                  const zVal = minZ + ratio * zRange;
+                                  return { zVal, yPos: mapZ(zVal) };
+                                });
+
+                                // X-Axis Distance Ticks (5 Ticks)
+                                const xRange = Math.max(1, maxX - minX);
+                                const xTicks = [0, 0.25, 0.5, 0.75, 1].map(ratio => {
+                                  const xVal = minX + ratio * xRange;
+                                  return { xVal, xPos: mapX(xVal) };
+                                });
+
+                                return (
+                                  <>
+                                    <defs>
+                                      <linearGradient id="groundGradPanel" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.9" />
+                                        <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0.7" />
+                                      </linearGradient>
+                                    </defs>
+
+                                    {/* Shaded Flow Zones */}
+                                    <rect x={45} y={20} width={Math.max(0, bLeftSvgX - 45)} height={185} fill="#f0fdf4" fillOpacity="0.3" />
+                                    <rect x={bLeftSvgX} y={20} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={185} fill="#ecfeff" fillOpacity="0.45" />
+                                    <rect x={bRightSvgX} y={20} width={Math.max(0, 660 - bRightSvgX)} height={185} fill="#fffbeb" fillOpacity="0.3" />
+
+                                    {/* Background Grid Lines & Y-Axis Scale */}
+                                    {yTicks.map((t, i) => (
+                                      <g key={`y-grid-${i}`}>
+                                        <line x1={40} y1={t.yPos} x2={660} y2={t.yPos} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="2 2" />
+                                        <text x={38} y={t.yPos + 3} fontSize="8" textAnchor="end" fill="#64748b" fontFamily="monospace">
+                                          {t.zVal.toFixed(1)}m
+                                        </text>
+                                      </g>
+                                    ))}
+
+                                    {/* X-Axis Grid Lines & Scale */}
+                                    <line x1={45} y1={205} x2={660} y2={205} stroke="#94a3b8" strokeWidth="1.2" />
+                                    <line x1={45} y1={20} x2={45} y2={205} stroke="#94a3b8" strokeWidth="1.2" />
+
+                                    {xTicks.map((t, i) => (
+                                      <g key={`x-grid-${i}`}>
+                                        <line x1={t.xPos} y1={205} x2={t.xPos} y2={210} stroke="#64748b" strokeWidth="1" />
+                                        <text x={t.xPos} y={222} fontSize="8" textAnchor="middle" fill="#64748b" fontFamily="monospace">
+                                          {t.xVal.toFixed(0)}m
+                                        </text>
+                                      </g>
+                                    ))}
+
+                                    {/* Zone Clean Header Titles (No background rects) */}
+                                    <text x={(45 + bLeftSvgX) / 2} y={15} fontSize="9" textAnchor="middle" fill="#047857" fontWeight="bold">
+                                      LOB (Sol Taşkın)
+                                    </text>
+                                    <text x={(bLeftSvgX + bRightSvgX) / 2} y={15} fontSize="9.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                      ANA KANAL
+                                    </text>
+                                    <text x={(bRightSvgX + 660) / 2} y={15} fontSize="9" textAnchor="middle" fill="#b45309" fontWeight="bold">
+                                      ROB (Sağ Taşkın)
+                                    </text>
+
+                                    {/* Ground Profile Line */}
+                                    <path d={groundPath} fill="url(#groundGradPanel)" stroke="#0f172a" strokeWidth="2.5" strokeLinejoin="round" />
+
+                                    {/* 1. Sol Şev Üstü Indicator */}
+                                    <line x1={bLeftSvgX} y1="20" x2={bLeftSvgX} y2="205" stroke="#059669" strokeWidth="1.8" strokeDasharray="4 3" />
+                                    <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.8" />
+
+                                    {/* 2. Dere Ekseni / Talveg Indicator */}
+                                    <line x1={talvegSvgX} y1="20" x2={talvegSvgX} y2="205" stroke="#0284c7" strokeWidth="1.8" strokeDasharray="5 3" />
+                                    <circle cx={talvegSvgX} cy={talvegSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
+
+                                    {/* 3. Sağ Şev Üstü Indicator */}
+                                    <line x1={bRightSvgX} y1="20" x2={bRightSvgX} y2="205" stroke="#d97706" strokeWidth="1.8" strokeDasharray="4 3" />
+                                    <circle cx={bRightSvgX} cy={bRightSvgY} r="4.5" fill="#f59e0b" stroke="#78350f" strokeWidth="1.8" />
+
+                                    {/* 4. Bankfull Spillway Line */}
+                                    {spillSvgR - spillSvgL > 15 && (
+                                      <line x1={spillSvgL} y1={spillSvgY} x2={spillSvgR} y2={spillSvgY} stroke="#ea580c" strokeWidth="1.2" strokeDasharray="4 2" />
+                                    )}
+
+                                    {/* Structure Overlay if present */}
+                                    {matchingStruct && (
+                                      <g>
+                                        <rect
+                                          x={mapX(sec.bankLeftX)}
+                                          y={Math.min(mapZ(matchingStruct.roadElevation), mapZ(matchingStruct.lowChordElevation))}
+                                          width={Math.max(10, mapX(sec.bankRightX) - mapX(sec.bankLeftX))}
+                                          height={Math.max(6, Math.abs(mapZ(matchingStruct.roadElevation) - mapZ(matchingStruct.lowChordElevation)))}
+                                          fill="#475569"
+                                          stroke="#1e293b"
+                                          strokeWidth="1.5"
+                                          rx="2"
+                                          opacity="0.9"
+                                        />
+                                        <text
+                                          x={(mapX(sec.bankLeftX) + mapX(sec.bankRightX)) / 2}
+                                          y={mapZ(matchingStruct.roadElevation) - 4}
+                                          fontSize="9"
+                                          fill="#0f172a"
+                                          fontWeight="bold"
+                                          textAnchor="middle"
+                                        >
+                                          {matchingStruct.type === 'bridge' ? '🌉 Köprü' : '🔲 Menfez'} (Tabliye: {matchingStruct.roadElevation.toFixed(2)}m)
+                                        </text>
+                                      </g>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </svg>
+                          </div>
+
+                          {/* Dedicated Cross-Section Elevation & Distance Information Panel (OUTSIDE THE PLOT) */}
+                          {(() => {
+                            const sec = currentActiveSection;
+                            const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - sec.station) < 50);
+
+                            const getElevAt = (xVal: number) => {
+                              if (xVal <= sec.profile[0].x) return sec.profile[0].z;
+                              if (xVal >= sec.profile[sec.profile.length - 1].x) return sec.profile[sec.profile.length - 1].z;
+                              for (let k = 0; k < sec.profile.length - 1; k++) {
+                                const p1 = sec.profile[k];
+                                const p2 = sec.profile[k + 1];
+                                if (xVal >= p1.x && xVal <= p2.x) {
+                                  const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+                                  return p1.z + frac * (p2.z - p1.z);
                                 }
                               }
-                              const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
-                              const spillSvgL = mapX(spillLeftX);
-                              const spillSvgR = mapX(spillRightX);
-                              const spillSvgY = mapZ(spillElevation);
+                              return sec.minElevation;
+                            };
 
-                              return (
-                                <>
-                                  <defs>
-                                    <linearGradient id="groundGradPanel" x1="0" y1="0" x2="0" y2="1">
-                                      <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.9" />
-                                      <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0.7" />
-                                    </linearGradient>
-                                    <marker id="arrowLPanel" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto">
-                                      <polygon points="6 0, 0 3, 6 6" fill="#0284c7" />
-                                    </marker>
-                                    <marker id="arrowRPanel" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
-                                      <polygon points="0 0, 6 3, 0 6" fill="#0284c7" />
-                                    </marker>
-                                    <marker id="spillArrowLPanel" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto">
-                                      <polygon points="6 0, 0 3, 6 6" fill="#ea580c" />
-                                    </marker>
-                                    <marker id="spillArrowRPanel" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
-                                      <polygon points="0 0, 6 3, 0 6" fill="#ea580c" />
-                                    </marker>
-                                  </defs>
+                            let talvegPt = sec.profile[0];
+                            for (const pt of sec.profile) {
+                              if (pt.z < talvegPt.z) talvegPt = pt;
+                            }
 
-                                  {/* Shaded Flow Zones */}
-                                  <rect x={35} y={20} width={Math.max(0, bLeftSvgX - 35)} height={200} fill="#f0fdf4" fillOpacity="0.35" />
-                                  <rect x={bLeftSvgX} y={20} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={200} fill="#ecfeff" fillOpacity="0.5" />
-                                  <rect x={bRightSvgX} y={20} width={Math.max(0, 665 - bRightSvgX)} height={200} fill="#fffbeb" fillOpacity="0.35" />
+                            const bLeftZ = getElevAt(sec.bankLeftX);
+                            const bRightZ = getElevAt(sec.bankRightX);
+                            const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
+                            const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
+                            const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
 
-                                  {/* Zone Titles */}
-                                  <text x={(35 + bLeftSvgX) / 2} y={34} fontSize="9" textAnchor="middle" fill="#047857" fontWeight="bold">
-                                    Sol Taşkın Yt. (LOB)
-                                  </text>
-                                  <text x={(bLeftSvgX + bRightSvgX) / 2} y={34} fontSize="9.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                                    Ana Kanal
-                                  </text>
-                                  <text x={(bRightSvgX + 665) / 2} y={34} fontSize="9" textAnchor="middle" fill="#b45309" fontWeight="bold">
-                                    Sağ Taşkın Yt. (ROB)
-                                  </text>
+                            const spillElevation = Math.min(bLeftZ, bRightZ);
+                            let spillLeftX = sec.bankLeftX;
+                            if (bLeftZ > spillElevation) {
+                              const talvegIdx = sec.profile.indexOf(talvegPt);
+                              for (let k = talvegIdx; k >= 1; k--) {
+                                const p1 = sec.profile[k];
+                                const p2 = sec.profile[k - 1];
+                                if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                  const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                  spillLeftX = p1.x + frac * (p2.x - p1.x);
+                                  break;
+                                }
+                              }
+                            }
+                            let spillRightX = sec.bankRightX;
+                            if (bRightZ > spillElevation) {
+                              const talvegIdx = sec.profile.indexOf(talvegPt);
+                              for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
+                                const p1 = sec.profile[k];
+                                const p2 = sec.profile[k + 1];
+                                if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                  const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                  spillRightX = p1.x + frac * (p2.x - p1.x);
+                                  break;
+                                }
+                              }
+                            }
+                            const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
 
-                                  {/* 1. Total Channel Width Dimension */}
-                                  {bRightSvgX - bLeftSvgX > 25 && (
-                                    <g>
-                                      <line
-                                        x1={bLeftSvgX + 4}
-                                        y1={46}
-                                        x2={bRightSvgX - 4}
-                                        y2={46}
-                                        stroke="#0284c7"
-                                        strokeWidth="1.2"
-                                        markerStart="url(#arrowLPanel)"
-                                        markerEnd="url(#arrowRPanel)"
-                                      />
-                                      <rect
-                                        x={(bLeftSvgX + bRightSvgX) / 2 - 50}
-                                        y={39}
-                                        width={100}
-                                        height={14}
-                                        rx={3}
-                                        fill="#ffffff"
-                                        stroke="#bae6fd"
-                                        strokeWidth="1"
-                                      />
-                                      <text
-                                        x={(bLeftSvgX + bRightSvgX) / 2}
-                                        y={49}
-                                        fontSize="7.5"
-                                        textAnchor="middle"
-                                        fill="#0369a1"
-                                        fontWeight="bold"
-                                      >
-                                        Toplam Yatak: {totalChannelWidth.toFixed(1)} m
-                                      </text>
-                                    </g>
-                                  )}
+                            return (
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs">
+                                {/* Sol Şev Üstü */}
+                                <div className="bg-emerald-50/80 border border-emerald-200 p-2 rounded-lg space-y-0.5">
+                                  <div className="flex items-center justify-between font-bold text-emerald-900 text-[11px]">
+                                    <span className="flex items-center gap-1">🌿 Sol Şev Üstü</span>
+                                    <span className="font-mono text-emerald-700">{bLeftZ.toFixed(2)} m</span>
+                                  </div>
+                                  <div className="text-[10px] text-emerald-800 flex justify-between pt-0.5 border-t border-emerald-200/60">
+                                    <span>Talvege Mesafe:</span>
+                                    <strong className="font-mono">-{distLFromTalveg.toFixed(1)} m</strong>
+                                  </div>
+                                  <div className="text-[10px] text-emerald-800 flex justify-between">
+                                    <span>Sol İstasyon:</span>
+                                    <strong className="font-mono">{sec.bankLeftX.toFixed(1)} m</strong>
+                                  </div>
+                                </div>
 
-                                  {/* 2. Bankfull Spillway Width Dimension */}
-                                  {spillSvgR - spillSvgL > 25 && (
-                                    <g>
-                                      <line
-                                        x1={spillSvgL}
-                                        y1={spillSvgY}
-                                        x2={spillSvgR}
-                                        y2={spillSvgY}
-                                        stroke="#ea580c"
-                                        strokeWidth="1.5"
-                                        strokeDasharray="4 2"
-                                      />
-                                      <line
-                                        x1={spillSvgL + 4}
-                                        y1={60}
-                                        x2={spillSvgR - 4}
-                                        y2={60}
-                                        stroke="#ea580c"
-                                        strokeWidth="1.1"
-                                        markerStart="url(#spillArrowLPanel)"
-                                        markerEnd="url(#spillArrowRPanel)"
-                                      />
-                                      <rect
-                                        x={(spillSvgL + spillSvgR) / 2 - 52}
-                                        y={53}
-                                        width={104}
-                                        height={14}
-                                        rx={3}
-                                        fill="#fff7ed"
-                                        stroke="#fed7aa"
-                                        strokeWidth="1"
-                                      />
-                                      <text
-                                        x={(spillSvgL + spillSvgR) / 2}
-                                        y={63}
-                                        fontSize="7.5"
-                                        textAnchor="middle"
-                                        fill="#c2410c"
-                                        fontWeight="bold"
-                                      >
-                                        Taşma Genişliği: {bankfullWidth.toFixed(1)} m
-                                      </text>
-                                    </g>
-                                  )}
+                                {/* Ana Kanal / Talveg */}
+                                <div className="bg-sky-50/80 border border-sky-200 p-2 rounded-lg space-y-0.5">
+                                  <div className="flex items-center justify-between font-bold text-sky-900 text-[11px]">
+                                    <span className="flex items-center gap-1">🌊 Ana Kanal (Talveg)</span>
+                                    <span className="font-mono text-sky-700">{talvegPt.z.toFixed(2)} m</span>
+                                  </div>
+                                  <div className="text-[10px] text-sky-800 flex justify-between pt-0.5 border-t border-sky-200/60">
+                                    <span>Tepe Kotu:</span>
+                                    <strong className="font-mono">{sec.maxElevation.toFixed(2)} m</strong>
+                                  </div>
+                                  <div className="text-[10px] text-sky-800 flex justify-between">
+                                    <span>Toplam Yatak:</span>
+                                    <strong className="font-mono">{totalChannelWidth.toFixed(1)} m</strong>
+                                  </div>
+                                </div>
 
-                                  {/* Ground Line */}
-                                  <path d={groundPath} fill="url(#groundGradPanel)" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
+                                {/* Sağ Şev Üstü */}
+                                <div className="bg-amber-50/80 border border-amber-200 p-2 rounded-lg space-y-0.5">
+                                  <div className="flex items-center justify-between font-bold text-amber-900 text-[11px]">
+                                    <span className="flex items-center gap-1">🌾 Sağ Şev Üstü</span>
+                                    <span className="font-mono text-amber-700">{bRightZ.toFixed(2)} m</span>
+                                  </div>
+                                  <div className="text-[10px] text-amber-800 flex justify-between pt-0.5 border-t border-amber-200/60">
+                                    <span>Talvege Mesafe:</span>
+                                    <strong className="font-mono">+{distRFromTalveg.toFixed(1)} m</strong>
+                                  </div>
+                                  <div className="text-[10px] text-amber-800 flex justify-between">
+                                    <span>Sağ İstasyon:</span>
+                                    <strong className="font-mono">{sec.bankRightX.toFixed(1)} m</strong>
+                                  </div>
+                                </div>
 
-                                  {/* 1. Sol Şev Üstü */}
-                                  <line x1={bLeftSvgX} y1="18" x2={bLeftSvgX} y2="220" stroke="#059669" strokeWidth="2" strokeDasharray="4 3" />
-                                  <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
-                                  <g transform={`translate(${Math.max(45, bLeftSvgX)}, 16)`}>
-                                    <rect x="-48" y="-11" width="96" height="14" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
-                                    <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#065f46" fontWeight="bold">
-                                      🌿 Sol (Talvege -{distLFromTalveg.toFixed(1)}m)
-                                    </text>
-                                  </g>
-
-                                  {/* 2. Dere Ekseni / Taban */}
-                                  <line x1={talvegSvgX} y1="20" x2={talvegSvgX} y2="220" stroke="#0284c7" strokeWidth="1.8" strokeDasharray="5 3" />
-                                  <circle cx={talvegSvgX} cy={talvegSvgY} r="4.5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="1.8" />
-                                  <g transform={`translate(${Math.max(65, Math.min(635, talvegSvgX))}, 216)`}>
-                                    <rect x="-44" y="-11" width="88" height="13" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
-                                    <text x="0" y="-1.5" fontSize="7" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                                      🌊 Talveg ({talvegPt.z.toFixed(2)}m)
-                                    </text>
-                                  </g>
-
-                                  {/* 3. Sağ Şev Üstü */}
-                                  <line x1={bRightSvgX} y1="18" x2={bRightSvgX} y2="220" stroke="#d97706" strokeWidth="2" strokeDasharray="4 3" />
-                                  <circle cx={bRightSvgX} cy={bRightSvgY} r="4.5" fill="#f59e0b" stroke="#78350f" strokeWidth="1.5" />
-                                  <g transform={`translate(${Math.min(655, bRightSvgX)}, 16)`}>
-                                    <rect x="-48" y="-11" width="96" height="14" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
-                                    <text x="0" y="-1" fontSize="7.5" textAnchor="middle" fill="#92400e" fontWeight="bold">
-                                      🌾 Sağ (Talvege +{distRFromTalveg.toFixed(1)}m)
-                                    </text>
-                                  </g>
-
-                                  {/* Structure Superstructure Overlay if at section */}
-                                  {matchingStruct && (
-                                    <g>
-                                      {/* Bridge Deck or Culvert Top */}
-                                      <rect
-                                        x={mapX(sec.bankLeftX)}
-                                        y={Math.min(mapZ(matchingStruct.roadElevation), mapZ(matchingStruct.lowChordElevation))}
-                                        width={Math.max(10, mapX(sec.bankRightX) - mapX(sec.bankLeftX))}
-                                        height={Math.max(8, Math.abs(mapZ(matchingStruct.roadElevation) - mapZ(matchingStruct.lowChordElevation)))}
-                                        fill="#475569"
-                                        stroke="#1e293b"
-                                        strokeWidth="1.5"
-                                        rx="2"
-                                        opacity="0.9"
-                                      />
-                                      {/* Deck Label */}
-                                      <text
-                                        x={(mapX(sec.bankLeftX) + mapX(sec.bankRightX)) / 2}
-                                        y={mapZ(matchingStruct.roadElevation) - 5}
-                                        fontSize="10"
-                                        fill="#0f172a"
-                                        fontWeight="bold"
-                                        textAnchor="middle"
-                                      >
-                                        Tabliye: {matchingStruct.roadElevation.toFixed(2)}m | Kiriş Altı: {matchingStruct.lowChordElevation.toFixed(2)}m
-                                      </text>
-                                    </g>
-                                  )}
-                                </>
-                              );
-                            })()}
-                          </svg>
-                        </div>
-
-                        <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-600">
-                          <span>Sol İstasyon: {currentActiveSection.bankLeftX.toFixed(0)}m</span>
-                          <span>Merkez Kot: {currentActiveSection.minElevation.toFixed(2)}m</span>
-                          <span>Sağ İstasyon: {currentActiveSection.bankRightX.toFixed(0)}m</span>
+                                {/* Taşma & Sanat Yapısı */}
+                                <div className="bg-slate-100 border border-slate-200 p-2 rounded-lg space-y-0.5">
+                                  <div className="flex items-center justify-between font-bold text-slate-800 text-[11px]">
+                                    <span>📐 Taşma Kapasitesi</span>
+                                    <span className="font-mono text-slate-700">{bankfullWidth.toFixed(1)} m</span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-600 flex justify-between pt-0.5 border-t border-slate-200">
+                                    <span>Taşma Eşik Kotu:</span>
+                                    <strong className="font-mono">{spillElevation.toFixed(2)} m</strong>
+                                  </div>
+                                  <div className="text-[10px] text-slate-600 flex justify-between">
+                                    <span>Sanat Yapısı:</span>
+                                    <strong className="font-medium text-cyan-800">
+                                      {matchingStruct ? `${matchingStruct.type === 'bridge' ? 'Köprü' : 'Menfez'}` : 'Yok'}
+                                    </strong>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     ) : (
