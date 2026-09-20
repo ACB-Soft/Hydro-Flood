@@ -504,7 +504,7 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                                     ({fmtM(sec.station)}m)
                                   </span>
                                 </div>
-                                {(sec.angleAdjustment || sec.isIntersecting) && (
+                                {(sec.angleAdjustment || sec.isIntersecting) ? (
                                   <div className="flex items-center gap-1 mt-0.5">
                                     {sec.isIntersecting && (
                                       <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.2 rounded font-bold">
@@ -512,10 +512,16 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                                       </span>
                                     )}
                                     {sec.angleAdjustment && (
-                                      <span className="text-[9px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-bold font-mono">
-                                        {sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}° Açı
+                                      <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-bold font-mono">
+                                        {sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}° Düzeltildi (Yeşil)
                                       </span>
                                     )}
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    <span className="text-[9px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-bold font-mono">
+                                      Orijinal (Mavi)
+                                    </span>
                                   </div>
                                 )}
                               </div>

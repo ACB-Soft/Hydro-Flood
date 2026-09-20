@@ -208,6 +208,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [sections, setSections] = useState<CrossSection[]>([]);
   const [originalSections, setOriginalSections] = useState<CrossSection[]>([]);
   const [deletedSectionsList, setDeletedSectionsList] = useState<CrossSection[]>([]);
+  const [showDeletedSections, setShowDeletedSections] = useState<boolean>(true);
   const [isSectionManagerModalOpen, setIsSectionManagerModalOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number>(0);
@@ -2019,11 +2020,26 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               ? 'bg-slate-800 text-white shadow-xs' 
                               : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                           }`}
-                          title="Enkesit kesme çizgileri"
+                          title="Enkesit kesme çizgileri (Mavi: Orijinal, Yeşil: Düzeltilmiş, Kırmızı: Silinen)"
                         >
                           <span>📐</span>
                           <span>Enkesitler</span>
                         </button>
+
+                        {deletedSectionsList.length > 0 && showTransectLines && (
+                          <button
+                            onClick={() => setShowDeletedSections(!showDeletedSections)}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                              showDeletedSections 
+                                ? 'bg-red-600 text-white shadow-xs' 
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                            title="Silinen kesitleri kırmızı renkle haritada göster/gizle"
+                          >
+                            <span>🗑️</span>
+                            <span>Silinenler ({deletedSectionsList.length})</span>
+                          </button>
+                        )}
 
                         {structures.length > 0 && (
                           <button
@@ -2229,23 +2245,38 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </>
                       )}
 
-                      {/* 6. Transect Cut Lines */}
+                      {/* 6. Transect Cut Lines (Blue: Original, Green: Angle Adjusted, Red: Deleted) */}
                       {showTransectLines && sections.map((sec, idx) => {
                         if (!sec.cutLine) return null;
                         const isSelected = idx === selectedSectionIdx;
                         const secResult = simResults.find(r => r.station === sec.station);
+                        const hasAngleAdjustment = !!sec.angleAdjustment && Math.abs(sec.angleAdjustment) > 0.01;
+
+                        let strokeColor = '#2563eb'; // MAVİ: Orijinal
+                        if (isSelected) {
+                          strokeColor = '#06b6d4'; // CYAN: Seçili
+                        } else if (hasAngleAdjustment) {
+                          strokeColor = '#10b981'; // YEŞİL: Açısı düzeltilmiş
+                        }
+
                         return (
                           <Polyline
                             key={`cutline-${sec.station}-${idx}`}
                             positions={sec.cutLine}
-                            color={isSelected ? '#f59e0b' : '#64748b'}
-                            weight={isSelected ? 3.5 : 1.5}
-                            dashArray="3, 3"
+                            color={strokeColor}
+                            weight={isSelected ? 3.5 : 2}
+                            dashArray={hasAngleAdjustment ? undefined : '3, 3'}
                             opacity={0.85}
                             eventHandlers={{
                               click: () => setSelectedSectionIdx(idx)
                             }}
                           >
+                            <Tooltip sticky>
+                              <div className="text-[10px] font-bold">
+                                Kesit Km {(sec.station / 1000).toFixed(3)}
+                                {hasAngleAdjustment ? ` [Açı Düzeltildi: ${sec.angleAdjustment! > 0 ? '+' : ''}${sec.angleAdjustment}° (Yeşil)]` : ' [Orijinal (Mavi)]'}
+                              </div>
+                            </Tooltip>
                             <Popup>
                               <div className="p-1 space-y-1.5 min-w-[170px]">
                                 <div className="flex items-center justify-between border-b border-slate-200 pb-1">
@@ -2255,6 +2286,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   <span className="text-[10px] text-slate-500 font-mono">
                                     {sec.station.toFixed(0)}m
                                   </span>
+                                </div>
+                                <div className="text-[10px] text-slate-600">
+                                  Durum: <strong className={hasAngleAdjustment ? "text-emerald-700" : "text-blue-700"}>{hasAngleAdjustment ? 'Açısı Düzeltilmiş (Yeşil)' : 'Orijinal Açılı (Mavi)'}</strong>
                                 </div>
                                 {secResult && (
                                   <div className="text-[10px] text-slate-600 space-y-0.5 bg-slate-50 p-1 rounded">
@@ -2282,6 +2316,53 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   >
                                     <Trash2 size={10} />
                                     <span>Sil</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </Popup>
+                          </Polyline>
+                        );
+                      })}
+
+                      {/* 6b. Transect Cut Lines for Deleted Sections (Red) */}
+                      {showTransectLines && showDeletedSections && deletedSectionsList.map((sec, dIdx) => {
+                        if (!sec.cutLine) return null;
+                        return (
+                          <Polyline
+                            key={`cutline-deleted-${sec.station}-${dIdx}`}
+                            positions={sec.cutLine}
+                            color="#ef4444" // KIRMIZI: Silinen
+                            weight={2}
+                            dashArray="4, 4"
+                            opacity={0.8}
+                          >
+                            <Tooltip sticky>
+                              <div className="text-[10px] font-bold text-red-700">
+                                🗑️ Silinen Kesit: Km {(sec.station / 1000).toFixed(3)} ({sec.station.toFixed(0)}m) - Analiz Dışı
+                              </div>
+                            </Tooltip>
+                            <Popup>
+                              <div className="p-1 space-y-1.5 min-w-[170px]">
+                                <div className="flex items-center justify-between border-b border-red-200 pb-1">
+                                  <span className="font-bold text-xs text-red-700">
+                                    🗑️ Silinen Kesit Km {(sec.station / 1000).toFixed(3)}
+                                  </span>
+                                  <span className="text-[9px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold">
+                                    Silindi
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-600">
+                                  Durum: <strong className="text-red-600">Analiz Dışı (Kırmızı)</strong>
+                                </div>
+                                <div className="pt-1 border-t border-slate-100">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRestoreSection(sec.station)}
+                                    className="w-full px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                                    title="Bu enkesiti modele geri al"
+                                  >
+                                    <RotateCcw size={11} />
+                                    <span>Modele Geri Al</span>
                                   </button>
                                 </div>
                               </div>
@@ -3883,6 +3964,35 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       )}
                     </div>
 
+                    {rightPanelTab === 'map' && (sections.length > 0 || deletedSectionsList.length > 0) && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {deletedSectionsList.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowDeletedSections(!showDeletedSections)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer border ${
+                              showDeletedSections
+                                ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
+                                : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                            }`}
+                            title="Haritada silinen enkesitlerin kırmızı renkte gösterimini aç / kapat"
+                          >
+                            <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
+                            <span>Silinen Kesitler ({deletedSectionsList.length}) {showDeletedSections ? 'Açık' : 'Kapalı'}</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setIsSectionManagerModalOpen(true)}
+                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                          title="Tüm kesitleri yönet, silinenleri incele ve geri yükle"
+                        >
+                          <ListFilter size={12} />
+                          <span>Kesit Tablosu ({sections.length} Aktif{deletedSectionsList.length > 0 ? ` / ${deletedSectionsList.length} Silinen` : ''})</span>
+                        </button>
+                      </div>
+                    )}
+
                     {sections.length > 0 && rightPanelTab === 'section' && (
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <select
@@ -4029,27 +4139,29 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               <Tooltip sticky>Şev Üstü / Kıyı Çizgisi</Tooltip>
                             </Polyline>
                           )}
+                          {/* Render Active Cross Sections: Blue (Original) & Green (Angle Adjusted) */}
                           {sections.map((sec, idx) => {
                             if (!sec.cutLine) return null;
                             const isSelected = idx === selectedSectionIdx;
                             const isIntersecting = !!sec.isIntersecting || intersectionCheck.intersectingIndices.includes(idx);
-                            const isModified = !!sec.angleAdjustment || !!sec.isTrimmed;
+                            const hasAngleAdjustment = !!sec.angleAdjustment && Math.abs(sec.angleAdjustment) > 0.01;
 
-                            let strokeColor = '#10b981'; // normal green
+                            // User Rule: Original = Blue (#2563eb), Angle-Adjusted = Green (#10b981), Intersecting warning = Orange/Red
+                            let strokeColor = '#2563eb'; // Orijinal enkesitler: MAVİ
                             if (isSelected) {
-                              strokeColor = '#06b6d4'; // cyan
+                              strokeColor = '#06b6d4'; // Seçili kesit: CYAN
                             } else if (isIntersecting) {
-                              strokeColor = '#ef4444'; // red warning
-                            } else if (isModified) {
-                              strokeColor = '#2563eb'; // blue adjusted
+                              strokeColor = '#f59e0b'; // Çakışma uyarısı: TURUNCU
+                            } else if (hasAngleAdjustment) {
+                              strokeColor = '#10b981'; // Açısı düzeltilmiş: YEŞİL
                             }
 
                             return (
                               <Polyline
-                                key={`${sec.station}-${idx}`}
+                                key={`active-sec-${sec.station}-${idx}`}
                                 positions={sec.cutLine}
                                 color={strokeColor}
-                                weight={isSelected ? 4 : isIntersecting ? 3 : 2}
+                                weight={isSelected ? 4 : isIntersecting ? 3.5 : 2.5}
                                 dashArray={isIntersecting ? '4, 4' : undefined}
                                 opacity={0.9}
                                 eventHandlers={{
@@ -4059,7 +4171,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 <Tooltip sticky>
                                   <div className="text-[10px] font-bold">
                                     {isIntersecting && '⚠️ '}Kesit Km {(sec.station / 1000).toFixed(3)}
-                                    {sec.angleAdjustment ? ` [Açı: ${sec.angleAdjustment > 0 ? '+' : ''}${sec.angleAdjustment}°]` : ''}
+                                    {hasAngleAdjustment ? ` [Açı Düzeltildi: ${sec.angleAdjustment! > 0 ? '+' : ''}${sec.angleAdjustment}° (Yeşil)]` : ' [Orijinal (Mavi)]'}
                                   </div>
                                 </Tooltip>
                                 <Popup>
@@ -4073,6 +4185,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                       </span>
                                     </div>
                                     <div className="text-[10px] text-slate-600 space-y-0.5">
+                                      <div>Durum: <strong className={hasAngleAdjustment ? "text-emerald-700 font-bold" : "text-blue-700 font-bold"}>{hasAngleAdjustment ? 'Açısı Düzeltilmiş (Yeşil)' : 'Orijinal Açılı (Mavi)'}</strong></div>
                                       <div>Min Kot: <strong>{sec.minElevation.toFixed(2)} m</strong></div>
                                       <div>Maks Kot: <strong>{sec.maxElevation.toFixed(2)} m</strong></div>
                                       <div>Nokta Sayısı: <strong>{sec.profile.length}</strong></div>
@@ -4085,9 +4198,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                         <span>Komşu kesitle çakışma/kesişim var!</span>
                                       </div>
                                     )}
-                                    {sec.angleAdjustment && (
-                                      <div className="text-[9px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
-                                        📐 Açı Düzeltmesi: <strong>{sec.angleAdjustment > 0 ? '+' : ''}{sec.angleAdjustment}°</strong>
+                                    {hasAngleAdjustment && (
+                                      <div className="text-[9px] text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-bold">
+                                        📐 Açı Düzeltmesi: <strong>{sec.angleAdjustment! > 0 ? '+' : ''}{sec.angleAdjustment}°</strong>
                                       </div>
                                     )}
 
@@ -4106,10 +4219,59 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                         type="button"
                                         onClick={() => handleDeleteSection(idx)}
                                         className="px-1.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold flex items-center gap-0.5 cursor-pointer transition-colors"
-                                        title="Bu enkesiti modelden sil"
+                                        title="Bu enkesiti modelden sil (kırmızı renkle silinenlere geçer)"
                                       >
                                         <Trash2 size={10} />
                                         <span>Sil</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </Popup>
+                              </Polyline>
+                            );
+                          })}
+
+                          {/* Render Deleted Cross Sections (Red, Dashed, Toggleable) */}
+                          {showDeletedSections && deletedSectionsList.map((sec, dIdx) => {
+                            if (!sec.cutLine) return null;
+                            return (
+                              <Polyline
+                                key={`deleted-sec-${sec.station}-${dIdx}`}
+                                positions={sec.cutLine}
+                                color="#ef4444" // Silinen enkesitler: KIRMIZI
+                                weight={2.5}
+                                dashArray="5, 5"
+                                opacity={0.85}
+                              >
+                                <Tooltip sticky>
+                                  <div className="text-[10px] font-bold text-red-700">
+                                    🗑️ Silinen Kesit: Km {(sec.station / 1000).toFixed(3)} ({sec.station.toFixed(0)}m) - Analiz Dışı
+                                  </div>
+                                </Tooltip>
+                                <Popup>
+                                  <div className="p-1 space-y-1.5 min-w-[175px]">
+                                    <div className="flex items-center justify-between border-b border-red-200 pb-1">
+                                      <span className="font-bold text-xs text-red-700 flex items-center gap-1">
+                                        <span>🗑️</span> Kesit Km {(sec.station / 1000).toFixed(3)}
+                                      </span>
+                                      <span className="text-[9px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold">
+                                        Silindi
+                                      </span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-600 space-y-0.5">
+                                      <div>Durum: <strong className="text-red-600">Modelden Çıkarıldı (Kırmızı)</strong></div>
+                                      <div>Min Kot: <strong>{sec.minElevation.toFixed(2)} m</strong></div>
+                                      <div>Maks Kot: <strong>{sec.maxElevation.toFixed(2)} m</strong></div>
+                                    </div>
+                                    <div className="pt-1 border-t border-slate-100">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRestoreSection(sec.station)}
+                                        className="w-full px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                                        title="Bu enkesiti modele geri al"
+                                      >
+                                        <RotateCcw size={11} />
+                                        <span>Modele Geri Al</span>
                                       </button>
                                     </div>
                                   </div>
@@ -4192,10 +4354,26 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             </button>
                           </div>
                         ) : (
-                          /* Top Notification Banner inside Map */
-                          <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
-                            <Compass className="text-cyan-400 shrink-0" size={13} />
-                            <span>Harita üzerindeki yeşil çizgilere tıklayarak enkesitleri, sanat yapılarına tıklayarak detayları seçebilirsiniz</span>
+                          /* Top Notification Banner & Color Legend inside Map */
+                          <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-2 shadow-md flex-wrap">
+                            <span className="flex items-center gap-1 font-semibold text-blue-400">
+                              <span className="w-2.5 h-1 bg-blue-500 inline-block rounded-xs"></span>
+                              <span>Orijinal (Mavi)</span>
+                            </span>
+                            <span className="text-slate-600">|</span>
+                            <span className="flex items-center gap-1 font-semibold text-emerald-400">
+                              <span className="w-2.5 h-1 bg-emerald-500 inline-block rounded-xs"></span>
+                              <span>Açı Düzeltilmiş (Yeşil)</span>
+                            </span>
+                            {deletedSectionsList.length > 0 && (
+                              <>
+                                <span className="text-slate-600">|</span>
+                                <span className="flex items-center gap-1 font-semibold text-red-400">
+                                  <span className="w-2.5 h-1 bg-red-500 inline-block rounded-xs"></span>
+                                  <span>Silinen (Kırmızı)</span>
+                                </span>
+                              </>
+                            )}
                           </div>
                         )}
 
@@ -4212,7 +4390,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             )}
                             {sections.length > 0 && (
                               <span>
-                                <strong className="text-emerald-400">Enkesitler:</strong> {sections.length} Adet {crossSectionMode === 'manual' ? '(Manuel KML)' : `(dx: ${crossSectionInterval}m)`}
+                                <strong className="text-emerald-400">Aktif Enkesitler:</strong> {sections.length} Adet
+                              </span>
+                            )}
+                            {deletedSectionsList.length > 0 && (
+                              <span>
+                                <strong className="text-red-400">Silinen:</strong> {deletedSectionsList.length} Adet
                               </span>
                             )}
                           </div>
