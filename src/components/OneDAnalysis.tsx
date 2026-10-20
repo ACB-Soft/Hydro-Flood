@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   Activity,
@@ -7,6 +7,9 @@ import {
   Ruler,
   Clock,
   Play,
+  Pause,
+  SkipBack,
+  SkipForward,
   CheckCircle2,
   Upload,
   SplitSquareVertical,
@@ -49,6 +52,10 @@ import {
   generateCrossSections, 
   parseManualCrossSections,
   runRouting, 
+  runDynamicRouting,
+  generateSyntheticHydrograph,
+  DynamicRoutingResult,
+  DynamicTimeStepResult,
   parseKMLCoordinates, 
   parseKMLStructures,
   parseKMLBankLines,
@@ -144,7 +151,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isResultPage, setIsResultPage] = useState<boolean>(false);
   const [mobileTab, setMobileTab] = useState<'controls' | 'preview'>('controls');
   const [rightPanelTab, setRightPanelTab] = useState<'map' | 'section' | 'hydrograph'>('map');
-  const [resultTab, setResultTab] = useState<'profile' | 'section' | 'map'>('profile');
+  const [resultTab, setResultTab] = useState<'profile' | 'section' | 'map' | 'hydrograph'>('profile');
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
@@ -256,6 +263,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   // Simulation State & Results
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [simResults, setSimResults] = useState<RoutingResult[]>([]);
+  const [dynamicResults, setDynamicResults] = useState<DynamicRoutingResult | null>(null);
+  const [currentStepIdx, setCurrentStepIdx] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [resultDisplayMode, setResultDisplayMode] = useState<'peak' | 'dynamic'>('peak');
 
   // Hydraulic Structures (Bridges & Culverts)
   const [structures, setStructures] = useState<HydraulicStructure[]>([]);
@@ -632,15 +643,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   };
 
   // Generate Cross Sections from DEM and Centerline (Automatic mode)
-  const handleGenerateSections = async () => {
+  const handleGenerateSections = async (): Promise<CrossSection[] | null> => {
     if (!demFile) {
       alert("Lütfen önce bir DEM (Topografya) dosyası yükleyin.");
-      return;
+      return null;
     }
     if (crossSectionMode === 'manual') {
       if (!manualKmlFile) {
         alert("Lütfen manuel enkesit KML dosyasını seçin.");
-        return;
+        return null;
       }
       setIsExtracting(true);
       try {
@@ -671,18 +682,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
           setDownstreamSlope(slopeCalc.slope);
           setSlopeCalculationInfo(slopeCalc);
         }
+        return data;
       } catch (err: any) {
         console.error(err);
         alert("Manuel enkesit ayrıştırma hatası: " + err.message);
+        return null;
       } finally {
         setIsExtracting(false);
       }
-      return;
     }
 
     if (!centerlineFile) {
       alert("Lütfen Nehir Merkez Hattı KML dosyasını yükleyin.");
-      return;
+      return null;
     }
     setIsExtracting(true);
     try {
@@ -757,9 +769,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         setDownstreamSlope(slopeCalc.slope);
         setSlopeCalculationInfo(slopeCalc);
       }
+      return data;
     } catch (err: any) {
       console.error(err);
       alert("Enkesit çıkarımı sırasında hata oluştu: " + err.message);
+      return null;
     } finally {
       setIsExtracting(false);
     }
@@ -1116,38 +1130,74 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   };
 
   // Run 1D Hydrodynamic Simulation
-  const handleStartAnalysis = () => {
+  const handleStartAnalysis = async () => {
+    let targetSections = sections;
     if (sections.length === 0) {
       if (!demFile) {
         alert("Lütfen önce bir DEM dosyası yükleyip enkesitleri çıkarın.");
         return;
       }
-      handleGenerateSections().then(() => {
-        executeRouting();
-      });
-      return;
+      const generated = await handleGenerateSections();
+      if (!generated || generated.length === 0) {
+        return;
+      }
+      targetSections = generated;
     }
-    executeRouting();
+    executeRouting(targetSections);
   };
 
-  const executeRouting = () => {
+  const executeRouting = (customSections?: CrossSection[]) => {
+    const activeSecs = customSections || sections;
+    if (activeSecs.length === 0) {
+      alert("Simülasyon için en az 1 adet enkesit gereklidir.");
+      return;
+    }
+
     setIsSimulating(true);
     setTimeout(() => {
       try {
-        const { results, structureResults: structRes } = runRouting(
-          sections,
-          peakFlow,
-          manningMain,
-          manningLOB,
-          manningROB,
-          downstreamSlope,
-          structures
-        );
-        setSimResults(results);
-        setStructureResults(structRes);
+        if (flowMode === 'hydrograph') {
+          // Dynamic Unsteady Routing (Saint-Venant / Hydrograph Time Stepping)
+          let hydro = hydrographData;
+          if (!hydro || hydro.length < 2) {
+            hydro = generateSyntheticHydrograph(peakFlow, simDuration);
+            setHydrographData(hydro);
+          }
+          const dyn = runDynamicRouting(
+            activeSecs,
+            hydro,
+            peakFlow,
+            simDuration,
+            manningMain,
+            manningLOB,
+            manningROB,
+            downstreamSlope,
+            structures
+          );
+          setDynamicResults(dyn);
+          setCurrentStepIdx(0);
+          setResultDisplayMode('peak');
+          setSimResults(dyn.peakResults);
+          setStructureResults(dyn.structureResults);
+        } else {
+          // Steady 1D Standard Step Backwater Routing
+          const { results, structureResults: structRes } = runRouting(
+            activeSecs,
+            peakFlow,
+            manningMain,
+            manningLOB,
+            manningROB,
+            downstreamSlope,
+            structures
+          );
+          setDynamicResults(null);
+          setSimResults(results);
+          setStructureResults(structRes);
+        }
+
         setIsSimulating(false);
         setIsResultPage(true);
-        setResultTab('map'); // Statik simülasyondaki gibi doğrudan Taşkın Yayılım Haritasını aç
+        setResultTab('map');
         setMobileTab('preview');
       } catch (err: any) {
         console.error(err);
@@ -1156,6 +1206,39 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       }
     }, 1200);
   };
+
+  // Playback timer for Dynamic Simulation
+  useEffect(() => {
+    let timer: any = null;
+    if (isPlaying && dynamicResults && dynamicResults.timeSteps.length > 0) {
+      timer = setInterval(() => {
+        setCurrentStepIdx((prev) => {
+          const next = prev + 1;
+          if (next >= dynamicResults.timeSteps.length) {
+            setIsPlaying(false);
+            return prev;
+          }
+          return next;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [isPlaying, dynamicResults]);
+
+  // Sync displayed results with dynamic time step / peak mode
+  useEffect(() => {
+    if (!dynamicResults) return;
+    if (resultDisplayMode === 'peak') {
+      setSimResults(dynamicResults.peakResults);
+      setStructureResults(dynamicResults.structureResults);
+    } else if (dynamicResults.timeSteps[currentStepIdx]) {
+      const step = dynamicResults.timeSteps[currentStepIdx];
+      setSimResults(step.results);
+      setStructureResults(step.structureResults);
+    }
+  }, [currentStepIdx, resultDisplayMode, dynamicResults]);
 
   // 1D Flood Inundation Polygons & Extents Computation
   const floodMapData = useMemo(() => {
@@ -1704,6 +1787,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       <MapIcon size={13} />
                       <span>Taşkın Haritası</span>
                     </button>
+                    {dynamicResults && (
+                      <button
+                        onClick={() => setResultTab('hydrograph')}
+                        className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                          resultTab === 'hydrograph'
+                            ? 'bg-cyan-700 text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <TrendingUp size={13} />
+                        <span>Dinamik Hidrograf</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Station Scrubbing Selector */}
@@ -1722,6 +1818,124 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     </select>
                   </div>
                 </div>
+
+                {/* Dynamic Hydrodynamic Time Player Bar (Active when Dynamic Simulation is available) */}
+                {dynamicResults && (
+                  <div className="bg-gradient-to-r from-sky-50 via-cyan-50 to-blue-50 border border-cyan-200/90 rounded-xl p-2 sm:p-2.5 my-1 flex flex-wrap items-center justify-between gap-2.5 shadow-xs shrink-0">
+                    {/* Play / Pause / Step Controls */}
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-cyan-200 shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsPlaying(false);
+                            setCurrentStepIdx(Math.max(0, currentStepIdx - 1));
+                            setResultDisplayMode('dynamic');
+                          }}
+                          disabled={currentStepIdx === 0}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-700 disabled:opacity-40 cursor-pointer"
+                          title="Önceki Zaman Adımı"
+                        >
+                          <SkipBack size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isPlaying) {
+                              setIsPlaying(false);
+                            } else {
+                              setResultDisplayMode('dynamic');
+                              if (currentStepIdx >= dynamicResults.timeSteps.length - 1) {
+                                setCurrentStepIdx(0);
+                              }
+                              setIsPlaying(true);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded text-xs font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                            isPlaying
+                              ? 'bg-amber-600 text-white hover:bg-amber-700 shadow-xs'
+                              : 'bg-cyan-700 text-white hover:bg-cyan-800 shadow-xs'
+                          }`}
+                          title={isPlaying ? 'Durdur' : 'Oynat'}
+                        >
+                          {isPlaying ? <Pause size={12} /> : <Play size={12} className="fill-white" />}
+                          <span>{isPlaying ? 'Durdur' : 'Oynat'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsPlaying(false);
+                            setCurrentStepIdx(Math.min(dynamicResults.timeSteps.length - 1, currentStepIdx + 1));
+                            setResultDisplayMode('dynamic');
+                          }}
+                          disabled={currentStepIdx >= dynamicResults.timeSteps.length - 1}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-700 disabled:opacity-40 cursor-pointer"
+                          title="Sonraki Zaman Adımı"
+                        >
+                          <SkipForward size={13} />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="font-extrabold text-cyan-950 bg-white px-2 py-1 rounded-lg border border-cyan-200 shadow-2xs font-mono">
+                          ⏱️ {dynamicResults.timeSteps[currentStepIdx]?.timeFormatted || `Saat ${currentStepIdx}:00`}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-600 hidden md:inline">
+                          Giriş: <strong className="text-cyan-800">{dynamicResults.timeSteps[currentStepIdx]?.inflowQ} m³/s</strong>
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-600 hidden md:inline">
+                          Çıkış: <strong className="text-emerald-700">{dynamicResults.timeSteps[currentStepIdx]?.outflowQ} m³/s</strong>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Time Scrubbing Slider & Mode Toggle */}
+                    <div className="flex items-center gap-2.5 flex-1 min-w-[200px] max-w-md">
+                      <input
+                        type="range"
+                        min="0"
+                        max={Math.max(1, dynamicResults.timeSteps.length - 1)}
+                        step="1"
+                        value={currentStepIdx}
+                        onChange={(e) => {
+                          setIsPlaying(false);
+                          setCurrentStepIdx(Number(e.target.value));
+                          setResultDisplayMode('dynamic');
+                        }}
+                        className="flex-1 h-1.5 bg-cyan-200 rounded-full appearance-none cursor-pointer accent-cyan-700"
+                      />
+                      <div className="flex items-center bg-white p-0.5 rounded-lg border border-cyan-200 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsPlaying(false);
+                            setResultDisplayMode('peak');
+                          }}
+                          className={`px-2 py-0.5 text-[10px] font-bold rounded cursor-pointer transition-all ${
+                            resultDisplayMode === 'peak'
+                              ? 'bg-amber-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title="Tüm zaman adımlarının en yüksek taşkın zarfı"
+                        >
+                          ⭐ Pik Zarfı
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setResultDisplayMode('dynamic')}
+                          className={`px-2 py-0.5 text-[10px] font-bold rounded cursor-pointer transition-all ${
+                            resultDisplayMode === 'dynamic'
+                              ? 'bg-cyan-700 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title="Anlık zaman adımı seviyesi"
+                        >
+                          Anlık Adım
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Result Tab 1: Longitudinal Profile */}
                 {resultTab === 'profile' && simResults.length > 0 && (
@@ -2229,6 +2443,127 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         <span>Sol Bank: <strong>{currentActiveSection.bankLeftX.toFixed(0)}m</strong></span>
                         <span>Taban Kotu: <strong>{currentActiveSection.minElevation.toFixed(2)}m</strong></span>
                         <span>Sağ Bank: <strong>{currentActiveSection.bankRightX.toFixed(0)}m</strong></span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Result Tab 4: Dynamic Hydrograph Routing View */}
+                {resultTab === 'hydrograph' && dynamicResults && (() => {
+                  const maxT = Math.max(...dynamicResults.upstreamHydrograph.map(d => d.time), 1);
+                  const maxQIn = Math.max(...dynamicResults.upstreamHydrograph.map(d => d.flow), 1);
+                  const maxQOut = Math.max(...dynamicResults.downstreamHydrograph.map(d => d.flow), 1);
+                  const maxQ = Math.max(maxQIn, maxQOut, 10);
+
+                  const mapX = (t: number) => 55 + (t / maxT) * 620;
+                  const mapY = (q: number) => 220 - (q / maxQ) * 180;
+
+                  const inPoints = dynamicResults.upstreamHydrograph.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
+                  const inPoly = `55,220 ` + inPoints + ` ${mapX(maxT)},220`;
+
+                  const outPoints = dynamicResults.downstreamHydrograph.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
+                  const outPoly = `55,220 ` + outPoints + ` ${mapX(maxT)},220`;
+
+                  const currentStep = dynamicResults.timeSteps[currentStepIdx] || dynamicResults.timeSteps[0];
+                  const curX = mapX(currentStep ? currentStep.timeHours : 0);
+
+                  // Find Peak Inflow and Peak Outflow
+                  const peakInItem = [...dynamicResults.upstreamHydrograph].sort((a, b) => b.flow - a.flow)[0];
+                  const peakOutItem = [...dynamicResults.downstreamHydrograph].sort((a, b) => b.flow - a.flow)[0];
+                  const lagHours = Math.max(0, (peakOutItem?.time || 0) - (peakInItem?.time || 0));
+                  const attenuationM3 = Math.max(0, (peakInItem?.flow || 0) - (peakOutItem?.flow || 0));
+
+                  return (
+                    <div className="flex-1 flex flex-col min-h-0 pt-2 relative overflow-hidden">
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1 mb-1">
+                        <div className="flex items-center gap-3">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-3 h-1 bg-cyan-600 rounded-sm inline-block"></span>
+                            <span className="text-cyan-800">Memba Giriş Hidrografı (Giriş)</span>
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-3 h-1 bg-emerald-600 rounded-sm inline-block"></span>
+                            <span className="text-emerald-800">Mansap Çıkış Hidrografı (Ötelenmiş & Sönümlenmiş)</span>
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-3 h-0.5 border-t-2 border-dashed border-red-500 inline-block"></span>
+                            <span className="text-red-700">Anlık Simülasyon İmleci</span>
+                          </span>
+                        </div>
+                        <span className="text-slate-500 text-[11px]">
+                          Toplam Hesap Süresi: <strong>{maxT} Saat</strong>
+                        </span>
+                      </div>
+
+                      <div className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 relative overflow-hidden flex flex-col justify-center">
+                        <svg width="100%" height="100%" viewBox="0 0 720 260" preserveAspectRatio="none" className="w-full h-full">
+                          {/* Grid Lines */}
+                          <line x1="55" y1="40" x2="685" y2="40" stroke="#e2e8f0" strokeDasharray="3 3" />
+                          <line x1="55" y1="100" x2="685" y2="100" stroke="#e2e8f0" strokeDasharray="3 3" />
+                          <line x1="55" y1="160" x2="685" y2="160" stroke="#e2e8f0" strokeDasharray="3 3" />
+                          <line x1="55" y1="220" x2="685" y2="220" stroke="#cbd5e1" strokeWidth="1.5" />
+
+                          {/* Y-axis labels */}
+                          <text x="48" y="44" fontSize="9" textAnchor="end" fill="#64748b" fontWeight="bold">{(maxQ).toFixed(0)} m³/s</text>
+                          <text x="48" y="104" fontSize="9" textAnchor="end" fill="#64748b" fontWeight="bold">{(maxQ * 0.66).toFixed(0)}</text>
+                          <text x="48" y="164" fontSize="9" textAnchor="end" fill="#64748b" fontWeight="bold">{(maxQ * 0.33).toFixed(0)}</text>
+                          <text x="48" y="223" fontSize="9" textAnchor="end" fill="#64748b" fontWeight="bold">0</text>
+
+                          {/* Inflow Area & Polyline */}
+                          <polygon points={inPoly} fill="#0284c7" fillOpacity="0.18" />
+                          <polyline points={inPoints} fill="none" stroke="#0284c7" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" />
+
+                          {/* Outflow Area & Polyline */}
+                          <polygon points={outPoly} fill="#10b981" fillOpacity="0.15" />
+                          <polyline points={outPoints} fill="none" stroke="#059669" strokeWidth="2.5" strokeDasharray="6 3" strokeLinecap="round" strokeLinejoin="round" />
+
+                          {/* Current time playhead cursor */}
+                          <line x1={curX} y1="30" x2={curX} y2="220" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 2" />
+                          <circle cx={curX} cy={mapY(currentStep ? currentStep.inflowQ : 0)} r="4" fill="#0284c7" stroke="#fff" strokeWidth="2" />
+                          <circle cx={curX} cy={mapY(currentStep ? currentStep.outflowQ : 0)} r="4" fill="#059669" stroke="#fff" strokeWidth="2" />
+
+                          {/* Peak Points Markers */}
+                          {peakInItem && (
+                            <g>
+                              <circle cx={mapX(peakInItem.time)} cy={mapY(peakInItem.flow)} r="5" fill="#0369a1" stroke="#fff" strokeWidth="2" />
+                              <text x={mapX(peakInItem.time)} y={mapY(peakInItem.flow) - 8} fontSize="9" fontWeight="bold" fill="#0369a1" textAnchor="middle">
+                                Giriş Pik: {peakInItem.flow} m³/s ({peakInItem.time}. saat)
+                              </text>
+                            </g>
+                          )}
+                          {peakOutItem && (
+                            <g>
+                              <circle cx={mapX(peakOutItem.time)} cy={mapY(peakOutItem.flow)} r="5" fill="#047857" stroke="#fff" strokeWidth="2" />
+                              <text x={mapX(peakOutItem.time)} y={mapY(peakOutItem.flow) - 8} fontSize="9" fontWeight="bold" fill="#047857" textAnchor="middle">
+                                Çıkış Pik: {peakOutItem.flow} m³/s ({peakOutItem.time}. saat)
+                              </text>
+                            </g>
+                          )}
+                        </svg>
+                      </div>
+
+                      {/* Hydrodynamic Routing Summary Metrics Card */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2">
+                        <div className="bg-cyan-50 border border-cyan-200 p-2 rounded-xl text-xs">
+                          <span className="text-[10px] text-cyan-800 font-bold block">Giriş (Memba) Pik:</span>
+                          <span className="font-extrabold text-cyan-950 text-sm">{peakInItem?.flow || 0} m³/s</span>
+                          <span className="text-[9px] text-cyan-700 block">{peakInItem?.time || 0}. Saatte</span>
+                        </div>
+                        <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl text-xs">
+                          <span className="text-[10px] text-emerald-800 font-bold block">Çıkış (Mansap) Pik:</span>
+                          <span className="font-extrabold text-emerald-950 text-sm">{peakOutItem?.flow || 0} m³/s</span>
+                          <span className="text-[9px] text-emerald-700 block">{peakOutItem?.time || 0}. Saatte</span>
+                        </div>
+                        <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-xs">
+                          <span className="text-[10px] text-amber-800 font-bold block">Pik Öteleme (Lag):</span>
+                          <span className="font-extrabold text-amber-950 text-sm">+{lagHours.toFixed(1)} Saat</span>
+                          <span className="text-[9px] text-amber-700 block">Dalgacık Seyir Süresi</span>
+                        </div>
+                        <div className="bg-blue-50 border border-blue-200 p-2 rounded-xl text-xs">
+                          <span className="text-[10px] text-blue-800 font-bold block">Kanal Sönümlemesi:</span>
+                          <span className="font-extrabold text-blue-950 text-sm">-%{((attenuationM3 / Math.max(1, peakInItem?.flow || 1)) * 100).toFixed(1)}</span>
+                          <span className="text-[9px] text-blue-700 block">(-{attenuationM3.toFixed(1)} m³/s pik kaybı)</span>
+                        </div>
                       </div>
                     </div>
                   );
@@ -4029,7 +4364,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     Sabit / Pik Debi
                   </button>
                   <button
-                    onClick={() => setFlowMode('hydrograph')}
+                    onClick={() => {
+                      setFlowMode('hydrograph');
+                      if (hydrographData.length === 0) {
+                        const synth = generateSyntheticHydrograph(peakFlow, simDuration);
+                        setHydrographData(synth);
+                        setHydrographFileName('Sentetik Taşkın Hidrografı');
+                      }
+                    }}
                     className={`flex-1 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer text-center flex items-center justify-center gap-1 ${
                       flowMode === 'hydrograph'
                         ? 'bg-cyan-700 text-white shadow-sm'
@@ -4037,7 +4379,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     }`}
                   >
                     <FileSpreadsheet size={12} />
-                    <span>Akım Hidrografı (Excel)</span>
+                    <span>Akım Hidrografı (Dinamik)</span>
                   </button>
                 </div>
 
@@ -4077,14 +4419,28 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   <div className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] font-bold text-slate-700">Debi Hidrografı Verisi:</span>
-                      <button
-                        onClick={downloadHydrographTemplate}
-                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 border border-slate-300 shadow-sm cursor-pointer"
-                        title="Örnek Excel formatını indirin"
-                      >
-                        <Download size={11} className="text-cyan-700" />
-                        <span>Örnek Şablonu İndir (.xlsx)</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const synth = generateSyntheticHydrograph(peakFlow, simDuration);
+                            setHydrographData(synth);
+                            setHydrographFileName('Sentetik Taşkın Hidrografı');
+                          }}
+                          className="px-1.5 py-0.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 rounded text-[9px] font-bold border border-cyan-300 cursor-pointer"
+                          title="Mevcut pik debi ve süreye göre sentetik hidrograf oluştur"
+                        >
+                          Otomatik Hidrograf
+                        </button>
+                        <button
+                          onClick={downloadHydrographTemplate}
+                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 border border-slate-300 shadow-sm cursor-pointer"
+                          title="Örnek Excel formatını indirin"
+                        >
+                          <Download size={11} className="text-cyan-700" />
+                          <span>Şablon (.xlsx)</span>
+                        </button>
+                      </div>
                     </div>
 
                     {hydrographFileName && hydrographData.length > 0 ? (

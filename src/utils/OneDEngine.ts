@@ -41,11 +41,31 @@ export interface RoutingResult {
   overbankAreaROB: number;
   bankLeftZ: number;
   bankRightZ: number;
+  discharge?: number;
   structureEffect?: {
     structureName: string;
     flowState: 'free' | 'pressure' | 'overtopping';
     backwaterRise: number;
   };
+}
+
+export interface DynamicTimeStepResult {
+  timeHours: number;
+  timeFormatted: string;
+  inflowQ: number;
+  outflowQ: number;
+  results: RoutingResult[];
+  structureResults: StructureHydraulicResult[];
+}
+
+export interface DynamicRoutingResult {
+  peakResults: RoutingResult[];
+  structureResults: StructureHydraulicResult[];
+  timeSteps: DynamicTimeStepResult[];
+  peakTimeHours: number;
+  maxFloodAreaM2: number;
+  upstreamHydrograph: { time: number; flow: number }[];
+  downstreamHydrograph: { time: number; flow: number }[];
 }
 
 export type StructureType = 'bridge' | 'box_culvert' | 'pipe_culvert';
@@ -1954,6 +1974,193 @@ export async function parseManualCrossSections(
   return sections;
 }
 
+export interface CrossSectionGeometry {
+  areaMAIN: number;
+  pMAIN: number;
+  wMAIN: number;
+  areaLOB: number;
+  pLOB: number;
+  wLOB: number;
+  areaROB: number;
+  pROB: number;
+  wROB: number;
+  totalArea: number;
+  totalP: number;
+  totalW: number;
+  waterLeftX: number;
+  waterRightX: number;
+  kTotal: number;
+  bedElevation: number;
+  talvegX: number;
+  bankLeftZ: number;
+  bankRightZ: number;
+  bankMinZ: number;
+}
+
+export function evaluateCrossSectionGeometry(
+  section: CrossSection,
+  WSE: number,
+  nMain: number,
+  nLOB: number,
+  nROB: number
+): CrossSectionGeometry {
+  const profile = section.profile;
+  if (!profile || profile.length < 2) {
+    return {
+      areaMAIN: 0, pMAIN: 0, wMAIN: 0,
+      areaLOB: 0, pLOB: 0, wLOB: 0,
+      areaROB: 0, pROB: 0, wROB: 0,
+      totalArea: 0, totalP: 0, totalW: 0,
+      waterLeftX: 0, waterRightX: 0,
+      kTotal: 0, bedElevation: 0, talvegX: 0,
+      bankLeftZ: 0, bankRightZ: 0, bankMinZ: 0
+    };
+  }
+
+  // Locate Talveg (deepest point)
+  let minIdx = 0;
+  let minZ = profile[0].z;
+  for (let i = 0; i < profile.length; i++) {
+    if (profile[i].z < minZ) {
+      minZ = profile[i].z;
+      minIdx = i;
+    }
+  }
+  const talvegX = profile[minIdx].x;
+
+  // Validate Bank Stations
+  let bLeftX = section.bankLeftX;
+  let bRightX = section.bankRightX;
+  if (bLeftX >= talvegX || bRightX <= talvegX || isNaN(bLeftX) || isNaN(bRightX)) {
+    const totalW = profile[profile.length - 1].x - profile[0].x;
+    const channelHalfW = Math.min(25, Math.max(6, totalW * 0.12));
+    bLeftX = Math.max(profile[0].x + 0.5, talvegX - channelHalfW);
+    bRightX = Math.min(profile[profile.length - 1].x - 0.5, talvegX + channelHalfW);
+  }
+
+  const getElevationAtX = (xVal: number): number => {
+    if (xVal <= profile[0].x) return profile[0].z;
+    if (xVal >= profile[profile.length - 1].x) return profile[profile.length - 1].z;
+    for (let k = 0; k < profile.length - 1; k++) {
+      const p1 = profile[k];
+      const p2 = profile[k + 1];
+      if (xVal >= p1.x && xVal <= p2.x) {
+        const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+        return p1.z + frac * (p2.z - p1.z);
+      }
+    }
+    return minZ;
+  };
+
+  const bankLeftZ = getElevationAtX(bLeftX);
+  const bankRightZ = getElevationAtX(bRightX);
+  const bankMinZ = Math.min(bankLeftZ, bankRightZ);
+
+  if (WSE <= minZ) {
+    return {
+      areaMAIN: 0, pMAIN: 0, wMAIN: 0,
+      areaLOB: 0, pLOB: 0, wLOB: 0,
+      areaROB: 0, pROB: 0, wROB: 0,
+      totalArea: 0, totalP: 0, totalW: 0,
+      waterLeftX: talvegX, waterRightX: talvegX,
+      kTotal: 0, bedElevation: minZ, talvegX,
+      bankLeftZ, bankRightZ, bankMinZ
+    };
+  }
+
+  // Hydrologically connected flow boundary tracing outward from talveg:
+  let leftWetX = talvegX;
+  for (let i = minIdx; i > 0; i--) {
+    const curr = profile[i];
+    const prev = profile[i - 1];
+    if (prev.z >= WSE) {
+      const frac = (WSE - curr.z) / Math.max(1e-6, prev.z - curr.z);
+      leftWetX = curr.x - frac * (curr.x - prev.x);
+      break;
+    } else {
+      leftWetX = prev.x;
+    }
+  }
+
+  let rightWetX = talvegX;
+  for (let i = minIdx; i < profile.length - 1; i++) {
+    const curr = profile[i];
+    const next = profile[i + 1];
+    if (next.z >= WSE) {
+      const frac = (WSE - curr.z) / Math.max(1e-6, next.z - curr.z);
+      rightWetX = curr.x + frac * (next.x - curr.x);
+      break;
+    } else {
+      rightWetX = next.x;
+    }
+  }
+
+  let areaMAIN = 0, pMAIN = 0, wMAIN = 0;
+  let areaLOB = 0, pLOB = 0, wLOB = 0;
+  let areaROB = 0, pROB = 0, wROB = 0;
+
+  for (let i = 0; i < profile.length - 1; i++) {
+    const p1 = profile[i];
+    const p2 = profile[i + 1];
+
+    const segX1 = Math.max(p1.x, leftWetX);
+    const segX2 = Math.min(p2.x, rightWetX);
+    if (segX2 <= segX1) continue;
+
+    const zSeg1 = p1.z + ((segX1 - p1.x) / Math.max(1e-6, p2.x - p1.x)) * (p2.z - p1.z);
+    const zSeg2 = p1.z + ((segX2 - p1.x) / Math.max(1e-6, p2.x - p1.x)) * (p2.z - p1.z);
+
+    const h1 = Math.max(0, WSE - zSeg1);
+    const h2 = Math.max(0, WSE - zSeg2);
+    const dx = segX2 - segX1;
+    const dz = zSeg2 - zSeg1;
+    const a = ((h1 + h2) / 2) * dx;
+    const p = Math.sqrt(dx * dx + dz * dz);
+
+    const midX = (segX1 + segX2) / 2;
+    if (midX < bLeftX) {
+      areaLOB += a;
+      pLOB += p;
+      wLOB += dx;
+    } else if (midX > bRightX) {
+      areaROB += a;
+      pROB += p;
+      wROB += dx;
+    } else {
+      areaMAIN += a;
+      pMAIN += p;
+      wMAIN += dx;
+    }
+  }
+
+  const computeK = (A: number, P: number, n: number) => {
+    if (A <= 0 || P <= 0 || n <= 0) return 0;
+    return (1 / n) * A * Math.pow(A / P, 2 / 3);
+  };
+
+  const kMain = computeK(areaMAIN, pMAIN, Math.max(0.01, nMain));
+  const kLOB = computeK(areaLOB, pLOB, Math.max(0.01, nLOB));
+  const kROB = computeK(areaROB, pROB, Math.max(0.01, nROB));
+  const kTotal = kMain + kLOB + kROB;
+
+  return {
+    areaMAIN, pMAIN, wMAIN,
+    areaLOB, pLOB, wLOB,
+    areaROB, pROB, wROB,
+    totalArea: areaMAIN + areaLOB + areaROB,
+    totalP: pMAIN + pLOB + pROB,
+    totalW: wMAIN + wLOB + wROB,
+    waterLeftX: leftWetX,
+    waterRightX: rightWetX,
+    kTotal,
+    bedElevation: minZ,
+    talvegX,
+    bankLeftZ,
+    bankRightZ,
+    bankMinZ
+  };
+}
+
 export function computeNormalDepth(
   section: CrossSection,
   Q: number,
@@ -1980,182 +2187,40 @@ export function computeNormalDepth(
       overbankAreaLOB: 0,
       overbankAreaROB: 0,
       bankLeftZ: 0,
-      bankRightZ: 0
+      bankRightZ: 0,
+      discharge: Q
     };
   }
 
-  // 1. Locate Talveg (deepest bed elevation)
-  let minIdx = 0;
-  let minZ = profile[0].z;
-  for (let i = 0; i < profile.length; i++) {
-    if (profile[i].z < minZ) {
-      minZ = profile[i].z;
-      minIdx = i;
-    }
-  }
-  const talvegX = profile[minIdx].x;
+  const minZ = section.minElevation || Math.min(...profile.map(p => p.z));
+  const effSlope = Math.max(0.00005, Math.abs(S0));
 
-  // 2. Validate Bank Stations
-  let bLeftX = section.bankLeftX;
-  let bRightX = section.bankRightX;
-  if (bLeftX >= talvegX || bRightX <= talvegX || isNaN(bLeftX) || isNaN(bRightX)) {
-    const totalW = profile[profile.length - 1].x - profile[0].x;
-    const channelHalfW = Math.min(25, Math.max(6, totalW * 0.12));
-    bLeftX = Math.max(profile[0].x + 0.5, talvegX - channelHalfW);
-    bRightX = Math.min(profile[profile.length - 1].x - 0.5, talvegX + channelHalfW);
-  }
-
-  // Helper to interpolate elevation at any station X along the cross section
-  const getElevationAtX = (xVal: number): number => {
-    if (xVal <= profile[0].x) return profile[0].z;
-    if (xVal >= profile[profile.length - 1].x) return profile[profile.length - 1].z;
-    for (let k = 0; k < profile.length - 1; k++) {
-      const p1 = profile[k];
-      const p2 = profile[k + 1];
-      if (xVal >= p1.x && xVal <= p2.x) {
-        const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
-        return p1.z + frac * (p2.z - p1.z);
-      }
-    }
-    return minZ;
-  };
-
-  const bankLeftZ = getElevationAtX(bLeftX);
-  const bankRightZ = getElevationAtX(bRightX);
-  const bankMinZ = Math.min(bankLeftZ, bankRightZ);
-
-  // 3. Exact Hydraulic Geometry Solver for candidate water level WSE
-  const evaluateGeometry = (WSE: number) => {
-    if (WSE <= minZ) {
-      return {
-        areaMAIN: 0, pMAIN: 0, wMAIN: 0,
-        areaLOB: 0, pLOB: 0, wLOB: 0,
-        areaROB: 0, pROB: 0, wROB: 0,
-        totalArea: 0, totalP: 0, totalW: 0,
-        waterLeftX: talvegX, waterRightX: talvegX,
-        Q_calc: 0
-      };
-    }
-
-    // Hydrologically connected flow boundary tracing outward from talveg:
-    // Left boundary:
-    let leftWetX = talvegX;
-    for (let i = minIdx; i > 0; i--) {
-      const curr = profile[i];
-      const prev = profile[i - 1];
-      if (prev.z >= WSE) {
-        const frac = (WSE - curr.z) / Math.max(1e-6, prev.z - curr.z);
-        leftWetX = curr.x - frac * (curr.x - prev.x);
-        break;
-      } else {
-        leftWetX = prev.x;
-      }
-    }
-
-    // Right boundary:
-    let rightWetX = talvegX;
-    for (let i = minIdx; i < profile.length - 1; i++) {
-      const curr = profile[i];
-      const next = profile[i + 1];
-      if (next.z >= WSE) {
-        const frac = (WSE - curr.z) / Math.max(1e-6, next.z - curr.z);
-        rightWetX = curr.x + frac * (next.x - curr.x);
-        break;
-      } else {
-        rightWetX = next.x;
-      }
-    }
-
-    // Subdivided flow geometry
-    let areaMAIN = 0, pMAIN = 0, wMAIN = 0;
-    let areaLOB = 0, pLOB = 0, wLOB = 0;
-    let areaROB = 0, pROB = 0, wROB = 0;
-
-    for (let i = 0; i < profile.length - 1; i++) {
-      const p1 = profile[i];
-      const p2 = profile[i + 1];
-
-      const segX1 = Math.max(p1.x, leftWetX);
-      const segX2 = Math.min(p2.x, rightWetX);
-      if (segX2 <= segX1) continue; // No submerged water in this segment
-
-      const zSeg1 = p1.z + ((segX1 - p1.x) / Math.max(1e-6, p2.x - p1.x)) * (p2.z - p1.z);
-      const zSeg2 = p1.z + ((segX2 - p1.x) / Math.max(1e-6, p2.x - p1.x)) * (p2.z - p1.z);
-
-      const h1 = Math.max(0, WSE - zSeg1);
-      const h2 = Math.max(0, WSE - zSeg2);
-      const dx = segX2 - segX1;
-      const dz = zSeg2 - zSeg1;
-      const a = ((h1 + h2) / 2) * dx;
-      const p = Math.sqrt(dx * dx + dz * dz);
-
-      const midX = (segX1 + segX2) / 2;
-      if (midX < bLeftX) {
-        areaLOB += a;
-        pLOB += p;
-        wLOB += dx;
-      } else if (midX > bRightX) {
-        areaROB += a;
-        pROB += p;
-        wROB += dx;
-      } else {
-        areaMAIN += a;
-        pMAIN += p;
-        wMAIN += dx;
-      }
-    }
-
-    // Manning Conveyance K = (1/n) * A * R^(2/3)
-    const computeK = (A: number, P: number, n: number) => {
-      if (A <= 0 || P <= 0 || n <= 0) return 0;
-      return (1 / n) * A * Math.pow(A / P, 2 / 3);
-    };
-
-    const kMain = computeK(areaMAIN, pMAIN, nMain);
-    const kLOB = computeK(areaLOB, pLOB, nLOB);
-    const kROB = computeK(areaROB, pROB, nROB);
-    const K_total = kMain + kLOB + kROB;
-
-    const effSlope = Math.max(0.00005, S0);
-    const Q_calc = K_total * Math.sqrt(effSlope);
-
-    return {
-      areaMAIN, pMAIN, wMAIN,
-      areaLOB, pLOB, wLOB,
-      areaROB, pROB, wROB,
-      totalArea: areaMAIN + areaLOB + areaROB,
-      totalP: pMAIN + pLOB + pROB,
-      totalW: wMAIN + wLOB + wROB,
-      waterLeftX: leftWetX,
-      waterRightX: rightWetX,
-      Q_calc
-    };
-  };
-
-  // 4. Guaranteed Monotonic Bisection Search for WSE
   let lowWSE = minZ + 0.001;
   let highWSE = minZ + 2.0;
-
-  // Bracket upper bound until Q_calc exceeds requested Q
   const maxAllowableZ = Math.max(...profile.map(p => p.z)) + 25;
-  while (evaluateGeometry(highWSE).Q_calc < Q && highWSE < maxAllowableZ) {
+
+  while (
+    evaluateCrossSectionGeometry(section, highWSE, nMain, nLOB, nROB).kTotal * Math.sqrt(effSlope) < Q &&
+    highWSE < maxAllowableZ
+  ) {
     highWSE += 2.0;
   }
 
-  let finalGeom = evaluateGeometry(highWSE);
   let bestWSE = highWSE;
+  let finalGeom = evaluateCrossSectionGeometry(section, highWSE, nMain, nLOB, nROB);
 
   for (let iter = 0; iter < 65; iter++) {
     const midWSE = (lowWSE + highWSE) / 2;
-    const geom = evaluateGeometry(midWSE);
+    const geom = evaluateCrossSectionGeometry(section, midWSE, nMain, nLOB, nROB);
+    const qCalc = geom.kTotal * Math.sqrt(effSlope);
     bestWSE = midWSE;
     finalGeom = geom;
 
-    if (Math.abs(geom.Q_calc - Q) < 0.005 || (highWSE - lowWSE) < 0.0005) {
+    if (Math.abs(qCalc - Q) < 0.005 || (highWSE - lowWSE) < 0.0005) {
       break;
     }
 
-    if (geom.Q_calc < Q) {
+    if (qCalc < Q) {
       lowWSE = midWSE;
     } else {
       highWSE = midWSE;
@@ -2169,8 +2234,7 @@ export function computeNormalDepth(
   const velocityHead = (finalVel * finalVel) / (2 * 9.81);
   const energyElevation = bestWSE + velocityHead;
 
-  // Overbank flood occurs ONLY IF water breaches the bank crest AND discharges onto the floodplain
-  const isOverbank = bestWSE > bankMinZ && (finalGeom.areaLOB > 0.05 || finalGeom.areaROB > 0.05);
+  const isOverbank = bestWSE > finalGeom.bankMinZ && (finalGeom.areaLOB > 0.05 || finalGeom.areaROB > 0.05);
 
   return {
     waterElevation: bestWSE,
@@ -2187,8 +2251,9 @@ export function computeNormalDepth(
     waterRightX: finalGeom.waterRightX,
     overbankAreaLOB: finalGeom.areaLOB,
     overbankAreaROB: finalGeom.areaROB,
-    bankLeftZ,
-    bankRightZ
+    bankLeftZ: finalGeom.bankLeftZ,
+    bankRightZ: finalGeom.bankRightZ,
+    discharge: Q
   };
 }
 
@@ -2360,6 +2425,171 @@ export function computeStructureHydraulics(
   };
 }
 
+/**
+ * 1D Standard Step Backwater & Energy Equation Solver
+ * Solves the subcritical open-channel energy equation from downstream to upstream:
+ * WS_u + V_u^2 / (2g) = WS_d + V_d^2 / (2g) + Sf_avg * dx + h_loss
+ */
+export function solveStandardStepBackwater(
+  sections: CrossSection[],
+  discharges: number | number[],
+  nMain: number,
+  nLOB: number,
+  nROB: number,
+  S0: number
+): RoutingResult[] {
+  if (sections.length === 0) return [];
+
+  const getQ = (idx: number): number => {
+    if (Array.isArray(discharges)) {
+      return discharges[idx] !== undefined ? Math.max(1, discharges[idx]) : 100;
+    }
+    return Math.max(1, discharges);
+  };
+
+  // 1. Calculate baseline normal depths for all sections
+  const normalResults: RoutingResult[] = sections.map((sec, idx) => {
+    const q = getQ(idx);
+    const nd = computeNormalDepth(sec, q, nMain, nLOB, nROB, S0);
+    return {
+      station: sec.station,
+      ...nd,
+      discharge: q
+    };
+  });
+
+  if (sections.length === 1) {
+    return normalResults;
+  }
+
+  // 2. Identify physical flow direction (Flow runs from higher bed elevation to lower bed elevation)
+  const zStart = sections[0].minElevation;
+  const zEnd = sections[sections.length - 1].minElevation;
+  const isForward = zStart >= zEnd; // if true: 0 is upstream, N-1 is downstream
+
+  const N = sections.length;
+  const orderIndices: number[] = [];
+  if (isForward) {
+    // Step from downstream (N-1) to upstream (0)
+    for (let i = N - 1; i >= 0; i--) orderIndices.push(i);
+  } else {
+    // Step from downstream (0) to upstream (N-1)
+    for (let i = 0; i < N; i++) orderIndices.push(i);
+  }
+
+  const finalResults: RoutingResult[] = normalResults.map(r => ({ ...r }));
+
+  // Downstream boundary condition is set by normal depth at downstream section
+  const dsIdx = orderIndices[0];
+  let prevIdx = dsIdx;
+
+  // Step upstream through reach
+  for (let step = 1; step < orderIndices.length; step++) {
+    const uIdx = orderIndices[step];
+    const dIdx = prevIdx;
+
+    const secU = sections[uIdx];
+    const secD = sections[dIdx];
+    const qU = getQ(uIdx);
+    const qD = getQ(dIdx);
+
+    const resD = finalResults[dIdx];
+    const geomD = evaluateCrossSectionGeometry(secD, resD.waterElevation, nMain, nLOB, nROB);
+    const areaD = Math.max(0.1, geomD.totalArea);
+    const velD = qD / areaD;
+    const vHeadD = (velD * velD) / (2 * 9.81);
+    const E_d = resD.waterElevation + vHeadD;
+    const Sf_d = Math.pow(qD / Math.max(0.1, geomD.kTotal), 2);
+
+    const dx = Math.max(1, Math.abs(secU.station - secD.station));
+    const minZu = secU.minElevation;
+
+    // Upstream normal depth baseline
+    const normWSEu = normalResults[uIdx].waterElevation;
+
+    // Energy balance function f(WSE_u) = E_u - (E_d + Sf_bar * dx + h_loss)
+    const evalEnergyDiff = (wseCandidate: number): number => {
+      const geomU = evaluateCrossSectionGeometry(secU, wseCandidate, nMain, nLOB, nROB);
+      const aU = Math.max(0.1, geomU.totalArea);
+      const vU = qU / aU;
+      const vHeadU = (vU * vU) / (2 * 9.81);
+      const Eu = wseCandidate + vHeadU;
+
+      const Sf_u = Math.pow(qU / Math.max(0.1, geomU.kTotal), 2);
+      const Sf_bar = (Sf_d + Sf_u) / 2;
+      const frictionLoss = Sf_bar * dx;
+
+      // Contraction / Expansion loss
+      const deltaVhead = vHeadU - vHeadD;
+      const lossCoeff = deltaVhead >= 0 ? 0.1 : 0.3;
+      const minorLoss = lossCoeff * Math.abs(deltaVhead);
+
+      return Eu - (E_d + frictionLoss + minorLoss);
+    };
+
+    // Bisection search for upstream WSE
+    let lowW = Math.max(minZu + 0.05, resD.waterElevation - 0.001);
+    let highW = Math.max(lowW + 1.0, normWSEu + 3.0, resD.waterElevation + 3.0);
+
+    while (evalEnergyDiff(highW) < 0 && highW < minZu + 35) {
+      highW += 2.0;
+    }
+
+    let solvedWSE = highW;
+    for (let iter = 0; iter < 45; iter++) {
+      const mid = (lowW + highW) / 2;
+      const diff = evalEnergyDiff(mid);
+      solvedWSE = mid;
+
+      if (Math.abs(diff) < 0.005 || (highW - lowW) < 0.0005) {
+        break;
+      }
+      if (diff < 0) {
+        lowW = mid;
+      } else {
+        highW = mid;
+      }
+    }
+
+    // Subcritical flow constraint: Upstream WSE cannot drop below downstream WSE in backwater pooling
+    const targetWSE = Math.max(solvedWSE, normWSEu, resD.waterElevation);
+
+    const finalGeomU = evaluateCrossSectionGeometry(secU, targetWSE, nMain, nLOB, nROB);
+    const finalArea = finalGeomU.totalArea;
+    const finalVel = finalArea > 0 ? qU / finalArea : 0;
+    const hydraulicDepth = finalGeomU.totalW > 0 ? finalArea / finalGeomU.totalW : Math.max(0.1, targetWSE - minZu);
+    const froudeNumber = hydraulicDepth > 0 ? finalVel / Math.sqrt(9.81 * hydraulicDepth) : 0;
+    const velocityHead = (finalVel * finalVel) / (2 * 9.81);
+    const energyElevation = targetWSE + velocityHead;
+    const isOverbank = targetWSE > finalGeomU.bankMinZ && (finalGeomU.areaLOB > 0.05 || finalGeomU.areaROB > 0.05);
+
+    finalResults[uIdx] = {
+      station: secU.station,
+      waterElevation: targetWSE,
+      maxDepth: Math.max(0, targetWSE - minZu),
+      area: finalArea,
+      velocity: finalVel,
+      wettedPerimeter: finalGeomU.totalP,
+      topWidth: Math.max(0.5, finalGeomU.totalW),
+      froudeNumber,
+      isOverbank,
+      energyElevation,
+      bedElevation: minZu,
+      waterLeftX: finalGeomU.waterLeftX,
+      waterRightX: finalGeomU.waterRightX,
+      overbankAreaLOB: finalGeomU.areaLOB,
+      overbankAreaROB: finalGeomU.areaROB,
+      bankLeftZ: finalGeomU.bankLeftZ,
+      bankRightZ: finalGeomU.bankRightZ,
+      discharge: qU
+    };
+
+    prevIdx = uIdx;
+  }
+
+  return finalResults;
+}
+
 export function runRouting(
   sections: CrossSection[],
   peakFlow: number,
@@ -2369,14 +2599,12 @@ export function runRouting(
   S0: number,
   structures: HydraulicStructure[] = []
 ): { results: RoutingResult[]; structureResults: StructureHydraulicResult[] } {
-  // Step 1: Base normal depth calculation for each section
-  const baseResults: RoutingResult[] = sections.map(sec => {
-    const res = computeNormalDepth(sec, peakFlow, nMain, nLOB, nROB, S0);
-    return {
-      station: sec.station,
-      ...res
-    };
-  });
+  if (sections.length === 0) {
+    return { results: [], structureResults: [] };
+  }
+
+  // Step 1: 1D Standard Step Backwater & Energy balance
+  const baseResults = solveStandardStepBackwater(sections, peakFlow, nMain, nLOB, nROB, S0);
 
   const activeStructures = structures.filter(s => s.isActive);
   const structureResults: StructureHydraulicResult[] = [];
@@ -2385,12 +2613,14 @@ export function runRouting(
     return { results: baseResults, structureResults: [] };
   }
 
-  // Step 2: Compute hydraulic backwater for each structure
-  // Create mutable working copy
+  // Step 2: Compute hydraulic backwater for each structure and propagate in true upstream direction
   const finalResults = baseResults.map(r => ({ ...r }));
 
+  const zStart = sections[0].minElevation;
+  const zEnd = sections[sections.length - 1].minElevation;
+  const isForward = zStart >= zEnd; // true: 0 is upstream, N-1 is downstream
+
   for (const struct of activeStructures) {
-    // Find closest section to structure
     let closestIdx = 0;
     let minDiff = Infinity;
     for (let i = 0; i < sections.length; i++) {
@@ -2406,68 +2636,250 @@ export function runRouting(
     const structHyd = computeStructureHydraulics(struct, tailwater, sec.minElevation, peakFlow);
     structureResults.push(structHyd);
 
-    // Apply backwater upstream of structure (upstream = station < struct.station in downstream flow)
     const backwaterSurge = structHyd.backwaterRise;
     if (backwaterSurge > 0.02) {
       const normalDepth = Math.max(1, tailwater - sec.minElevation);
-      // Backwater reach length L_backwater ~= 2.5 * y_n / S0 (capped between 200m and 3000m)
-      const L_reach = Math.max(300, Math.min(3000, (2.5 * normalDepth) / Math.max(0.0005, S0)));
+      const L_reach = Math.max(300, Math.min(3000, (2.5 * normalDepth) / Math.max(0.0005, Math.abs(S0))));
 
-      for (let i = closestIdx; i >= 0; i--) {
-        const distUpstream = struct.station - sections[i].station;
-        if (distUpstream < 0) continue;
+      // Upstream direction:
+      // If forward flow (0 is upstream): upstream is indices < closestIdx
+      // If reverse flow (N-1 is upstream): upstream is indices > closestIdx
+      const stepDelta = isForward ? -1 : 1;
+      let currI = closestIdx;
+
+      while (currI >= 0 && currI < sections.length) {
+        const distUpstream = Math.abs(sections[currI].station - struct.station);
         if (distUpstream > L_reach) break;
 
         const decay = Math.exp(-2.5 * (distUpstream / L_reach));
         const addedWSE = backwaterSurge * decay;
 
         if (addedWSE > 0.02) {
-          finalResults[i].waterElevation += addedWSE;
-          finalResults[i].maxDepth = finalResults[i].waterElevation - finalResults[i].bedElevation;
-          finalResults[i].energyElevation += addedWSE * 0.9;
-          
-          const profile = sections[i].profile;
-          const newWSE = finalResults[i].waterElevation;
-          let minZ = profile[0].z, minIdx = 0;
-          for (let pIdx = 0; pIdx < profile.length; pIdx++) {
-            if (profile[pIdx].z < minZ) { minZ = profile[pIdx].z; minIdx = pIdx; }
-          }
-          let leftWet = profile[minIdx].x;
-          for (let k = minIdx; k > 0; k--) {
-            if (profile[k - 1].z >= newWSE) {
-              const frac = (newWSE - profile[k].z) / Math.max(1e-6, profile[k - 1].z - profile[k].z);
-              leftWet = profile[k].x - frac * (profile[k].x - profile[k - 1].x);
-              break;
-            } else {
-              leftWet = profile[k - 1].x;
-            }
-          }
-          let rightWet = profile[minIdx].x;
-          for (let k = minIdx; k < profile.length - 1; k++) {
-            if (profile[k + 1].z >= newWSE) {
-              const frac = (newWSE - profile[k].z) / Math.max(1e-6, profile[k + 1].z - profile[k].z);
-              rightWet = profile[k].x + frac * (profile[k + 1].x - profile[k].x);
-              break;
-            } else {
-              rightWet = profile[k + 1].x;
-            }
-          }
-          finalResults[i].waterLeftX = leftWet;
-          finalResults[i].waterRightX = rightWet;
-          finalResults[i].topWidth = Math.max(0.5, rightWet - leftWet);
+          finalResults[currI].waterElevation += addedWSE;
+          finalResults[currI].maxDepth = finalResults[currI].waterElevation - finalResults[currI].bedElevation;
+          finalResults[currI].energyElevation += addedWSE * 0.9;
 
-          const bankMin = Math.min(finalResults[i].bankLeftZ, finalResults[i].bankRightZ);
-          finalResults[i].isOverbank = newWSE > bankMin;
+          const newGeom = evaluateCrossSectionGeometry(
+            sections[currI],
+            finalResults[currI].waterElevation,
+            nMain,
+            nLOB,
+            nROB
+          );
+          finalResults[currI].waterLeftX = newGeom.waterLeftX;
+          finalResults[currI].waterRightX = newGeom.waterRightX;
+          finalResults[currI].topWidth = Math.max(0.5, newGeom.totalW);
+          finalResults[currI].area = newGeom.totalArea;
+          finalResults[currI].velocity = newGeom.totalArea > 0 ? peakFlow / newGeom.totalArea : 0;
+          finalResults[currI].isOverbank = finalResults[currI].waterElevation > newGeom.bankMinZ;
 
-          finalResults[i].structureEffect = {
+          finalResults[currI].structureEffect = {
             structureName: struct.name,
             flowState: structHyd.flowState,
             backwaterRise: addedWSE
           };
         }
+
+        currI += stepDelta;
       }
     }
   }
 
   return { results: finalResults, structureResults };
+}
+
+/**
+ * Generate a realistic synthetic flood hydrograph (SCS / Gamma distribution style)
+ */
+export function generateSyntheticHydrograph(
+  peakFlow: number,
+  simDuration: number
+): { time: number; flow: number }[] {
+  const points: { time: number; flow: number }[] = [];
+  const totalHours = Math.max(6, Math.min(168, Math.round(simDuration)));
+  const tPeak = Math.max(2, Math.round(totalHours * 0.4));
+  const baseFlow = Math.max(2, Math.round(peakFlow * 0.12));
+
+  for (let t = 0; t <= totalHours; t += (totalHours > 48 ? 2 : 1)) {
+    let q = baseFlow;
+    if (t <= tPeak) {
+      // Rising limb: parabolic / exponential rise
+      const frac = t / tPeak;
+      q = baseFlow + (peakFlow - baseFlow) * Math.pow(frac, 2.2);
+    } else {
+      // Recession limb: exponential decay
+      const k = 2.5 / (totalHours - tPeak);
+      const decay = Math.exp(-k * (t - tPeak));
+      q = baseFlow + (peakFlow - baseFlow) * decay;
+    }
+    points.push({ time: t, flow: Math.max(baseFlow, Math.round(q * 10) / 10) });
+  }
+
+  return points;
+}
+
+/**
+ * 1D Dynamic Unsteady Flow Routing (Saint-Venant / Wave Translation & Attenuation)
+ */
+export function runDynamicRouting(
+  sections: CrossSection[],
+  hydrograph: { time: number; flow: number }[],
+  peakFlow: number,
+  simDuration: number,
+  nMain: number,
+  nLOB: number,
+  nROB: number,
+  S0: number,
+  structures: HydraulicStructure[] = []
+): DynamicRoutingResult {
+  if (sections.length === 0) {
+    return {
+      peakResults: [],
+      structureResults: [],
+      timeSteps: [],
+      peakTimeHours: 0,
+      maxFloodAreaM2: 0,
+      upstreamHydrograph: [],
+      downstreamHydrograph: []
+    };
+  }
+
+  // Prepare input hydrograph points
+  let hydroPoints = hydrograph && hydrograph.length >= 2 ? [...hydrograph] : generateSyntheticHydrograph(peakFlow, simDuration);
+  hydroPoints.sort((a, b) => a.time - b.time);
+
+  const maxT = Math.max(simDuration, hydroPoints[hydroPoints.length - 1].time);
+  const totalReachLength = Math.max(100, Math.abs(sections[sections.length - 1].station - sections[0].station));
+
+  // Determine flow direction
+  const zStart = sections[0].minElevation;
+  const zEnd = sections[sections.length - 1].minElevation;
+  const isForward = zStart >= zEnd;
+
+  // Estimate mean channel velocity for kinematic wave celerity c ~= 1.5 * V (m/s)
+  const refPeakResult = runRouting(sections, peakFlow, nMain, nLOB, nROB, S0, structures);
+  const avgV = Math.max(0.8, refPeakResult.results.reduce((acc, r) => acc + r.velocity, 0) / refPeakResult.results.length);
+  const celerity = 1.5 * avgV; // m/s
+  const celerityKmH = (celerity * 3600) / 1000; // km/h
+
+  // Interpolation helper for upstream inflow Q(t)
+  const getInflowAtT = (t: number): number => {
+    if (t <= hydroPoints[0].time) return hydroPoints[0].flow;
+    if (t >= hydroPoints[hydroPoints.length - 1].time) return hydroPoints[hydroPoints.length - 1].flow;
+    for (let i = 0; i < hydroPoints.length - 1; i++) {
+      const p1 = hydroPoints[i];
+      const p2 = hydroPoints[i + 1];
+      if (t >= p1.time && t <= p2.time) {
+        const frac = (t - p1.time) / Math.max(1e-6, p2.time - p1.time);
+        return p1.flow + frac * (p2.flow - p1.flow);
+      }
+    }
+    return hydroPoints[0].flow;
+  };
+
+  // Uniform time steps for dynamic simulation (e.g. hourly or 2-hourly)
+  const timeStepInterval = maxT > 48 ? 2 : 1;
+  const timeStepHours: number[] = [];
+  for (let t = 0; t <= maxT; t += timeStepInterval) {
+    timeStepHours.push(t);
+  }
+
+  const timeSteps: DynamicTimeStepResult[] = [];
+  const downstreamHydrograph: { time: number; flow: number }[] = [];
+  const upstreamHydrograph: { time: number; flow: number }[] = [];
+
+  // Track maximum envelope across all time steps for each section
+  const peakEnvelope: RoutingResult[] = sections.map((sec, idx) => ({
+    ...refPeakResult.results[idx],
+    waterElevation: -Infinity,
+    maxDepth: 0,
+    velocity: 0,
+    topWidth: 0,
+    discharge: 0
+  }));
+
+  let overallStructureResults: StructureHydraulicResult[] = refPeakResult.structureResults;
+
+  for (const t of timeStepHours) {
+    const qInflow = getInflowAtT(t);
+    upstreamHydrograph.push({ time: t, flow: Math.round(qInflow * 10) / 10 });
+
+    // Compute local discharge at each section based on distance from upstream and celerity delay
+    const sectionDischarges: number[] = sections.map((sec) => {
+      const distFromUpstreamM = isForward
+        ? Math.abs(sec.station - sections[0].station)
+        : Math.abs(sec.station - sections[sections.length - 1].station);
+
+      const delayHours = distFromUpstreamM / Math.max(1, celerity * 3600);
+      const delayedT = Math.max(0, t - delayHours);
+
+      // Storage attenuation: wave peak dampens slightly as it travels downstream
+      const attenRatio = Math.max(0.85, 1 - 0.00003 * distFromUpstreamM);
+      const baseFlow = hydroPoints[0].flow;
+      const rawQ = getInflowAtT(delayedT);
+      const routedQ = baseFlow + (rawQ - baseFlow) * attenRatio;
+
+      return Math.max(baseFlow * 0.8, routedQ);
+    });
+
+    const dsSectionQ = isForward ? sectionDischarges[sections.length - 1] : sectionDischarges[0];
+    downstreamHydrograph.push({ time: t, flow: Math.round(dsSectionQ * 10) / 10 });
+
+    // Solve 1D Standard Step Backwater for this time step's discharges
+    const stepRouting = solveStandardStepBackwater(sections, sectionDischarges, nMain, nLOB, nROB, S0);
+
+    // Apply structures for this time step
+    let stepStructResults: StructureHydraulicResult[] = [];
+    if (structures.length > 0) {
+      const strRouting = runRouting(sections, qInflow, nMain, nLOB, nROB, S0, structures);
+      stepStructResults = strRouting.structureResults;
+    }
+
+    const formattedTime = `Saat ${String(t).padStart(2, '0')}:00`;
+
+    timeSteps.push({
+      timeHours: t,
+      timeFormatted: formattedTime,
+      inflowQ: Math.round(qInflow * 10) / 10,
+      outflowQ: Math.round(dsSectionQ * 10) / 10,
+      results: stepRouting,
+      structureResults: stepStructResults
+    });
+
+    // Update peak envelope
+    for (let i = 0; i < sections.length; i++) {
+      const res = stepRouting[i];
+      if (res.waterElevation > peakEnvelope[i].waterElevation) {
+        peakEnvelope[i] = {
+          ...res,
+          waterElevation: res.waterElevation,
+          maxDepth: res.maxDepth,
+          velocity: Math.max(peakEnvelope[i].velocity, res.velocity),
+          topWidth: Math.max(peakEnvelope[i].topWidth, res.topWidth),
+          discharge: Math.max(peakEnvelope[i].discharge || 0, res.discharge || 0),
+          isOverbank: res.isOverbank || peakEnvelope[i].isOverbank
+        };
+      }
+    }
+  }
+
+  // Find peak time
+  let maxInflow = -Infinity;
+  let peakTimeHours = 0;
+  for (const pt of hydroPoints) {
+    if (pt.flow > maxInflow) {
+      maxInflow = pt.flow;
+      peakTimeHours = pt.time;
+    }
+  }
+
+  return {
+    peakResults: peakEnvelope,
+    structureResults: overallStructureResults,
+    timeSteps,
+    peakTimeHours,
+    maxFloodAreaM2: 0,
+    upstreamHydrograph,
+    downstreamHydrograph
+  };
 }
