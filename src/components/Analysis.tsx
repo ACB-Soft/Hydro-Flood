@@ -52,6 +52,10 @@ interface AnalysisProps {
   setSimMethod: (method: 'hydraulic' | 'bathtub' | null) => void;
   bathtubLevel: number;
   setBathtubLevel: (level: number) => void;
+  waterLevelMode?: 'increase' | 'targetElev';
+  setWaterLevelMode?: (mode: 'increase' | 'targetElev') => void;
+  targetWaterElevation?: number | null;
+  setTargetWaterElevation?: (elev: number | null) => void;
   flowThreshold: number;
   setFlowThreshold: (threshold: number) => void;
   floodImage: string | null;
@@ -106,11 +110,21 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
   const {
     currentStep, setCurrentStep, dem, params, coords, selectedCRS, setSelectedCRS,
     isSimulating, progress, bathtubLevel, setBathtubLevel, floodImage,
+    waterLevelMode: propWaterLevelMode, setWaterLevelMode: propSetWaterLevelMode,
+    targetWaterElevation: propTargetWaterElevation, setTargetWaterElevation: propSetTargetWaterElevation,
     elevationImage, reliefImage, riverKml, sourceKmlName,
     sourceWgs, sourceElevation: propElevation, areaKml, stats, wgs84Bounds, demBoundaryWgs, startSimulation, handleSourceKmlUpload,
     handleAreaKmlUpload, handleMapClick, exportToKml, handleDemUpload, CRS_LIST,
     setShowStats, isDemLoading = false, demUploadProgress = 0, demLoadingStatus = ''
   } = props;
+
+  const [localWaterLevelMode, setLocalWaterLevelMode] = useState<'increase' | 'targetElev'>('increase');
+  const waterLevelMode = propWaterLevelMode ?? localWaterLevelMode;
+  const setWaterLevelMode = propSetWaterLevelMode ?? setLocalWaterLevelMode;
+
+  const [localTargetWaterElevation, setLocalTargetWaterElevation] = useState<number | null>(null);
+  const targetWaterElevation = propTargetWaterElevation !== undefined ? propTargetWaterElevation : localTargetWaterElevation;
+  const setTargetWaterElevation = propSetTargetWaterElevation ?? setLocalTargetWaterElevation;
 
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
@@ -140,6 +154,19 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
     }
     return null;
   }, [propElevation, dem, sourceWgs, selectedCRS]);
+
+  // Currently active target elevation / water surface elevation
+  const activeTargetElev = targetWaterElevation !== null 
+    ? targetWaterElevation 
+    : (sourceElevation !== null ? Number((sourceElevation + bathtubLevel).toFixed(2)) : null);
+
+  const currentWse = waterLevelMode === 'targetElev' && activeTargetElev !== null
+    ? activeTargetElev
+    : (sourceElevation !== null ? Number((sourceElevation + bathtubLevel).toFixed(2)) : null);
+
+  const effectiveDeltaH = sourceElevation !== null && currentWse !== null
+    ? Math.max(0, Number((currentWse - sourceElevation).toFixed(2)))
+    : bathtubLevel;
 
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
 
@@ -346,7 +373,10 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                               <span>Zemin Kotu: {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : '-'}</span>
                             </div>
                             <div className="text-blue-700 font-bold text-[11px]">
-                              Statik Taşkın Kotu (WSE): {sourceElevation !== null ? `${(sourceElevation + bathtubLevel).toFixed(2)} m` : '-'}
+                              Statik Su Kotu (WSE): {currentWse !== null ? `${currentWse.toFixed(2)} m` : '-'}
+                              {waterLevelMode === 'targetElev' && (
+                                <span className="ml-1 text-[10px] text-cyan-700">(Hedef Kota Kadar)</span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -386,7 +416,12 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     <span className="text-slate-600">|</span>
                     <span className="flex items-center gap-1 bg-cyan-950/80 text-cyan-300 px-2 py-0.5 rounded-lg border border-cyan-500/40 font-mono">
                       <Mountain size={11} className="text-cyan-400" />
-                      <strong>Kot:</strong> <span className="text-white font-bold">{sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : '-'}</span>
+                      <strong>Z₀:</strong> <span className="text-white font-bold">{sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : '-'}</span>
+                    </span>
+                    <span className="text-slate-600">|</span>
+                    <span className="flex items-center gap-1 bg-blue-950/80 text-blue-300 px-2 py-0.5 rounded-lg border border-blue-500/40 font-mono">
+                      <Droplets size={11} className="text-blue-400" />
+                      <strong>WSE:</strong> <span className="text-white font-bold">{currentWse !== null ? `${currentWse.toFixed(2)} m` : '-'}</span>
                     </span>
                   </div>
                 )}
@@ -412,9 +447,13 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                   </div>
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
-                    <p className="text-[10px] font-bold text-blue-800 uppercase">Su Seviyesi Artışı</p>
+                    <p className="text-[10px] font-bold text-blue-800 uppercase">
+                      {waterLevelMode === 'targetElev' ? 'Doldurulan Hedef Kot' : 'Su Seviyesi Artışı'}
+                    </p>
                     <p className="text-base font-display font-bold text-slate-900 mt-1">
-                      +{bathtubLevel.toFixed(1)} m
+                      {waterLevelMode === 'targetElev' 
+                        ? (currentWse !== null ? `${currentWse.toFixed(2)} m` : `+${bathtubLevel.toFixed(1)} m`)
+                        : `+${bathtubLevel.toFixed(1)} m`}
                     </p>
                   </div>
 
@@ -435,7 +474,10 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                           Statik Su Kotu (WSE)
                         </div>
                         <div className="text-sm font-display font-bold text-blue-700 mt-0.5">
-                          {(sourceElevation + bathtubLevel).toFixed(2)} m
+                          {currentWse !== null ? `${currentWse.toFixed(2)} m` : '-'}
+                          <span className="block text-[9px] text-slate-500 font-normal">
+                            (Derinlik: +{effectiveDeltaH.toFixed(2)} m)
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -702,44 +744,204 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                 </div>
               </section>
 
-              {/* 3. WATER LEVEL PARAMETER */}
-              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2 shrink-0">
+              {/* 3. WATER LEVEL PARAMETER (Artış veya Hedef Kot Seçimi) */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <Droplets size={14} className="text-cyan-700" />
-                    <span>3. Su Seviyesi Artışı</span>
+                    <span>3. Su Seviyesi Ayarı</span>
                   </h2>
                   <span className="text-xs font-display font-bold text-cyan-800 bg-cyan-50 px-2 py-0.5 rounded-lg border border-cyan-200">
-                    +{bathtubLevel.toFixed(1)} m
+                    {waterLevelMode === 'targetElev'
+                      ? `Hedef: ${activeTargetElev !== null ? `${activeTargetElev.toFixed(2)} m` : 'Belirlenmedi'}`
+                      : `+${bathtubLevel.toFixed(1)} m Artış`}
                   </span>
                 </div>
 
-                <div className="space-y-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
-                  <input 
-                    type="range" 
-                    min="0.1" 
-                    max="20" 
-                    step="0.1"
-                    value={bathtubLevel} 
-                    onChange={(e) => setBathtubLevel(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-slate-300 rounded-full appearance-none cursor-pointer accent-cyan-700"
-                  />
-                  <div className="grid grid-cols-6 gap-1 pt-0.5">
-                    {[1.0, 2.0, 3.0, 4.0, 5.0, 10.0].map((val) => (
-                      <button
-                        key={val}
-                        onClick={() => setBathtubLevel(val)}
-                        className={`py-1 rounded-lg text-[10px] font-bold border transition-all text-center cursor-pointer ${
-                          bathtubLevel === val 
-                            ? 'bg-cyan-100 border-cyan-500 text-cyan-900 shadow-sm' 
-                            : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        +{val}m
-                      </button>
-                    ))}
-                  </div>
+                {/* Mod Seçici: Bağıl Artış (+Δh) vs Şu Kota Kadar Doldur */}
+                <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 text-[10px] font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setWaterLevelMode('increase')}
+                    className={`py-1 px-1.5 rounded-lg text-center transition-all cursor-pointer ${
+                      waterLevelMode === 'increase'
+                        ? 'bg-white text-cyan-800 font-bold shadow-xs border border-slate-200'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Kot Artışı (+Δh)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWaterLevelMode('targetElev');
+                      if (targetWaterElevation === null) {
+                        const defaultKot = sourceElevation !== null 
+                          ? Number((sourceElevation + bathtubLevel).toFixed(2)) 
+                          : (dem?.min ? Number((dem.min + 2).toFixed(2)) : 6.0);
+                        setTargetWaterElevation(defaultKot);
+                      }
+                    }}
+                    className={`py-1 px-1.5 rounded-lg text-center transition-all cursor-pointer ${
+                      waterLevelMode === 'targetElev'
+                        ? 'bg-white text-cyan-800 font-bold shadow-xs border border-slate-200'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Şu Kota Kadar Doldur
+                  </button>
                 </div>
+
+                {waterLevelMode === 'increase' ? (
+                  /* 1. Mod: Bağıl Artış (+X metre su artışı) */
+                  <div className="space-y-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                    <div className="flex items-center justify-between text-[10px] text-slate-600">
+                      <span>Artış Miktarı (+Δh)</span>
+                      <span className="font-bold text-cyan-800 font-mono">+{bathtubLevel.toFixed(1)} metre</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0.1" 
+                      max="20" 
+                      step="0.1"
+                      value={bathtubLevel} 
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setBathtubLevel(val);
+                        if (sourceElevation !== null) {
+                          setTargetWaterElevation(Number((sourceElevation + val).toFixed(2)));
+                        }
+                      }}
+                      className="w-full h-1.5 bg-slate-300 rounded-full appearance-none cursor-pointer accent-cyan-700"
+                    />
+                    <div className="grid grid-cols-6 gap-1 pt-0.5">
+                      {[1.0, 2.0, 3.0, 4.0, 6.0, 10.0].map((val) => (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => {
+                            setBathtubLevel(val);
+                            if (sourceElevation !== null) {
+                              setTargetWaterElevation(Number((sourceElevation + val).toFixed(2)));
+                            }
+                          }}
+                          className={`py-1 rounded-lg text-[10px] font-bold border transition-all text-center cursor-pointer ${
+                            bathtubLevel === val 
+                              ? 'bg-cyan-100 border-cyan-500 text-cyan-900 shadow-sm' 
+                              : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          +{val}m
+                        </button>
+                      ))}
+                    </div>
+                    {sourceElevation !== null && (
+                      <div className="text-[10px] text-cyan-800 bg-cyan-50/80 p-1.5 rounded-lg border border-cyan-200/60 flex items-center justify-between font-mono">
+                        <span className="text-slate-600">Oluşacak Su Kotu:</span>
+                        <span className="font-bold">{(sourceElevation + bathtubLevel).toFixed(2)} m</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* 2. Mod: Şu Yüksekliğe / Kota Kadar Doldur (Örn. 6m veya 106m kotuna kadar) */
+                  <div className="space-y-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                    <div className="flex items-center justify-between text-[10px] text-slate-600">
+                      <span className="font-medium">Doldurulacak Hedef Kot (WSE):</span>
+                      {sourceElevation !== null && (
+                        <span className="text-slate-500 text-[9px] font-mono">Kaynak Z₀: {sourceElevation.toFixed(2)}m</span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={activeTargetElev !== null ? activeTargetElev : ''}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (!isNaN(val)) {
+                              setTargetWaterElevation(val);
+                              if (sourceElevation !== null) {
+                                setBathtubLevel(Math.max(0.01, Number((val - sourceElevation).toFixed(2))));
+                              }
+                            }
+                          }}
+                          placeholder={sourceElevation !== null ? (sourceElevation + 2).toFixed(2) : 'Örn: 6.00'}
+                          className="w-full pl-3 pr-8 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                        />
+                        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-bold">m</span>
+                      </div>
+
+                      {sourceElevation !== null && (
+                        <div className="text-[10px] text-cyan-900 bg-cyan-100/70 border border-cyan-300 px-2 py-1.5 rounded-lg whitespace-nowrap font-mono">
+                          Δh: +{effectiveDeltaH.toFixed(2)}m
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Hızlı Seçenek Butonları */}
+                    <div className="space-y-1">
+                      <div className="text-[9px] text-slate-500 font-medium">Hızlı Kot Seçenekleri:</div>
+                      <div className="grid grid-cols-4 gap-1">
+                        {sourceElevation !== null ? (
+                          [2.0, 4.0, 6.0, 10.0].map((delta) => {
+                            const targetKot = Number((sourceElevation + delta).toFixed(2));
+                            const isSelected = activeTargetElev === targetKot;
+                            return (
+                              <button
+                                key={delta}
+                                type="button"
+                                onClick={() => {
+                                  setTargetWaterElevation(targetKot);
+                                  setBathtubLevel(delta);
+                                }}
+                                className={`py-1 px-1 rounded-lg text-[10px] font-bold border transition-all text-center cursor-pointer ${
+                                  isSelected 
+                                    ? 'bg-cyan-100 border-cyan-500 text-cyan-900 shadow-sm' 
+                                    : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                                }`}
+                                title={`Kaynak Kotu (${sourceElevation.toFixed(2)}m) + ${delta}m = ${targetKot}m`}
+                              >
+                                {targetKot}m
+                              </button>
+                            );
+                          })
+                        ) : (
+                          [2.0, 4.0, 6.0, 10.0].map((kot) => (
+                            <button
+                              key={kot}
+                              type="button"
+                              onClick={() => {
+                                setTargetWaterElevation(kot);
+                                setBathtubLevel(kot);
+                              }}
+                              className={`py-1 px-1 rounded-lg text-[10px] font-bold border transition-all text-center cursor-pointer ${
+                                activeTargetElev === kot 
+                                  ? 'bg-cyan-100 border-cyan-500 text-cyan-900 shadow-sm' 
+                                  : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                              }`}
+                            >
+                              {kot}.0m
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-[9px] text-slate-600 bg-cyan-50/70 border border-cyan-200/70 p-2 rounded-lg">
+                      {sourceElevation !== null ? (
+                        <span>
+                          Su, <strong>{sourceElevation.toFixed(2)} m</strong> kotundan başlayarak <strong>{(activeTargetElev ?? (sourceElevation + bathtubLevel)).toFixed(2)} m</strong> kotuna kadar doldurulacaktır.
+                        </span>
+                      ) : (
+                        <span>
+                          Hedef <strong>{(activeTargetElev ?? 6).toFixed(2)} m</strong> kotuna kadar topoğrafya doldurulacaktır.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </section>
 
               {/* 4. START ANALYSIS BUTTON (MOVED TO LEFT PANEL) */}
@@ -939,7 +1141,10 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                                     <span>DEM Kotu: {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : 'Bilinmiyor'}</span>
                                   </div>
                                   <div className="text-blue-700 font-semibold text-[10px]">
-                                    Statik Su Kotu (WSE): {sourceElevation !== null ? `${(sourceElevation + bathtubLevel).toFixed(2)} m` : '-'}
+                                    Statik Su Kotu (WSE): {currentWse !== null ? `${currentWse.toFixed(2)} m` : '-'}
+                                    {waterLevelMode === 'targetElev' && (
+                                      <span className="ml-1 text-[9px] text-cyan-700 font-bold">(Hedefe Kadar)</span>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -972,10 +1177,10 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                                   {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : 'Hesaplanıyor...'}
                                 </span>
                               </span>
-                              {sourceElevation !== null && (
+                              {currentWse !== null && (
                                 <span className="hidden sm:flex items-center gap-1 bg-blue-950/80 text-blue-300 px-2 py-0.5 rounded-lg border border-blue-500/30 text-[10px]">
                                   <Droplets size={10} className="text-blue-400 shrink-0" />
-                                  <span>Su Seviyesi Kotu: <strong className="text-blue-100 font-mono">{(sourceElevation + bathtubLevel).toFixed(2)} m</strong></span>
+                                  <span>Su Seviyesi Kotu: <strong className="text-blue-100 font-mono">{currentWse.toFixed(2)} m</strong></span>
                                 </span>
                               )}
                             </>

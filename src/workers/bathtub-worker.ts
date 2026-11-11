@@ -5,7 +5,7 @@
 
 self.onmessage = function(e) {
   const { dem, width, height, areaMask, params } = e.data;
-  const { sourceX, sourceY, waterLevel } = params;
+  const { sourceX, sourceY, waterLevel, levelMode, targetElevation: explicitTargetElev } = params;
   
   const bathtubDepth = new Float32Array(width * height).fill(0);
   const visited = new Uint8Array(width * height);
@@ -22,7 +22,15 @@ self.onmessage = function(e) {
     return;
   }
 
-  const targetElevation = sourceElev + waterLevel;
+  // Calculate target water surface elevation:
+  // - 'targetElev' mode: fills water strictly up to the given absolute elevation (e.g. 6.0m or 106.0m)
+  // - 'increase' mode: fills water up to (source ground elevation + delta increase)
+  let targetElevation: number;
+  if (levelMode === 'targetElev' && typeof explicitTargetElev === 'number' && !isNaN(explicitTargetElev)) {
+    targetElevation = explicitTargetElev;
+  } else {
+    targetElevation = sourceElev + (typeof waterLevel === 'number' ? waterLevel : 2.0);
+  }
   
   const queue = [startIdx];
   visited[startIdx] = 1;

@@ -148,6 +148,8 @@ export default function App() {
   const [showStats, setShowStats] = useState(false);
   const [simMethod, setSimMethod] = useState<'hydraulic' | 'bathtub' | null>('bathtub');
   const [bathtubLevel, setBathtubLevel] = useState(2.0);
+  const [waterLevelMode, setWaterLevelMode] = useState<'increase' | 'targetElev'>('increase');
+  const [targetWaterElevation, setTargetWaterElevation] = useState<number | null>(null);
   const [flowThreshold, setFlowThreshold] = useState(100);
   const [floodImage, setFloodImage] = useState<string | null>(null);
   const [elevationImage, setElevationImage] = useState<string | null>(null);
@@ -1190,6 +1192,14 @@ export default function App() {
       }
     }
 
+    const effectiveTargetElev = waterLevelMode === 'targetElev' 
+      ? (targetWaterElevation ?? (sourceElevation !== null ? sourceElevation + bathtubLevel : 6.0))
+      : (sourceElevation !== null ? sourceElevation + bathtubLevel : undefined);
+
+    const effectiveWaterLevel = waterLevelMode === 'targetElev' && sourceElevation !== null && targetWaterElevation !== null
+      ? Math.max(0.01, targetWaterElevation - sourceElevation)
+      : bathtubLevel;
+
     worker.postMessage({
       dem: dem.data,
       width: dem.width,
@@ -1200,7 +1210,9 @@ export default function App() {
         sourceX: finalSourceX,
         sourceY: finalSourceY,
         cellSize: effectiveCellSize,
-        waterLevel: bathtubLevel
+        waterLevel: effectiveWaterLevel,
+        levelMode: waterLevelMode,
+        targetElevation: effectiveTargetElev
       }
     });
   } catch (error) {
@@ -1450,9 +1462,12 @@ ${polyStrList.length > 1 ? `      <MultiGeometry>\n${polyStrList.join('\n')}\n  
     // 2. Kaynak Noktası Layer
     if (sourceWgs) {
       const elevZ = sourceElevation !== null ? sourceElevation : 0;
+      const effectiveWse = waterLevelMode === 'targetElev' && targetWaterElevation !== null 
+        ? targetWaterElevation 
+        : (sourceElevation !== null ? sourceElevation + bathtubLevel : elevZ + bathtubLevel);
       kml += `    <Placemark>
-      <name>2- Kaynak Noktası (Kot: ${elevZ.toFixed(2)} m)</name>
-      <description>Simülasyon Başlangıç/Kaynak Noktası Koordinatları. DEM Zemin Kotu: ${elevZ.toFixed(2)} m</description>
+      <name>2- Kaynak Noktası (Kot: ${elevZ.toFixed(2)} m, Su Kotu: ${effectiveWse.toFixed(2)} m)</name>
+      <description>Simülasyon Başlangıç Noktası Koordinatları. DEM Zemin Kotu: ${elevZ.toFixed(2)} m, Doldurulan Su Kotu (WSE): ${effectiveWse.toFixed(2)} m</description>
       <styleUrl>#source_point_style</styleUrl>
       <Point>
         <coordinates>${sourceWgs[1]},${sourceWgs[0]},${elevZ}</coordinates>
@@ -1695,6 +1710,7 @@ ${floodPolygons.join('\n')}
                 selectedCRS, setSelectedCRS, isSimulating, setIsSimulating, progress, setProgress,
                 waterDepth, setWaterDepth, outflowType, setOutflowType, showStats, setShowStats,
                 simMethod, setSimMethod, bathtubLevel, setBathtubLevel, flowThreshold, setFlowThreshold,
+                waterLevelMode, setWaterLevelMode, targetWaterElevation, setTargetWaterElevation,
                 floodImage, setFloodImage, elevationImage, setElevationImage, reliefImage,
                 streamImage, setStreamImage, 
                 viewMode, setViewMode, flowAcc, setFlowAcc, riverKml, setRiverKml, sourceKmlName, setSourceKmlName,
