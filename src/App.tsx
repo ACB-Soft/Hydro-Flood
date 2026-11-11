@@ -632,6 +632,25 @@ export default function App() {
     return extractDemBoundaryPolygons(dem, selectedCRS.def);
   }, [dem, selectedCRS.def]);
 
+  const sourceElevation = React.useMemo<number | null>(() => {
+    if (!sourceWgs || !dem || !dem.data) return null;
+    try {
+      const [lat, lon] = sourceWgs;
+      const projected = proj4('EPSG:4326', selectedCRS.def, [lon, lat]);
+      const x = Math.floor((projected[0] - dem.xll) / dem.cellSize);
+      const y = Math.floor(dem.height - (projected[1] - dem.yll) / dem.cellSize);
+      if (x >= 0 && x < dem.width && y >= 0 && y < dem.height) {
+        const val = dem.data[y * dem.width + x];
+        if (!isNaN(val) && val > -9000 && val < 90000) {
+          return Number(val.toFixed(2));
+        }
+      }
+    } catch (e) {
+      console.error("Failed to calculate source elevation:", e);
+    }
+    return null;
+  }, [sourceWgs, dem, selectedCRS]);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -1430,12 +1449,13 @@ ${polyStrList.length > 1 ? `      <MultiGeometry>\n${polyStrList.join('\n')}\n  
 
     // 2. Kaynak Noktası Layer
     if (sourceWgs) {
+      const elevZ = sourceElevation !== null ? sourceElevation : 0;
       kml += `    <Placemark>
-      <name>2- Kaynak Noktası</name>
-      <description>Simülasyon Başlangıç/Kaynak Noktası Koordinatları</description>
+      <name>2- Kaynak Noktası (Kot: ${elevZ.toFixed(2)} m)</name>
+      <description>Simülasyon Başlangıç/Kaynak Noktası Koordinatları. DEM Zemin Kotu: ${elevZ.toFixed(2)} m</description>
       <styleUrl>#source_point_style</styleUrl>
       <Point>
-        <coordinates>${sourceWgs[1]},${sourceWgs[0]},0</coordinates>
+        <coordinates>${sourceWgs[1]},${sourceWgs[0]},${elevZ}</coordinates>
       </Point>
     </Placemark>\n`;
     }
@@ -1678,7 +1698,7 @@ ${floodPolygons.join('\n')}
                 floodImage, setFloodImage, elevationImage, setElevationImage, reliefImage,
                 streamImage, setStreamImage, 
                 viewMode, setViewMode, flowAcc, setFlowAcc, riverKml, setRiverKml, sourceKmlName, setSourceKmlName,
-                sourceWgs, setSourceWgs, areaKml, setAreaKml, areaMask, setAreaMask, stats, wgs84Bounds, demBoundaryWgs,
+                sourceWgs, setSourceWgs, sourceElevation, areaKml, setAreaKml, areaMask, setAreaMask, stats, wgs84Bounds, demBoundaryWgs,
                 startSimulation, handleKmlUpload, handleSourceKmlUpload, handleAreaKmlUpload, handleMapClick,
                 exportToKml, handleDemUpload, CRS_LIST, MANNING_PRESETS, workerRef,
                 isDemLoading, demUploadProgress, demLoadingStatus

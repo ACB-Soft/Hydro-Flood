@@ -20,9 +20,11 @@ import {
   Layers,
   ChevronDown,
   Eye,
-  FileCode
+  FileCode,
+  Mountain
 } from 'lucide-react';
-import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon } from 'react-leaflet';
+import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon, Tooltip, Popup } from 'react-leaflet';
+import proj4 from 'proj4';
 import { MapAutoCenter, MapClickHandler } from './MapHelpers';
 
 interface AnalysisProps {
@@ -69,6 +71,7 @@ interface AnalysisProps {
   setSourceKmlName: (name: string | null) => void;
   sourceWgs: [number, number] | null;
   setSourceWgs: (wgs: [number, number] | null) => void;
+  sourceElevation?: number | null;
   areaKml: any;
   setAreaKml: (areaKml: any) => void;
   areaMask: any;
@@ -104,7 +107,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
     currentStep, setCurrentStep, dem, params, coords, selectedCRS, setSelectedCRS,
     isSimulating, progress, bathtubLevel, setBathtubLevel, floodImage,
     elevationImage, reliefImage, riverKml, sourceKmlName,
-    sourceWgs, areaKml, stats, wgs84Bounds, demBoundaryWgs, startSimulation, handleSourceKmlUpload,
+    sourceWgs, sourceElevation: propElevation, areaKml, stats, wgs84Bounds, demBoundaryWgs, startSimulation, handleSourceKmlUpload,
     handleAreaKmlUpload, handleMapClick, exportToKml, handleDemUpload, CRS_LIST,
     setShowStats, isDemLoading = false, demUploadProgress = 0, demLoadingStatus = ''
   } = props;
@@ -113,6 +116,30 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
+
+  // Directly use provided elevation or dynamically sample from DEM
+  const sourceElevation = React.useMemo<number | null>(() => {
+    if (propElevation !== undefined && propElevation !== null) {
+      return propElevation;
+    }
+    if (!dem || !dem.data || !sourceWgs) return null;
+    try {
+      const [lat, lon] = sourceWgs;
+      const crsDef = selectedCRS?.def || '+proj=longlat +datum=WGS84 +no_defs';
+      const projected = proj4('EPSG:4326', crsDef, [lon, lat]);
+      const x = Math.floor((projected[0] - dem.xll) / dem.cellSize);
+      const y = Math.floor(dem.height - (projected[1] - dem.yll) / dem.cellSize);
+      if (x >= 0 && x < dem.width && y >= 0 && y < dem.height) {
+        const val = dem.data[y * dem.width + x];
+        if (!isNaN(val) && val > -9000 && val < 90000) {
+          return Number(val.toFixed(2));
+        }
+      }
+    } catch (e) {
+      console.error("Analysis source elevation sample error:", e);
+    }
+    return null;
+  }, [propElevation, dem, sourceWgs, selectedCRS]);
 
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
 
@@ -280,26 +307,87 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       <Polygon key={idx} positions={loop.map(([lon, lat]) => [lat, lon])} color="#10b981" weight={2.5} fillOpacity={0.2} />
                     ))
                   ) : null}
+                  {sourceWgs && (
+                    <CircleMarker 
+                      center={sourceWgs} 
+                      radius={9} 
+                      fillColor="#06b6d4" 
+                      color="#ffffff" 
+                      weight={2.5} 
+                      fillOpacity={0.95} 
+                    >
+                      <Tooltip 
+                        permanent 
+                        direction="top" 
+                        offset={[0, -12]}
+                        className="!bg-slate-900/95 !text-white !border !border-cyan-500/50 !rounded-lg !px-2.5 !py-1 !shadow-xl !text-xs !font-sans pointer-events-none"
+                      >
+                        <div className="flex flex-col items-center gap-0.5 whitespace-nowrap">
+                          <span className="font-bold text-cyan-300 flex items-center gap-1 text-[11px]">
+                            <MapPin size={11} className="text-cyan-400" />
+                            Kaynak Nokta
+                          </span>
+                          <span className="font-mono text-[11px] text-amber-300 font-semibold bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-500/40">
+                            Kot: {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : 'Hesaplanıyor...'}
+                          </span>
+                        </div>
+                      </Tooltip>
+                      <Popup>
+                        <div className="p-2 space-y-1.5 min-w-[190px] text-xs">
+                          <div className="font-bold text-slate-900 flex items-center gap-1 border-b border-slate-200 pb-1">
+                            <MapPin size={13} className="text-cyan-600" />
+                            Kaynak Noktası
+                          </div>
+                          <div className="text-slate-600 space-y-0.5 text-[11px]">
+                            <div><strong>Enlem:</strong> {sourceWgs[0].toFixed(6)}°</div>
+                            <div><strong>Boylam:</strong> {sourceWgs[1].toFixed(6)}°</div>
+                            <div className="text-cyan-800 font-bold mt-1 pt-1 border-t border-slate-100 flex items-center gap-1">
+                              <Mountain size={12} className="text-cyan-600" />
+                              <span>Zemin Kotu: {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : '-'}</span>
+                            </div>
+                            <div className="text-blue-700 font-bold text-[11px]">
+                              Statik Taşkın Kotu (WSE): {sourceElevation !== null ? `${(sourceElevation + bathtubLevel).toFixed(2)} m` : '-'}
+                            </div>
+                          </div>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  )}
                   {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
                 </MapContainer>
               </div>
 
               {/* Map Legend Overlay */}
-              <div className="absolute bottom-4 left-4 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-500 border border-blue-300 inline-block"></span>
-                  <span className="text-slate-200 font-medium">Taşkın Alanı</span>
-                </div>
-                {areaKml && (
-                  <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 border border-red-300 inline-block animate-pulse"></span>
-                    <span className="text-red-300 font-bold">Riskli Alan</span>
+              <div className="absolute bottom-4 left-4 right-4 z-[400] bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-blue-500 border border-blue-300 inline-block"></span>
+                    <span className="text-slate-200 font-medium">Taşkın Alanı</span>
                   </div>
-                )}
-                {areaKml && (
-                  <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
-                    <span className="w-2.5 h-2.5 rounded-sm border-2 border-emerald-400 bg-emerald-500/30 inline-block"></span>
-                    <span className="text-emerald-300 font-medium">İnceleme Sınırı</span>
+                  {areaKml && (
+                    <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500 border border-red-300 inline-block animate-pulse"></span>
+                      <span className="text-red-300 font-bold">Riskli Alan</span>
+                    </div>
+                  )}
+                  {areaKml && (
+                    <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
+                      <span className="w-2.5 h-2.5 rounded-sm border-2 border-emerald-400 bg-emerald-500/30 inline-block"></span>
+                      <span className="text-emerald-300 font-medium">İnceleme Sınırı</span>
+                    </div>
+                  )}
+                </div>
+
+                {sourceWgs && (
+                  <div className="flex flex-wrap items-center gap-2 text-[10px]">
+                    <span className="text-slate-300 font-mono">
+                      <strong className="text-emerald-400 font-sans">Kaynak:</strong> {sourceWgs[0].toFixed(5)}°, {sourceWgs[1].toFixed(5)}°
+                    </span>
+                    <span className="text-slate-600">|</span>
+                    <span className="flex items-center gap-1 bg-cyan-950/80 text-cyan-300 px-2 py-0.5 rounded-lg border border-cyan-500/40 font-mono">
+                      <Mountain size={11} className="text-cyan-400" />
+                      <strong>Kot:</strong> <span className="text-white font-bold">{sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : '-'}</span>
+                    </span>
                   </div>
                 )}
               </div>
@@ -329,6 +417,29 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       +{bathtubLevel.toFixed(1)} m
                     </p>
                   </div>
+
+                  {sourceElevation !== null && (
+                    <div className="col-span-2 bg-gradient-to-r from-cyan-50 to-blue-50 border border-cyan-200/80 p-2.5 rounded-xl flex items-center justify-between text-xs">
+                      <div>
+                        <div className="text-[10px] font-bold text-cyan-900 flex items-center gap-1 uppercase">
+                          <Mountain size={12} className="text-cyan-600" />
+                          Kaynak Zemin Kotu (Z₀)
+                        </div>
+                        <div className="text-sm font-display font-bold text-slate-900 mt-0.5">
+                          {sourceElevation.toFixed(2)} m
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] font-bold text-blue-900 flex items-center justify-end gap-1 uppercase">
+                          <Droplets size={12} className="text-blue-600" />
+                          Statik Su Kotu (WSE)
+                        </div>
+                        <div className="text-sm font-display font-bold text-blue-700 mt-0.5">
+                          {(sourceElevation + bathtubLevel).toFixed(2)} m
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {areaKml && (
@@ -573,15 +684,19 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     <input type="file" accept=".kml" onChange={handleAreaKmlUpload} className="hidden" />
                   </label>
 
-                  {/* Kaynak Nokta KML */}
+                  {/* Kaynak Nokta KML / Haritadan Seçim */}
                   <label className={`p-2 border rounded-xl cursor-pointer transition-all flex flex-col items-center justify-center text-center ${
-                    sourceKmlName ? 'bg-blue-50 border-blue-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                    sourceWgs ? 'bg-cyan-50/80 border-cyan-300 ring-1 ring-cyan-200' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
                   }`}>
-                    <MapPin className={sourceKmlName ? "text-blue-700 mb-0.5" : "text-slate-500 mb-0.5"} size={16} />
+                    <MapPin className={sourceWgs ? "text-cyan-600 mb-0.5" : "text-slate-500 mb-0.5"} size={16} />
                     <span className="text-[10px] font-bold text-slate-900 truncate w-full">
-                      {sourceKmlName ? sourceKmlName : 'Kaynak Nokta'}
+                      {sourceKmlName ? sourceKmlName : (sourceWgs ? 'Kaynak Nokta Seçildi' : 'Kaynak Nokta')}
                     </span>
-                    <span className="text-[9px] text-slate-500">Nokta KML</span>
+                    <span className="text-[9px] text-cyan-800 font-semibold truncate w-full">
+                      {sourceElevation !== null 
+                        ? `Kot: ${sourceElevation.toFixed(2)} m` 
+                        : (sourceWgs ? 'Haritadan Seçildi' : 'Nokta KML / Tıkla')}
+                    </span>
                     <input type="file" accept=".kml" onChange={handleSourceKmlUpload} className="hidden" />
                   </label>
                 </div>
@@ -788,12 +903,48 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                         {sourceWgs && (
                           <CircleMarker 
                             center={sourceWgs} 
-                            radius={8} 
+                            radius={9} 
                             fillColor="#06b6d4" 
-                            color="white" 
-                            weight={2} 
-                            fillOpacity={1} 
-                          />
+                            color="#ffffff" 
+                            weight={2.5} 
+                            fillOpacity={0.95} 
+                          >
+                            <Tooltip 
+                              permanent 
+                              direction="top" 
+                              offset={[0, -12]}
+                              className="!bg-slate-900/95 !text-white !border !border-cyan-500/50 !rounded-lg !px-2.5 !py-1 !shadow-xl !text-xs !font-sans pointer-events-none"
+                            >
+                              <div className="flex flex-col items-center gap-0.5 whitespace-nowrap">
+                                <span className="font-bold text-cyan-300 flex items-center gap-1 text-[11px]">
+                                  <MapPin size={11} className="text-cyan-400" />
+                                  Kaynak Nokta
+                                </span>
+                                <span className="font-mono text-[11px] text-amber-300 font-semibold bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-500/40">
+                                  Kot: {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : 'Hesaplanıyor...'}
+                                </span>
+                              </div>
+                            </Tooltip>
+                            <Popup>
+                              <div className="p-2 space-y-1.5 min-w-[200px] text-xs">
+                                <div className="font-bold text-slate-900 flex items-center gap-1 border-b border-slate-200 pb-1">
+                                  <MapPin size={14} className="text-cyan-600" />
+                                  Kaynak / Başlangıç Noktası
+                                </div>
+                                <div className="text-slate-600 space-y-0.5 text-[11px]">
+                                  <div><strong>Enlem:</strong> {sourceWgs[0].toFixed(6)}°</div>
+                                  <div><strong>Boylam:</strong> {sourceWgs[1].toFixed(6)}°</div>
+                                  <div className="text-cyan-800 font-bold mt-1 pt-1 border-t border-slate-100 flex items-center gap-1">
+                                    <Mountain size={13} className="text-cyan-600" />
+                                    <span>DEM Kotu: {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : 'Bilinmiyor'}</span>
+                                  </div>
+                                  <div className="text-blue-700 font-semibold text-[10px]">
+                                    Statik Su Kotu (WSE): {sourceElevation !== null ? `${(sourceElevation + bathtubLevel).toFixed(2)} m` : '-'}
+                                  </div>
+                                </div>
+                              </div>
+                            </Popup>
+                          </CircleMarker>
                         )}
                         {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
                       </MapContainer>
@@ -801,18 +952,37 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       {/* Top Notification Banner inside Map */}
                       <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
                         <MapPin className="text-cyan-400 shrink-0" size={13} />
-                        <span>Haritaya tıklayarak su kaynak noktasını değiştirebilirsiniz</span>
+                        <span>Haritaya tıklayarak veya KML yükleyerek su kaynak noktasını belirleyebilirsiniz</span>
                       </div>
 
                       {/* Bottom Status Bar inside Map */}
-                      <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
-                        <div className="flex items-center gap-3 text-[10px]">
+                      <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
+                        <div className="flex flex-wrap items-center gap-2.5 text-[10px]">
                           {sourceWgs && (
-                            <span><strong className="text-emerald-400">Coğrafi Koordinat:</strong> {sourceWgs[0].toFixed(5)}°, {sourceWgs[1].toFixed(5)}°</span>
+                            <>
+                              <span className="flex items-center gap-1 font-mono text-slate-300">
+                                <strong className="text-emerald-400 font-sans">Coğrafi Koordinat:</strong>
+                                <span>{sourceWgs[0].toFixed(5)}°, {sourceWgs[1].toFixed(5)}°</span>
+                              </span>
+                              <span className="text-slate-600 font-light">|</span>
+                              <span className="flex items-center gap-1.5 bg-cyan-950/80 text-cyan-300 px-2.5 py-0.5 rounded-lg border border-cyan-500/40 font-mono shadow-xs">
+                                <Mountain size={12} className="text-cyan-400 shrink-0" />
+                                <strong className="text-cyan-300 font-sans">Yükseklik (Kot):</strong>
+                                <span className="font-extrabold text-white text-[11px]">
+                                  {sourceElevation !== null ? `${sourceElevation.toFixed(2)} m` : 'Hesaplanıyor...'}
+                                </span>
+                              </span>
+                              {sourceElevation !== null && (
+                                <span className="hidden sm:flex items-center gap-1 bg-blue-950/80 text-blue-300 px-2 py-0.5 rounded-lg border border-blue-500/30 text-[10px]">
+                                  <Droplets size={10} className="text-blue-400 shrink-0" />
+                                  <span>Su Seviyesi Kotu: <strong className="text-blue-100 font-mono">{(sourceElevation + bathtubLevel).toFixed(2)} m</strong></span>
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                         {areaKml && (
-                          <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.2 rounded-full text-[9px] font-bold border border-emerald-500/30">
+                          <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full text-[9px] font-bold border border-emerald-500/30">
                             İnceleme Alanı Aktif ({areaKml.name})
                           </span>
                         )}
