@@ -18,6 +18,8 @@ export interface CrossSection {
   maxElevation: number;
   bankLeftX: number;
   bankRightX: number;
+  centerlineX?: number;     // Yüklenen dere ekseni istasyonu (Centerline intersection station)
+  talvegX?: number;         // En derin yatak istasyonu (Thalweg station)
   angleAdjustment?: number; // deg rotasyon sapması (örn: -7°, +9°)
   isTrimmed?: boolean;      // kesişmeyi önlemek için boyu güvenle kısaltıldı mı?
   isIntersecting?: boolean; // hâlâ komşu bir kesitle kesişiyor mu?
@@ -755,11 +757,15 @@ export function detectBankStationsFromProfile(
 ): {
   bankLeftX: number;
   bankRightX: number;
+  centerlineX: number;
+  centerlineZ: number;
   talvegX: number;
   talvegZ: number;
   bankLeftZ: number;
   bankRightZ: number;
   channelWidth: number;          // Total bank-to-bank width (W_total = distLeftFromTalveg + distRightFromTalveg)
+  distLeftFromCenterline: number;// Distance from Centerline to Left Bank
+  distRightFromCenterline: number;// Distance from Centerline to Right Bank
   distLeftFromTalveg: number;    // Distance from Thalweg to Left Bank
   distRightFromTalveg: number;   // Distance from Thalweg to Right Bank
   spillElevation: number;        // Lower bank elevation (Z_min_bank)
@@ -774,11 +780,15 @@ export function detectBankStationsFromProfile(
     return {
       bankLeftX: defaultX,
       bankRightX: defaultX,
+      centerlineX: defaultX,
+      centerlineZ: defaultZ,
       talvegX: defaultX,
       talvegZ: defaultZ,
       bankLeftZ: defaultZ,
       bankRightZ: defaultZ,
       channelWidth: 0,
+      distLeftFromCenterline: 0,
+      distRightFromCenterline: 0,
       distLeftFromTalveg: 0,
       distRightFromTalveg: 0,
       spillElevation: defaultZ,
@@ -792,138 +802,6 @@ export function detectBankStationsFromProfile(
   const maxX = profilePoints[n - 1].x;
   const totalW = maxX - minX;
 
-  // 1. Identify Thalweg (lowest bed point)
-  // If expectedCenterOffset is provided, favor lowest point near channel center
-  let minIdx = 0;
-  let minZ = profilePoints[0].z;
-
-  // Search window for thalweg (middle 60% of section by default)
-  const leftSearchBound = minX + totalW * 0.15;
-  const rightSearchBound = maxX - totalW * 0.15;
-
-  let bestThalwegScore = 999999;
-  for (let i = 0; i < n; i++) {
-    const pt = profilePoints[i];
-    if (pt.x >= leftSearchBound && pt.x <= rightSearchBound) {
-      if (pt.z < minZ) {
-        minZ = pt.z;
-        minIdx = i;
-      }
-    }
-  }
-
-  // Fallback if middle search didn't catch minimum
-  if (minIdx === 0) {
-    for (let i = 0; i < n; i++) {
-      if (profilePoints[i].z < minZ) {
-        minZ = profilePoints[i].z;
-        minIdx = i;
-      }
-    }
-  }
-
-  const talvegX = profilePoints[minIdx].x;
-  const talvegZ = profilePoints[minIdx].z;
-
-  // 2. Determine Left Bank Top (scan leftwards from minIdx towards profile start)
-  let bestLeftIdx = Math.max(1, Math.floor(minIdx * 0.5));
-  let maxLeftScore = -999999;
-
-  for (let i = minIdx - 1; i >= 1; i--) {
-    const cur = profilePoints[i];
-    const nextCloserToBed = profilePoints[i + 1];
-    const prevFurtherLeft = profilePoints[i - 1];
-
-    const distFromBed = Math.abs(talvegX - cur.x);
-    if (distFromBed < Math.max(2.0, totalW * 0.03)) continue; // Minimum channel half-width
-    if (distFromBed > totalW * 0.45) continue; // Do not push into extreme valley edges
-
-    const dxInner = Math.max(0.1, nextCloserToBed.x - cur.x);
-    const dxOuter = Math.max(0.1, cur.x - prevFurtherLeft.x);
-
-    const slopeInner = (cur.z - nextCloserToBed.z) / dxInner;   // Slope towards bed (should be positive rising away from bed)
-    const slopeOuter = (prevFurtherLeft.z - cur.z) / dxOuter;   // Slope of overbank floodplain
-    const curvature = slopeInner - slopeOuter;                  // Convex curvature (breakline peak)
-
-    const heightAboveBed = cur.z - talvegZ;
-    if (heightAboveBed < -0.1) continue;
-
-    let score = curvature * 4.0;
-    // Reward significant flattening on the overbank side
-    if (slopeInner > 0.05 && slopeOuter <= 0.04) {
-      score += 6.0;
-    }
-    // Reward slope reversal (spill into flat terrain)
-    if (slopeInner > 0.04 && slopeOuter < 0) {
-      score += 8.0;
-    }
-    // Reward reasonable bank height
-    if (heightAboveBed > 0.3) {
-      score += Math.min(5.0, heightAboveBed * 1.5);
-    }
-
-    if (score > maxLeftScore) {
-      maxLeftScore = score;
-      bestLeftIdx = i;
-    }
-  }
-
-  // 3. Determine Right Bank Top (scan rightwards from minIdx towards profile end)
-  let bestRightIdx = Math.min(n - 2, minIdx + Math.max(2, Math.floor((n - 1 - minIdx) * 0.5)));
-  let maxRightScore = -999999;
-
-  for (let i = minIdx + 1; i < n - 1; i++) {
-    const cur = profilePoints[i];
-    const prevCloserToBed = profilePoints[i - 1];
-    const nextFurtherRight = profilePoints[i + 1];
-
-    const distFromBed = Math.abs(cur.x - talvegX);
-    if (distFromBed < Math.max(2.0, totalW * 0.03)) continue; // Minimum channel half-width
-    if (distFromBed > totalW * 0.45) continue; // Do not push into extreme valley edges
-
-    const dxInner = Math.max(0.1, cur.x - prevCloserToBed.x);
-    const dxOuter = Math.max(0.1, nextFurtherRight.x - cur.x);
-
-    const slopeInner = (cur.z - prevCloserToBed.z) / dxInner;   // Slope towards bed (positive rising away)
-    const slopeOuter = (nextFurtherRight.z - cur.z) / dxOuter;  // Slope of overbank floodplain
-    const curvature = slopeInner - slopeOuter;
-
-    const heightAboveBed = cur.z - talvegZ;
-    if (heightAboveBed < -0.1) continue;
-
-    let score = curvature * 4.0;
-    if (slopeInner > 0.05 && slopeOuter <= 0.04) {
-      score += 6.0;
-    }
-    if (slopeInner > 0.04 && slopeOuter < 0) {
-      score += 8.0;
-    }
-    if (heightAboveBed > 0.3) {
-      score += Math.min(5.0, heightAboveBed * 1.5);
-    }
-
-    if (score > maxRightScore) {
-      maxRightScore = score;
-      bestRightIdx = i;
-    }
-  }
-
-  let bankLeftX = profilePoints[bestLeftIdx].x;
-  let bankRightX = profilePoints[bestRightIdx].x;
-
-  // Fallback defaults if profile is completely flat or noisy
-  if (bankRightX <= bankLeftX || (bankRightX - bankLeftX) < 2.0) {
-    const defaultHalfW = Math.min(totalW * 0.2, Math.max(6, totalW * 0.1));
-    bankLeftX = Math.max(minX + 1.0, talvegX - defaultHalfW);
-    bankRightX = Math.min(maxX - 1.0, talvegX + defaultHalfW);
-  }
-
-  // Ensure left < right strictly
-  if (bankLeftX >= bankRightX) {
-    bankLeftX = Math.max(minX + 0.5, talvegX - 5);
-    bankRightX = Math.min(maxX - 0.5, talvegX + 5);
-  }
-
   // Elevation helper for precise cross-profile interpolation
   const getElevAt = (xVal: number) => {
     if (xVal <= profilePoints[0].x) return profilePoints[0].z;
@@ -936,22 +814,151 @@ export function detectBankStationsFromProfile(
         return p1.z + frac * (p2.z - p1.z);
       }
     }
-    return talvegZ;
+    return profilePoints[0].z;
   };
+
+  // 1. Identify User's Dere Ekseni (Centerline) Position
+  const centerlineX = (expectedCenterOffset !== undefined && !isNaN(expectedCenterOffset))
+    ? Math.max(minX + 0.5, Math.min(maxX - 0.5, expectedCenterOffset))
+    : (minX + maxX) / 2;
+  const centerlineZ = getElevAt(centerlineX);
+
+  // 2. Identify Channel Bed / Local Thalweg within the stream corridor around the user's Dere Ekseni
+  // The stream bed MUST be located in the immediate vicinity of the digitized centerline (+/- 15-25m max),
+  // NEVER in an arbitrary overbank pit or distant excavation ditch!
+  const channelSearchRadius = Math.max(5.0, Math.min(totalW * 0.15, 25.0));
+  const channelLeftLimit = Math.max(minX + 0.5, centerlineX - channelSearchRadius);
+  const channelRightLimit = Math.min(maxX - 0.5, centerlineX + channelSearchRadius);
+
+  let minIdx = -1;
+  let minZ = Infinity;
+  for (let i = 0; i < n; i++) {
+    const pt = profilePoints[i];
+    if (pt.x >= channelLeftLimit && pt.x <= channelRightLimit) {
+      if (pt.z < minZ) {
+        minZ = pt.z;
+        minIdx = i;
+      }
+    }
+  }
+
+  // Fallback to point closest to centerlineX
+  if (minIdx === -1) {
+    let closestDist = Infinity;
+    minIdx = 0;
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(profilePoints[i].x - centerlineX);
+      if (d < closestDist) {
+        closestDist = d;
+        minIdx = i;
+      }
+    }
+    minZ = profilePoints[minIdx].z;
+  }
+
+  const talvegX = profilePoints[minIdx].x;
+  const talvegZ = profilePoints[minIdx].z;
+
+  // 3. Determine Left Bank Top (scan leftwards from minIdx / centerline towards profile start)
+  const leftStartIdx = Math.max(1, Math.min(minIdx, n - 2));
+  let bestLeftIdx = 0;
+  let maxLeftScore = -999999;
+
+  for (let i = leftStartIdx - 1; i >= 1; i--) {
+    const cur = profilePoints[i];
+    const nextCloserToBed = profilePoints[i + 1];
+    const prevFurtherLeft = profilePoints[i - 1];
+
+    const distFromBed = Math.abs(centerlineX - cur.x);
+    if (distFromBed < Math.max(2.0, totalW * 0.02)) continue; // Minimum channel half-width
+    if (distFromBed > totalW * 0.45) continue; // Do not push into extreme valley edges
+
+    const dxInner = Math.max(0.1, nextCloserToBed.x - cur.x);
+    const dxOuter = Math.max(0.1, cur.x - prevFurtherLeft.x);
+
+    const slopeInner = (cur.z - nextCloserToBed.z) / dxInner;
+    const slopeOuter = (prevFurtherLeft.z - cur.z) / dxOuter;
+    const curvature = slopeInner - slopeOuter;
+
+    const heightAboveBed = cur.z - talvegZ;
+    if (heightAboveBed < -0.1) continue;
+
+    let score = curvature * 4.0;
+    if (slopeInner > 0.05 && slopeOuter <= 0.04) score += 6.0;
+    if (slopeInner > 0.04 && slopeOuter < 0) score += 8.0;
+    if (heightAboveBed > 0.3) score += Math.min(5.0, heightAboveBed * 1.5);
+
+    if (score > maxLeftScore) {
+      maxLeftScore = score;
+      bestLeftIdx = i;
+    }
+  }
+
+  // 4. Determine Right Bank Top (scan rightwards from minIdx / centerline towards profile end)
+  const rightStartIdx = Math.min(n - 2, Math.max(minIdx, 1));
+  let bestRightIdx = n - 1;
+  let maxRightScore = -999999;
+
+  for (let i = rightStartIdx + 1; i < n - 1; i++) {
+    const cur = profilePoints[i];
+    const prevCloserToBed = profilePoints[i - 1];
+    const nextFurtherRight = profilePoints[i + 1];
+
+    const distFromBed = Math.abs(cur.x - centerlineX);
+    if (distFromBed < Math.max(2.0, totalW * 0.02)) continue;
+    if (distFromBed > totalW * 0.45) continue;
+
+    const dxInner = Math.max(0.1, cur.x - prevCloserToBed.x);
+    const dxOuter = Math.max(0.1, nextFurtherRight.x - cur.x);
+
+    const slopeInner = (cur.z - prevCloserToBed.z) / dxInner;
+    const slopeOuter = (nextFurtherRight.z - cur.z) / dxOuter;
+    const curvature = slopeInner - slopeOuter;
+
+    const heightAboveBed = cur.z - talvegZ;
+    if (heightAboveBed < -0.1) continue;
+
+    let score = curvature * 4.0;
+    if (slopeInner > 0.05 && slopeOuter <= 0.04) score += 6.0;
+    if (slopeInner > 0.04 && slopeOuter < 0) score += 8.0;
+    if (heightAboveBed > 0.3) score += Math.min(5.0, heightAboveBed * 1.5);
+
+    if (score > maxRightScore) {
+      maxRightScore = score;
+      bestRightIdx = i;
+    }
+  }
+
+  let bankLeftX = bestLeftIdx > 0 ? profilePoints[bestLeftIdx].x : minX + 5;
+  let bankRightX = bestRightIdx < n - 1 ? profilePoints[bestRightIdx].x : maxX - 5;
+
+  // Crucial: The Ana Kanal MUST enclose the user's Dere Ekseni (bankLeftX < centerlineX < bankRightX)
+  const defaultHalfW = Math.min(totalW * 0.2, Math.max(6, totalW * 0.08));
+  if (bankLeftX >= centerlineX - 1.5 || bankLeftX <= minX) {
+    bankLeftX = Math.max(minX + 0.5, centerlineX - defaultHalfW);
+  }
+  if (bankRightX <= centerlineX + 1.5 || bankRightX >= maxX) {
+    bankRightX = Math.min(maxX - 0.5, centerlineX + defaultHalfW);
+  }
+
+  // Ensure left < right strictly
+  if (bankLeftX >= bankRightX - 2.0) {
+    bankLeftX = Math.max(minX + 0.5, centerlineX - 5);
+    bankRightX = Math.min(maxX - 0.5, centerlineX + 5);
+  }
 
   const bankLeftZ = getElevAt(bankLeftX);
   const bankRightZ = getElevAt(bankRightX);
 
-  // Distances relative to the Thalweg (Yatak Tabanı / Dere Ekseni)
+  // Distances relative to the Centerline and Thalweg
+  const distLeftFromCenterline = Number(Math.abs(centerlineX - bankLeftX).toFixed(2));
+  const distRightFromCenterline = Number(Math.abs(bankRightX - centerlineX).toFixed(2));
   const distLeftFromTalveg = Number(Math.abs(talvegX - bankLeftX).toFixed(2));
   const distRightFromTalveg = Number(Math.abs(bankRightX - talvegX).toFixed(2));
   const totalChannelWidth = Number((bankRightX - bankLeftX).toFixed(2));
 
-  // Spillway / Bankfull analysis:
-  // The lower of the two bank elevations defines the spill initiation level (Z_spill = min(Z_left, Z_right))
+  // Spillway Analysis: Bankfull Spill Elevation is min(bankLeftZ, bankRightZ)
   const spillElevation = Math.min(bankLeftZ, bankRightZ);
-  
-  // Find intersection on left side with spill elevation (from talveg moving left)
   let spillLeftX = bankLeftX;
   if (bankLeftZ > spillElevation) {
     for (let k = minIdx; k >= 1; k--) {
@@ -965,7 +972,6 @@ export function detectBankStationsFromProfile(
     }
   }
 
-  // Find intersection on right side with spill elevation (from talveg moving right)
   let spillRightX = bankRightX;
   if (bankRightZ > spillElevation) {
     for (let k = minIdx; k < n - 1; k++) {
@@ -984,11 +990,15 @@ export function detectBankStationsFromProfile(
   return {
     bankLeftX: Number(bankLeftX.toFixed(2)),
     bankRightX: Number(bankRightX.toFixed(2)),
+    centerlineX: Number(centerlineX.toFixed(2)),
+    centerlineZ: Number(centerlineZ.toFixed(2)),
     talvegX: Number(talvegX.toFixed(2)),
     talvegZ: Number(talvegZ.toFixed(2)),
     bankLeftZ: Number(bankLeftZ.toFixed(2)),
     bankRightZ: Number(bankRightZ.toFixed(2)),
     channelWidth: totalChannelWidth,
+    distLeftFromCenterline,
+    distRightFromCenterline,
     distLeftFromTalveg,
     distRightFromTalveg,
     spillElevation: Number(spillElevation.toFixed(2)),
@@ -1358,6 +1368,8 @@ export function sampleCrossSectionProfile(
   maxElevation: number;
   bankLeftX: number;
   bankRightX: number;
+  centerlineX: number;
+  talvegX: number;
 } {
   const angleLeft = bearing - 90 + angleOffset;
   const angleRight = bearing + 90 + angleOffset;
@@ -1434,7 +1446,9 @@ export function sampleCrossSectionProfile(
     minElevation: Math.min(...elevations),
     maxElevation: Math.max(...elevations),
     bankLeftX: Number(bankLeftX.toFixed(2)),
-    bankRightX: Number(bankRightX.toFixed(2))
+    bankRightX: Number(bankRightX.toFixed(2)),
+    centerlineX: Number(leftLength.toFixed(2)),
+    talvegX: Number(detected.talvegX.toFixed(2))
   };
 }
 
@@ -1726,6 +1740,8 @@ export async function generateCrossSections(
       maxElevation: sampled.maxElevation,
       bankLeftX: sampled.bankLeftX,
       bankRightX: sampled.bankRightX,
+      centerlineX: sampled.centerlineX,
+      talvegX: sampled.talvegX,
       angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined
     });
   }
@@ -1754,7 +1770,9 @@ export async function generateCrossSections(
           minElevation: sampled.minElevation,
           maxElevation: sampled.maxElevation,
           bankLeftX: sampled.bankLeftX,
-          bankRightX: sampled.bankRightX
+          bankRightX: sampled.bankRightX,
+          centerlineX: sampled.centerlineX,
+          talvegX: sampled.talvegX
         });
       }
     }
@@ -1876,7 +1894,8 @@ export async function deconflictExistingCrossSections(
 export async function parseManualCrossSections(
   demFile: File,
   kmlFile: File,
-  crsDef?: string
+  crsDef?: string,
+  centerlineCoords?: [number, number][]
 ): Promise<CrossSection[]> {
   const dem = await loadDEM(demFile);
   const text = await kmlFile.text();
@@ -1889,6 +1908,11 @@ export async function parseManualCrossSections(
   const elements = placemarks.length > 0 ? Array.from(placemarks) : Array.from(xml.getElementsByTagName('LineString'));
 
   let cumulativeStation = 0;
+
+  let centerlineGeo: Feature<LineString> | null = null;
+  if (centerlineCoords && centerlineCoords.length >= 2) {
+    centerlineGeo = turf.lineString(centerlineCoords.map(([lat, lon]) => [lon, lat]));
+  }
 
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
@@ -1934,8 +1958,21 @@ export async function parseManualCrossSections(
       if (isNaN(rawSamples[j].z)) rawSamples[j].z = avgValid;
     }
 
-    // Detect Talveg & Bank Stations using slope curvature analysis
-    const detected = detectBankStationsFromProfile(rawSamples);
+    // Determine intersection with the user's uploaded Dere Ekseni if available
+    let centerlineX = lineLen / 2;
+    if (centerlineGeo) {
+      const cutStartPt = turf.point(lineCoords[0]);
+      const intersect = turf.lineIntersect(line, centerlineGeo);
+      if (intersect.features.length > 0) {
+        const dist = turf.distance(cutStartPt, intersect.features[0], { units: 'meters' });
+        if (dist > 0 && dist < lineLen) {
+          centerlineX = dist;
+        }
+      }
+    }
+
+    // Detect Talveg & Bank Stations anchored around the user's Dere Ekseni
+    const detected = detectBankStationsFromProfile(rawSamples, centerlineX);
     const bankLeftX = detected.bankLeftX;
     const bankRightX = detected.bankRightX;
 
@@ -1964,7 +2001,9 @@ export async function parseManualCrossSections(
       minElevation,
       maxElevation,
       bankLeftX,
-      bankRightX
+      bankRightX,
+      centerlineX: Number(centerlineX.toFixed(2)),
+      talvegX: detected.talvegX
     });
 
     cumulativeStation += 50;
@@ -1972,6 +2011,66 @@ export async function parseManualCrossSections(
 
   sections.sort((a, b) => a.station - b.station);
   return sections;
+}
+
+export function calibrateSectionsWithCenterline(
+  sections: CrossSection[],
+  centerlineCoords: [number, number][]
+): CrossSection[] {
+  if (!sections || sections.length === 0 || !centerlineCoords || centerlineCoords.length < 2) {
+    return sections;
+  }
+  const centerlineGeo = turf.lineString(centerlineCoords.map(([lat, lon]) => [lon, lat]));
+
+  return sections.map(sec => {
+    if (!sec.cutLine || !sec.profile || sec.profile.length < 2) return sec;
+    const [ptL, ptR] = sec.cutLine; // [lat, lon]
+    const cutGeo = turf.lineString([[ptL[1], ptL[0]], [ptR[1], ptR[0]]]);
+    const cutStartPt = turf.point([ptL[1], ptL[0]]);
+
+    const minX = sec.profile[0].x;
+    const maxX = sec.profile[sec.profile.length - 1].x;
+
+    let centerlineX = sec.centerlineX;
+    const intersect = turf.lineIntersect(cutGeo, centerlineGeo);
+    if (intersect.features.length > 0) {
+      const dist = turf.distance(cutStartPt, intersect.features[0], { units: 'meters' });
+      if (dist >= minX && dist <= maxX) {
+        centerlineX = Number(dist.toFixed(2));
+      }
+    }
+
+    if (centerlineX === undefined) {
+      centerlineX = Number(((minX + maxX) / 2).toFixed(2));
+    }
+
+    // Ensure banks enclose the centerline strictly
+    let bankLeftX = sec.bankLeftX;
+    let bankRightX = sec.bankRightX;
+    const defaultHalfW = Math.max(5, (bankRightX - bankLeftX) / 2 || 10);
+    if (bankLeftX >= centerlineX - 1.5) {
+      bankLeftX = Math.max(minX + 0.5, centerlineX - defaultHalfW);
+    }
+    if (bankRightX <= centerlineX + 1.5) {
+      bankRightX = Math.min(maxX - 0.5, centerlineX + defaultHalfW);
+    }
+
+    // Re-assign profile point types (LOB, MAIN, ROB)
+    const newProfile = sec.profile.map(p => {
+      let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
+      if (p.x < bankLeftX) type = 'LOB';
+      else if (p.x > bankRightX) type = 'ROB';
+      return { ...p, type };
+    });
+
+    return {
+      ...sec,
+      centerlineX,
+      bankLeftX: Number(bankLeftX.toFixed(2)),
+      bankRightX: Number(bankRightX.toFixed(2)),
+      profile: newProfile
+    };
+  });
 }
 
 export interface CrossSectionGeometry {
@@ -2017,26 +2116,51 @@ export function evaluateCrossSectionGeometry(
     };
   }
 
-  // Locate Talveg (deepest point)
-  let minIdx = 0;
-  let minZ = profile[0].z;
-  for (let i = 0; i < profile.length; i++) {
-    if (profile[i].z < minZ) {
-      minZ = profile[i].z;
-      minIdx = i;
-    }
-  }
-  const talvegX = profile[minIdx].x;
+  // Anchor on user-defined Dere Ekseni (centerlineX)
+  const axisX = (section.centerlineX !== undefined && !isNaN(section.centerlineX))
+    ? section.centerlineX
+    : (section.bankLeftX !== undefined && section.bankRightX !== undefined && !isNaN(section.bankLeftX) && !isNaN(section.bankRightX))
+      ? (section.bankLeftX + section.bankRightX) / 2
+      : (profile[0].x + profile[profile.length - 1].x) / 2;
 
-  // Validate Bank Stations
+  // Validate Bank Stations around axisX
   let bLeftX = section.bankLeftX;
   let bRightX = section.bankRightX;
-  if (bLeftX >= talvegX || bRightX <= talvegX || isNaN(bLeftX) || isNaN(bRightX)) {
+  if (bLeftX >= axisX - 1.0 || bRightX <= axisX + 1.0 || isNaN(bLeftX) || isNaN(bRightX)) {
     const totalW = profile[profile.length - 1].x - profile[0].x;
     const channelHalfW = Math.min(25, Math.max(6, totalW * 0.12));
-    bLeftX = Math.max(profile[0].x + 0.5, talvegX - channelHalfW);
-    bRightX = Math.min(profile[profile.length - 1].x - 0.5, talvegX + channelHalfW);
+    bLeftX = Math.max(profile[0].x + 0.5, axisX - channelHalfW);
+    bRightX = Math.min(profile[profile.length - 1].x - 0.5, axisX + channelHalfW);
   }
+
+  // Locate Talveg (channel bed deepest point) strictly inside the main channel [bLeftX, bRightX]
+  let minIdx = -1;
+  let minBedZ = Infinity;
+  for (let i = 0; i < profile.length; i++) {
+    const pt = profile[i];
+    if (pt.x >= bLeftX && pt.x <= bRightX) {
+      if (pt.z < minBedZ) {
+        minBedZ = pt.z;
+        minIdx = i;
+      }
+    }
+  }
+
+  // Fallback to point closest to axisX if no profile point lies within [bLeftX, bRightX]
+  if (minIdx === -1) {
+    let closestDist = Infinity;
+    for (let i = 0; i < profile.length; i++) {
+      const d = Math.abs(profile[i].x - axisX);
+      if (d < closestDist) {
+        closestDist = d;
+        minIdx = i;
+        minBedZ = profile[i].z;
+      }
+    }
+  }
+
+  const talvegX = profile[minIdx].x;
+  const bedElevation = minBedZ;
 
   const getElevationAtX = (xVal: number): number => {
     if (xVal <= profile[0].x) return profile[0].z;
@@ -2049,21 +2173,21 @@ export function evaluateCrossSectionGeometry(
         return p1.z + frac * (p2.z - p1.z);
       }
     }
-    return minZ;
+    return bedElevation;
   };
 
   const bankLeftZ = getElevationAtX(bLeftX);
   const bankRightZ = getElevationAtX(bRightX);
   const bankMinZ = Math.min(bankLeftZ, bankRightZ);
 
-  if (WSE <= minZ) {
+  if (WSE <= bedElevation) {
     return {
       areaMAIN: 0, pMAIN: 0, wMAIN: 0,
       areaLOB: 0, pLOB: 0, wLOB: 0,
       areaROB: 0, pROB: 0, wROB: 0,
       totalArea: 0, totalP: 0, totalW: 0,
       waterLeftX: talvegX, waterRightX: talvegX,
-      kTotal: 0, bedElevation: minZ, talvegX,
+      kTotal: 0, bedElevation, talvegX,
       bankLeftZ, bankRightZ, bankMinZ
     };
   }
@@ -2153,7 +2277,7 @@ export function evaluateCrossSectionGeometry(
     waterLeftX: leftWetX,
     waterRightX: rightWetX,
     kTotal,
-    bedElevation: minZ,
+    bedElevation,
     talvegX,
     bankLeftZ,
     bankRightZ,

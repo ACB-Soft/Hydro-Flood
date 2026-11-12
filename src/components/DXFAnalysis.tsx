@@ -406,7 +406,13 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
       const crsItem = CRS_LIST.find(c => c.code === crs);
       if (crsItem?.def) {
         try {
-          const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [worldMidX, worldMidY]);
+          let projX = worldMidX;
+          let projY = worldMidY;
+          if (crs !== 'EPSG:4326' && worldMidX > 1000000 && worldMidY < 1000000) {
+            projX = worldMidY;
+            projY = worldMidX;
+          }
+          const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [projX, projY]);
           if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
             let calculatedZoom = 15;
             if (crs === 'EPSG:4326') {
@@ -785,7 +791,13 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
       const crsItem = CRS_LIST.find(c => c.code === crs);
       if (crsItem?.def) {
         try {
-          const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [clickX, clickY]);
+          let projX = clickX;
+          let projY = clickY;
+          if (crs !== 'EPSG:4326' && clickX > 1000000 && clickY < 1000000) {
+            projX = clickY;
+            projY = clickX;
+          }
+          const [lon, lat] = proj4(crsItem.def, 'EPSG:4326', [projX, projY]);
           if (!isNaN(lat) && !isNaN(lon)) {
             details.push({ label: 'Coğrafi Konum (Enlem, Boylam)', value: `${lat.toFixed(6)}°, ${lon.toFixed(6)}°` });
           }

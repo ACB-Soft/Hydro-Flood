@@ -23,6 +23,7 @@ import Header from './components/Header';
 import Settings from './components/Settings';
 import ITwinWorkspace from './components/ITwinWorkspace';
 import { extractDemBoundaryPolygons } from './utils/demBoundary';
+import { reprojectCanvasToWgs84 } from './utils/geoReproject';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -174,6 +175,32 @@ export default function App() {
   useEffect(() => {
     // No auto-trigger for hydraulic
   }, [currentStep]);
+
+  const wgs84Bounds = React.useMemo(() => {
+    if (!dem) return null;
+    try {
+      const fromCRS = selectedCRS.def;
+      const toCRS = '+proj=longlat +datum=WGS84 +no_defs';
+      
+      const pSW = proj4(fromCRS, toCRS, [dem.xll, dem.yll]);
+      const pNW = proj4(fromCRS, toCRS, [dem.xll, dem.yll + dem.height * dem.cellSize]);
+      const pNE = proj4(fromCRS, toCRS, [dem.xll + dem.width * dem.cellSize, dem.yll + dem.height * dem.cellSize]);
+      const pSE = proj4(fromCRS, toCRS, [dem.xll + dem.width * dem.cellSize, dem.yll]);
+      
+      const lats = [pSW[1], pNW[1], pNE[1], pSE[1]];
+      const lons = [pSW[0], pNW[0], pNE[0], pSE[0]];
+
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons);
+      const maxLon = Math.max(...lons);
+
+      return [[minLat, minLon], [maxLat, maxLon]] as [[number, number], [number, number]];
+    } catch (e) {
+      // Fallback if proj4 fails
+      return [[coords.lat, coords.lon], [coords.lat + 0.01, coords.lon + 0.01]] as [[number, number], [number, number]];
+    }
+  }, [dem, selectedCRS.def, coords.lat, coords.lon]);
 
   useEffect(() => {
     if (dem) {
@@ -337,14 +364,16 @@ export default function App() {
             }
           }
           reliefCtx.putImageData(reliefImageData, 0, 0);
-          setReliefImage(reliefCanvas.toDataURL());
+          const warpedRelief = reprojectCanvasToWgs84(reliefCanvas, dem, selectedCRS.def, wgs84Bounds);
+          setReliefImage(warpedRelief);
         }
 
         ctx.putImageData(imageData, 0, 0);
-        setElevationImage(canvas.toDataURL());
+        const warpedElev = reprojectCanvasToWgs84(canvas, dem, selectedCRS.def, wgs84Bounds);
+        setElevationImage(warpedElev);
       }
     }
-  }, [dem]);
+  }, [dem, selectedCRS.def, wgs84Bounds]);
 
   useEffect(() => {
     if (dem && flowAcc) {
@@ -368,10 +397,11 @@ export default function App() {
           }
         }
         ctx.putImageData(imageData, 0, 0);
-        setStreamImage(canvas.toDataURL());
+        const warpedStream = reprojectCanvasToWgs84(canvas, dem, selectedCRS.def, wgs84Bounds);
+        setStreamImage(warpedStream);
       }
     }
-  }, [dem, flowAcc, flowThreshold]);
+  }, [dem, flowAcc, flowThreshold, selectedCRS.def, wgs84Bounds]);
 
   useEffect(() => {
     if (waterDepth && dem) {
@@ -407,10 +437,11 @@ export default function App() {
           }
         }
         ctx.putImageData(imageData, 0, 0);
-        setFloodImage(canvas.toDataURL());
+        const warpedFlood = reprojectCanvasToWgs84(canvas, dem, selectedCRS.def, wgs84Bounds);
+        setFloodImage(warpedFlood);
       }
     }
-  }, [waterDepth, dem, areaMask]);
+  }, [waterDepth, dem, areaMask, selectedCRS.def, wgs84Bounds]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!dem || !canvasRef.current) return;
@@ -603,31 +634,6 @@ export default function App() {
     }
   };
 
-  const wgs84Bounds = React.useMemo(() => {
-    if (!dem) return null;
-    try {
-      const fromCRS = selectedCRS.def;
-      const toCRS = '+proj=longlat +datum=WGS84 +no_defs';
-      
-      const pSW = proj4(fromCRS, toCRS, [dem.xll, dem.yll]);
-      const pNW = proj4(fromCRS, toCRS, [dem.xll, dem.yll + dem.height * dem.cellSize]);
-      const pNE = proj4(fromCRS, toCRS, [dem.xll + dem.width * dem.cellSize, dem.yll + dem.height * dem.cellSize]);
-      const pSE = proj4(fromCRS, toCRS, [dem.xll + dem.width * dem.cellSize, dem.yll]);
-      
-      const lats = [pSW[1], pNW[1], pNE[1], pSE[1]];
-      const lons = [pSW[0], pNW[0], pNE[0], pSE[0]];
-
-      const minLat = Math.min(...lats);
-      const maxLat = Math.max(...lats);
-      const minLon = Math.min(...lons);
-      const maxLon = Math.max(...lons);
-
-      return [[minLat, minLon], [maxLat, maxLon]] as [[number, number], [number, number]];
-    } catch (e) {
-      // Fallback if proj4 fails
-      return [[coords.lat, coords.lon], [coords.lat + 0.01, coords.lon + 0.01]] as [[number, number], [number, number]];
-    }
-  }, [dem, selectedCRS.def, coords.lat, coords.lon]);
 
   const demBoundaryWgs = React.useMemo(() => {
     if (!dem) return null;

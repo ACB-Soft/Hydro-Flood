@@ -688,10 +688,16 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                       return minZ;
                     };
 
-                    let talvegPt = profile[0];
-                    for (const pt of profile) {
-                      if (pt.z < talvegPt.z) talvegPt = pt;
-                    }
+                    // 1. Identify User's Uploaded Dere Ekseni (Centerline)
+                    const centerlineX = (sec.centerlineX != null && !isNaN(sec.centerlineX))
+                      ? sec.centerlineX
+                      : (sec.bankLeftX != null && sec.bankRightX != null)
+                        ? (sec.bankLeftX + sec.bankRightX) / 2
+                        : minX + rangeX * 0.5;
+
+                    const centerlineZ = getElevAt(centerlineX);
+                    const centerlineSvgX = mapX(centerlineX);
+                    const centerlineSvgY = mapZ(centerlineZ);
 
                     const bLeft = sec.bankLeftX != null && !isNaN(sec.bankLeftX)
                       ? sec.bankLeftX
@@ -705,19 +711,42 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
 
                     const bLeftSvgX = mapX(bLeft);
                     const bRightSvgX = mapX(bRight);
-                    const talvegSvgX = mapX(talvegPt.x);
                     const bLeftSvgY = mapZ(bLeftZ);
                     const bRightSvgY = mapZ(bRightZ);
+
+                    // Local thalweg strictly within the main channel
+                    let talvegPt = profile[0];
+                    let minBedZ = Infinity;
+                    for (const pt of profile) {
+                      if (pt.x >= bLeft && pt.x <= bRight) {
+                        if (pt.z < minBedZ) {
+                          minBedZ = pt.z;
+                          talvegPt = pt;
+                        }
+                      }
+                    }
+                    if (minBedZ === Infinity) {
+                      let closestD = Infinity;
+                      for (const pt of profile) {
+                        const d = Math.abs(pt.x - centerlineX);
+                        if (d < closestD) {
+                          closestD = d;
+                          talvegPt = pt;
+                        }
+                      }
+                    }
+                    const talvegSvgX = mapX(talvegPt.x);
                     const talvegSvgY = mapZ(talvegPt.z);
 
-                    const distLFromTalveg = Math.abs(talvegPt.x - bLeft);
-                    const distRFromTalveg = Math.abs(bRight - talvegPt.x);
+                    // Distances measured relative to the user's Dere Ekseni
+                    const distLFromCenterline = Math.abs(centerlineX - bLeft);
+                    const distRFromCenterline = Math.abs(bRight - centerlineX);
                     const totalChannelWidth = Math.abs(bRight - bLeft);
 
                     const spillElevation = Math.min(bLeftZ, bRightZ);
                     let spillLeftX = bLeft;
+                    const talvegIdx = profile.indexOf(talvegPt) >= 0 ? profile.indexOf(talvegPt) : Math.floor(profile.length / 2);
                     if (bLeftZ > spillElevation) {
-                      const talvegIdx = profile.indexOf(talvegPt);
                       for (let k = talvegIdx; k >= 1; k--) {
                         const p1 = profile[k];
                         const p2 = profile[k - 1];
@@ -730,7 +759,6 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                     }
                     let spillRightX = bRight;
                     if (bRightZ > spillElevation) {
-                      const talvegIdx = profile.indexOf(talvegPt);
                       for (let k = talvegIdx; k < profile.length - 1; k++) {
                         const p1 = profile[k];
                         const p2 = profile[k + 1];
@@ -839,17 +867,17 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                         />
                         <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4" fill="#10b981" stroke="#064e3b" strokeWidth="1.5" />
 
-                        {/* 2. Dere Ekseni / Talveg Line & Dot */}
+                        {/* 2. Yüklenen Dere Ekseni (Ana Kanal Ekseni) Line & Dot */}
                         <line
-                          x1={talvegSvgX}
+                          x1={centerlineSvgX}
                           y1="15"
-                          x2={talvegSvgX}
+                          x2={centerlineSvgX}
                           y2="185"
                           stroke="#0284c7"
-                          strokeWidth="1.8"
+                          strokeWidth="2"
                           strokeDasharray="5 3"
                         />
-                        <circle cx={talvegSvgX} cy={talvegSvgY} r="4.5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="1.5" />
+                        <circle cx={centerlineSvgX} cy={centerlineSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
 
                         {/* 3. Sağ Şev Üstü Line & Dot */}
                         <line
@@ -873,49 +901,75 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                 </div>
 
                 {/* Section Stats Grid */}
-                <div className="grid grid-cols-2 gap-2 text-[10px]">
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <span className="text-slate-500 block">Taban / Zmin:</span>
-                    <span className="font-bold text-slate-800 text-xs">
-                      {fmtNum(focusedSection.minElevation)} m
-                    </span>
-                  </div>
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <span className="text-slate-500 block">Tepe / Zmax:</span>
-                    <span className="font-bold text-slate-800 text-xs">
-                      {fmtNum(focusedSection.maxElevation)} m
-                    </span>
-                  </div>
-                  <div className="bg-emerald-50/80 p-2 rounded-lg border border-emerald-300">
-                    <span className="text-emerald-900 font-bold block mb-1">🌿 Sol Şev Üstü Offset (m):</span>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={focusedSection.bankLeftX}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        if (!isNaN(val) && onUpdateBankTops) {
-                          onUpdateBankTops(focusedSection.station, val, focusedSection.bankRightX);
-                        }
-                      }}
-                      className="w-full bg-white border border-emerald-400 rounded px-2 py-1 text-xs font-bold text-emerald-900 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-2xs"
-                    />
-                  </div>
-                  <div className="bg-amber-50/80 p-2 rounded-lg border border-amber-300">
-                    <span className="text-amber-900 font-bold block mb-1">🌾 Sağ Şev Üstü Offset (m):</span>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={focusedSection.bankRightX}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        if (!isNaN(val) && onUpdateBankTops) {
-                          onUpdateBankTops(focusedSection.station, focusedSection.bankLeftX, val);
-                        }
-                      }}
-                      className="w-full bg-white border border-amber-400 rounded px-2 py-1 text-xs font-bold text-amber-900 focus:outline-none focus:ring-1 focus:ring-amber-600 shadow-2xs"
-                    />
-                  </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+                  {(() => {
+                    const sec = focusedSection;
+                    const cX = (sec.centerlineX != null && !isNaN(sec.centerlineX))
+                      ? sec.centerlineX
+                      : (sec.bankLeftX != null && sec.bankRightX != null)
+                        ? (sec.bankLeftX + sec.bankRightX) / 2
+                        : 0;
+                    const dL = Math.abs(cX - sec.bankLeftX);
+                    const dR = Math.abs(sec.bankRightX - cX);
+                    return (
+                      <>
+                        <div className="bg-sky-50/90 p-2 rounded-lg border border-sky-300">
+                          <span className="text-sky-900 font-bold block">🌊 Dere Ekseni:</span>
+                          <span className="font-bold text-sky-950 text-xs font-mono block">
+                            X: {fmtNum(cX, 1)} m
+                          </span>
+                          <span className="text-[9px] text-sky-700 font-mono">
+                            Taban: {fmtNum(focusedSection.minElevation)} m
+                          </span>
+                        </div>
+                        <div className="bg-white p-2 rounded-lg border border-slate-200">
+                          <span className="text-slate-500 block">Kanal Genişliği:</span>
+                          <span className="font-bold text-slate-800 text-xs font-mono block">
+                            {fmtNum(Math.abs(sec.bankRightX - sec.bankLeftX), 1)} m
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-mono">
+                            Tepe Z: {fmtNum(focusedSection.maxElevation)} m
+                          </span>
+                        </div>
+                        <div className="bg-emerald-50/80 p-2 rounded-lg border border-emerald-300">
+                          <div className="flex items-center justify-between text-emerald-900 font-bold mb-1">
+                            <span>🌿 Sol Şev (m):</span>
+                            <span className="text-[9px] font-mono font-normal">(-{dL.toFixed(1)}m)</span>
+                          </div>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={focusedSection.bankLeftX}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              if (!isNaN(val) && onUpdateBankTops) {
+                                onUpdateBankTops(focusedSection.station, val, focusedSection.bankRightX);
+                              }
+                            }}
+                            className="w-full bg-white border border-emerald-400 rounded px-2 py-1 text-xs font-bold text-emerald-900 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-2xs"
+                          />
+                        </div>
+                        <div className="bg-amber-50/80 p-2 rounded-lg border border-amber-300">
+                          <div className="flex items-center justify-between text-amber-900 font-bold mb-1">
+                            <span>🌾 Sağ Şev (m):</span>
+                            <span className="text-[9px] font-mono font-normal">(+{dR.toFixed(1)}m)</span>
+                          </div>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={focusedSection.bankRightX}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              if (!isNaN(val) && onUpdateBankTops) {
+                                onUpdateBankTops(focusedSection.station, focusedSection.bankLeftX, val);
+                              }
+                            }}
+                            className="w-full bg-white border border-amber-400 rounded px-2 py-1 text-xs font-bold text-amber-900 focus:outline-none focus:ring-1 focus:ring-amber-600 shadow-2xs"
+                          />
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             ) : (

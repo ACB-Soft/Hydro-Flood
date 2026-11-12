@@ -60,6 +60,7 @@ import {
   parseKMLStructures,
   parseKMLBankLines,
   calibrateSectionsWithBankLines,
+  calibrateSectionsWithCenterline,
   calculateDownstreamSlopeFromDEM,
   detectThalwegCenterline,
   coordsToKMLFile,
@@ -336,6 +337,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         const coords = await parseKMLCoordinates(file);
         setCenterlineCoords(coords);
         setOriginalCenterlineCoords(coords);
+        if (sections.length > 0) {
+          const updated = calibrateSectionsWithCenterline(sections, coords);
+          setSections(updated);
+          setOriginalSections(updated);
+        }
       } catch (err) {
         console.error("KML koordinatları okunamadı:", err);
       }
@@ -601,7 +607,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       }
       setIsExtracting(true);
       try {
-        let data = await parseManualCrossSections(demFile, file, selectedCRS.def);
+        let data = await parseManualCrossSections(demFile, file, selectedCRS.def, centerlineCoords);
         if (data.length === 0) {
           alert("KML dosyasında geçerli enkesit çizgileri bulunamadı.");
         } else {
@@ -2162,10 +2168,37 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               return minZ;
                             };
 
-                            // Identify Thalweg Point
+                            // 1. Identify User's Dere Ekseni (Centerline)
+                            const centerlineX = (sec.centerlineX != null && !isNaN(sec.centerlineX))
+                              ? sec.centerlineX
+                              : (sec.bankLeftX != null && sec.bankRightX != null)
+                                ? (sec.bankLeftX + sec.bankRightX) / 2
+                                : (minX + maxX) / 2;
+
+                            const centerlineZ = getElevAt(centerlineX);
+                            const centerlineSvgX = mapX(centerlineX);
+                            const centerlineSvgY = mapZ(centerlineZ);
+
+                            // Local thalweg strictly inside channel
                             let talvegPt = sec.profile[0];
+                            let minBedZ = Infinity;
                             for (const pt of sec.profile) {
-                              if (pt.z < talvegPt.z) talvegPt = pt;
+                              if (pt.x >= sec.bankLeftX && pt.x <= sec.bankRightX) {
+                                if (pt.z < minBedZ) {
+                                  minBedZ = pt.z;
+                                  talvegPt = pt;
+                                }
+                              }
+                            }
+                            if (minBedZ === Infinity) {
+                              let closestD = Infinity;
+                              for (const pt of sec.profile) {
+                                const d = Math.abs(pt.x - centerlineX);
+                                if (d < closestD) {
+                                  closestD = d;
+                                  talvegPt = pt;
+                                }
+                              }
                             }
 
                             const bLeftZ = getElevAt(sec.bankLeftX);
@@ -2173,20 +2206,18 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                             const bLeftSvgX = mapX(sec.bankLeftX);
                             const bRightSvgX = mapX(sec.bankRightX);
-                            const talvegSvgX = mapX(talvegPt.x);
                             const bLeftSvgY = mapZ(bLeftZ);
                             const bRightSvgY = mapZ(bRightZ);
-                            const talvegSvgY = mapZ(talvegPt.z);
 
-                            // Calculate thalweg relative offsets and bankfull spill width
-                            const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
-                            const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
+                            // Distances relative to the user's Dere Ekseni
+                            const distLFromCenterline = Math.abs(centerlineX - sec.bankLeftX);
+                            const distRFromCenterline = Math.abs(sec.bankRightX - centerlineX);
                             const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
 
                             const spillElevation = Math.min(bLeftZ, bRightZ);
                             let spillLeftX = sec.bankLeftX;
+                            const talvegIdx = sec.profile.indexOf(talvegPt) >= 0 ? sec.profile.indexOf(talvegPt) : Math.floor(sec.profile.length / 2);
                             if (bLeftZ > spillElevation) {
-                              const talvegIdx = sec.profile.indexOf(talvegPt);
                               for (let k = talvegIdx; k >= 1; k--) {
                                 const p1 = sec.profile[k];
                                 const p2 = sec.profile[k - 1];
@@ -2199,7 +2230,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             }
                             let spillRightX = sec.bankRightX;
                             if (bRightZ > spillElevation) {
-                              const talvegIdx = sec.profile.indexOf(talvegPt);
                               for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
                                 const p1 = sec.profile[k];
                                 const p2 = sec.profile[k + 1];
@@ -2371,17 +2401,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 <g transform={`translate(${Math.max(45, bLeftSvgX)}, 20)`}>
                                   <rect x="-52" y="-12" width="104" height="15" rx="3" fill="#ecfdf5" stroke="#a7f3d0" strokeWidth="1" />
                                   <text x="0" y="-2" fontSize="8" textAnchor="middle" fill="#065f46" fontWeight="bold">
-                                    🌿 Sol Şev (Talvege -{distLFromTalveg.toFixed(1)}m)
+                                    🌿 Sol Şev (Eksene -{distLFromCenterline.toFixed(1)}m)
                                   </text>
                                 </g>
 
-                                {/* 2. Dere Ekseni / Taban (Thalweg & Centerline) Axis Line & Marker */}
-                                <line x1={talvegSvgX} y1="25" x2={talvegSvgX} y2="245" stroke="#0284c7" strokeWidth="2" strokeDasharray="6 3" />
-                                <circle cx={talvegSvgX} cy={talvegSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
-                                <g transform={`translate(${Math.max(65, Math.min(635, talvegSvgX))}, 242)`}>
-                                  <rect x="-48" y="-13" width="96" height="15" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
+                                {/* 2. Yüklenen Dere Ekseni (Ana Kanal Ekseni) Line & Marker */}
+                                <line x1={centerlineSvgX} y1="25" x2={centerlineSvgX} y2="245" stroke="#0284c7" strokeWidth="2" strokeDasharray="6 3" />
+                                <circle cx={centerlineSvgX} cy={centerlineSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
+                                <g transform={`translate(${Math.max(65, Math.min(635, centerlineSvgX))}, 242)`}>
+                                  <rect x="-56" y="-13" width="112" height="15" rx="3" fill="#e0f2fe" stroke="#7dd3fc" strokeWidth="1" />
                                   <text x="0" y="-2" fontSize="8" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                                    🌊 Talveg (0.0m | {talvegPt.z.toFixed(2)}m)
+                                    🌊 Dere Ekseni ({centerlineX.toFixed(1)}m | {centerlineZ.toFixed(2)}m)
                                   </text>
                                 </g>
 
@@ -2391,7 +2421,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 <g transform={`translate(${Math.min(655, bRightSvgX)}, 20)`}>
                                   <rect x="-52" y="-12" width="104" height="15" rx="3" fill="#fffbeb" stroke="#fde68a" strokeWidth="1" />
                                   <text x="0" y="-2" fontSize="8" textAnchor="middle" fill="#92400e" fontWeight="bold">
-                                    🌾 Sağ Şev (Talvege +{distRFromTalveg.toFixed(1)}m)
+                                    🌾 Sağ Şev (Eksene +{distRFromCenterline.toFixed(1)}m)
                                   </text>
                                 </g>
 
@@ -5307,9 +5337,36 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   return minZ;
                                 };
 
+                                const centerlineX = (sec.centerlineX != null && !isNaN(sec.centerlineX))
+                                  ? sec.centerlineX
+                                  : (sec.bankLeftX != null && sec.bankRightX != null)
+                                    ? (sec.bankLeftX + sec.bankRightX) / 2
+                                    : (minX + maxX) / 2;
+
+                                const centerlineZ = getElevAt(centerlineX);
+                                const centerlineSvgX = mapX(centerlineX);
+                                const centerlineSvgY = mapZ(centerlineZ);
+
+                                // Local thalweg strictly inside channel
                                 let talvegPt = sec.profile[0];
+                                let minBedZ = Infinity;
                                 for (const pt of sec.profile) {
-                                  if (pt.z < talvegPt.z) talvegPt = pt;
+                                  if (pt.x >= sec.bankLeftX && pt.x <= sec.bankRightX) {
+                                    if (pt.z < minBedZ) {
+                                      minBedZ = pt.z;
+                                      talvegPt = pt;
+                                    }
+                                  }
+                                }
+                                if (minBedZ === Infinity) {
+                                  let closestD = Infinity;
+                                  for (const pt of sec.profile) {
+                                    const d = Math.abs(pt.x - centerlineX);
+                                    if (d < closestD) {
+                                      closestD = d;
+                                      talvegPt = pt;
+                                    }
+                                  }
                                 }
 
                                 const bLeftZ = getElevAt(sec.bankLeftX);
@@ -5317,19 +5374,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                                 const bLeftSvgX = mapX(sec.bankLeftX);
                                 const bRightSvgX = mapX(sec.bankRightX);
-                                const talvegSvgX = mapX(talvegPt.x);
                                 const bLeftSvgY = mapZ(bLeftZ);
                                 const bRightSvgY = mapZ(bRightZ);
-                                const talvegSvgY = mapZ(talvegPt.z);
 
-                                const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
-                                const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
+                                const distLFromCenterline = Math.abs(centerlineX - sec.bankLeftX);
+                                const distRFromCenterline = Math.abs(sec.bankRightX - centerlineX);
                                 const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
 
                                 const spillElevation = Math.min(bLeftZ, bRightZ);
                                 let spillLeftX = sec.bankLeftX;
+                                const talvegIdx = sec.profile.indexOf(talvegPt) >= 0 ? sec.profile.indexOf(talvegPt) : Math.floor(sec.profile.length / 2);
                                 if (bLeftZ > spillElevation) {
-                                  const talvegIdx = sec.profile.indexOf(talvegPt);
                                   for (let k = talvegIdx; k >= 1; k--) {
                                     const p1 = sec.profile[k];
                                     const p2 = sec.profile[k - 1];
@@ -5342,7 +5397,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 }
                                 let spillRightX = sec.bankRightX;
                                 if (bRightZ > spillElevation) {
-                                  const talvegIdx = sec.profile.indexOf(talvegPt);
                                   for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
                                     const p1 = sec.profile[k];
                                     const p2 = sec.profile[k + 1];
@@ -5427,9 +5481,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     <line x1={bLeftSvgX} y1="20" x2={bLeftSvgX} y2="205" stroke="#059669" strokeWidth="1.8" strokeDasharray="4 3" />
                                     <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.8" />
 
-                                    {/* 2. Dere Ekseni / Talveg Indicator */}
-                                    <line x1={talvegSvgX} y1="20" x2={talvegSvgX} y2="205" stroke="#0284c7" strokeWidth="1.8" strokeDasharray="5 3" />
-                                    <circle cx={talvegSvgX} cy={talvegSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
+                                    {/* 2. Yüklenen Dere Ekseni (Ana Kanal Ekseni) Indicator */}
+                                    <line x1={centerlineSvgX} y1="20" x2={centerlineSvgX} y2="205" stroke="#0284c7" strokeWidth="2" strokeDasharray="5 3" />
+                                    <circle cx={centerlineSvgX} cy={centerlineSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
 
                                     {/* 3. Sağ Şev Üstü Indicator */}
                                     <line x1={bRightSvgX} y1="20" x2={bRightSvgX} y2="205" stroke="#d97706" strokeWidth="1.8" strokeDasharray="4 3" />
@@ -5491,21 +5545,45 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               return sec.minElevation;
                             };
 
+                            const cX = (sec.centerlineX != null && !isNaN(sec.centerlineX))
+                              ? sec.centerlineX
+                              : (sec.bankLeftX != null && sec.bankRightX != null)
+                                ? (sec.bankLeftX + sec.bankRightX) / 2
+                                : (sec.profile[0].x + sec.profile[sec.profile.length - 1].x) / 2;
+                            const cZ = getElevAt(cX);
+
+                            // Local thalweg strictly inside channel
                             let talvegPt = sec.profile[0];
+                            let minBedElev = Infinity;
                             for (const pt of sec.profile) {
-                              if (pt.z < talvegPt.z) talvegPt = pt;
+                              if (pt.x >= sec.bankLeftX && pt.x <= sec.bankRightX) {
+                                if (pt.z < minBedElev) {
+                                  minBedElev = pt.z;
+                                  talvegPt = pt;
+                                }
+                              }
+                            }
+                            if (minBedElev === Infinity) {
+                              let closestD = Infinity;
+                              for (const pt of sec.profile) {
+                                const d = Math.abs(pt.x - cX);
+                                if (d < closestD) {
+                                  closestD = d;
+                                  talvegPt = pt;
+                                }
+                              }
                             }
 
                             const bLeftZ = getElevAt(sec.bankLeftX);
                             const bRightZ = getElevAt(sec.bankRightX);
-                            const distLFromTalveg = Math.abs(talvegPt.x - sec.bankLeftX);
-                            const distRFromTalveg = Math.abs(sec.bankRightX - talvegPt.x);
+                            const distLFromCenterline = Math.abs(cX - sec.bankLeftX);
+                            const distRFromCenterline = Math.abs(sec.bankRightX - cX);
                             const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
 
                             const spillElevation = Math.min(bLeftZ, bRightZ);
                             let spillLeftX = sec.bankLeftX;
+                            const talvegIdx = sec.profile.indexOf(talvegPt) >= 0 ? sec.profile.indexOf(talvegPt) : Math.floor(sec.profile.length / 2);
                             if (bLeftZ > spillElevation) {
-                              const talvegIdx = sec.profile.indexOf(talvegPt);
                               for (let k = talvegIdx; k >= 1; k--) {
                                 const p1 = sec.profile[k];
                                 const p2 = sec.profile[k - 1];
@@ -5518,7 +5596,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             }
                             let spillRightX = sec.bankRightX;
                             if (bRightZ > spillElevation) {
-                              const talvegIdx = sec.profile.indexOf(talvegPt);
                               for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
                                 const p1 = sec.profile[k];
                                 const p2 = sec.profile[k + 1];
@@ -5540,8 +5617,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     <span className="font-mono text-emerald-700">{bLeftZ.toFixed(2)} m</span>
                                   </div>
                                   <div className="text-[10px] text-emerald-800 flex justify-between pt-0.5 border-t border-emerald-200/60">
-                                    <span>Talvege Mesafe:</span>
-                                    <strong className="font-mono">-{distLFromTalveg.toFixed(1)} m</strong>
+                                    <span>Eksene Mesafe:</span>
+                                    <strong className="font-mono">-{distLFromCenterline.toFixed(1)} m</strong>
                                   </div>
                                   <div className="text-[10px] text-emerald-800 flex justify-between">
                                     <span>Sol İstasyon:</span>
@@ -5549,18 +5626,18 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                   </div>
                                 </div>
 
-                                {/* Ana Kanal / Talveg */}
+                                {/* Ana Kanal (Dere Ekseni) */}
                                 <div className="bg-sky-50/80 border border-sky-200 p-2 rounded-lg space-y-0.5">
                                   <div className="flex items-center justify-between font-bold text-sky-900 text-[11px]">
-                                    <span className="flex items-center gap-1">🌊 Ana Kanal (Talveg)</span>
-                                    <span className="font-mono text-sky-700">{talvegPt.z.toFixed(2)} m</span>
+                                    <span className="flex items-center gap-1">🌊 Dere Ekseni</span>
+                                    <span className="font-mono text-sky-700">{cZ.toFixed(2)} m</span>
                                   </div>
                                   <div className="text-[10px] text-sky-800 flex justify-between pt-0.5 border-t border-sky-200/60">
-                                    <span>Tepe Kotu:</span>
-                                    <strong className="font-mono">{sec.maxElevation.toFixed(2)} m</strong>
+                                    <span>Eksen Konumu (X):</span>
+                                    <strong className="font-mono">{cX.toFixed(1)} m</strong>
                                   </div>
                                   <div className="text-[10px] text-sky-800 flex justify-between">
-                                    <span>Toplam Yatak:</span>
+                                    <span>Kanal Genişliği:</span>
                                     <strong className="font-mono">{totalChannelWidth.toFixed(1)} m</strong>
                                   </div>
                                 </div>
@@ -5572,8 +5649,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     <span className="font-mono text-amber-700">{bRightZ.toFixed(2)} m</span>
                                   </div>
                                   <div className="text-[10px] text-amber-800 flex justify-between pt-0.5 border-t border-amber-200/60">
-                                    <span>Talvege Mesafe:</span>
-                                    <strong className="font-mono">+{distRFromTalveg.toFixed(1)} m</strong>
+                                    <span>Eksene Mesafe:</span>
+                                    <strong className="font-mono">+{distRFromCenterline.toFixed(1)} m</strong>
                                   </div>
                                   <div className="text-[10px] text-amber-800 flex justify-between">
                                     <span>Sağ İstasyon:</span>
