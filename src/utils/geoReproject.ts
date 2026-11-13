@@ -6,6 +6,7 @@ export interface DEMInfo {
   xll: number;
   yll: number;
   cellSize: number;
+  cellSizeY?: number;
 }
 
 /**
@@ -75,8 +76,9 @@ export function reprojectCanvasToWgs84(
     }
   }
 
-  const { xll, yll, cellSize } = dem;
-  const invCell = 1 / cellSize;
+  const { xll, yll, cellSize, cellSizeY } = dem;
+  const invCellX = 1 / cellSize;
+  const invCellY = 1 / (cellSizeY ?? cellSize);
 
   // Interpolate inside each block
   for (let gy = 0; gy < numBlocksY; gy++) {
@@ -117,8 +119,8 @@ export function reprojectCanvasToWgs84(
           const pY = leftY + (rightY - leftY) * u;
 
           // Convert projected coordinates (X, Y) to DEM cell index
-          const sX = Math.floor((pX - xll) * invCell);
-          const sY = Math.floor(dem.height - (pY - yll) * invCell);
+          const sX = Math.floor((pX - xll) * invCellX);
+          const sY = Math.floor(srcHeight - (pY - yll) * invCellY);
 
           const outIdx = (rowOffset + x) * 4;
 

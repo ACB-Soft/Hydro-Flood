@@ -2,6 +2,7 @@ import * as turf from '@turf/turf';
 import * as GeoTIFF from 'geotiff';
 import proj4 from 'proj4';
 import { Feature, LineString } from 'geojson';
+import { reprojectCanvasToWgs84 } from './geoReproject';
 
 export interface ProfilePoint {
   x: number;
@@ -499,6 +500,300 @@ export async function loadDEM(file: File) {
   const data = rasters[0] as Float32Array | Int16Array | Uint16Array;
   
   return { bbox, width, height, data };
+}
+
+export interface DEMReliefOverlays {
+  elevationImage: string;
+  reliefImage: string;
+  wgs84Bounds: [[number, number], [number, number]];
+  minElev: number;
+  maxElev: number;
+}
+
+/**
+ * Generates hypsometric shaded-relief (kabartma) and grayscale hillshade images from a DEM file
+ * matching the Static Flood Simulation visual style, accurately reprojected to WGS84.
+ */
+export async function buildDEMReliefOverlays(
+  demFile: File,
+  crsDef: string
+): Promise<DEMReliefOverlays | null> {
+  let rawWidth = 0;
+  let rawHeight = 0;
+  let bbox: number[] = [0, 0, 0, 0];
+  let rawData: Float32Array | Int16Array | Uint16Array | null = null;
+  let noDataVal = -9999;
+
+  const lowerName = demFile.name.toLowerCase();
+  if (lowerName.endsWith('.asc')) {
+    const text = await demFile.text();
+    const lines = text.trim().split(/\r?\n/);
+    let ncols = 0, nrows = 0, xllcorner = 0, yllcorner = 0, cellsize = 10;
+    let isCenter = false;
+    let dataStartIdx = 0;
+    for (let i = 0; i < Math.min(12, lines.length); i++) {
+      const parts = lines[i].trim().split(/\s+/);
+      if (parts.length < 2) continue;
+      const key = parts[0].toLowerCase();
+      const val = Number(parts[1]);
+      if (key === 'ncols') { ncols = val; dataStartIdx = i + 1; }
+      else if (key === 'nrows') { nrows = val; dataStartIdx = i + 1; }
+      else if (key === 'xllcorner') { xllcorner = val; dataStartIdx = i + 1; }
+      else if (key === 'xllcenter') { xllcorner = val; isCenter = true; dataStartIdx = i + 1; }
+      else if (key === 'yllcorner') { yllcorner = val; dataStartIdx = i + 1; }
+      else if (key === 'yllcenter') { yllcorner = val; isCenter = true; dataStartIdx = i + 1; }
+      else if (key === 'cellsize') { cellsize = val; dataStartIdx = i + 1; }
+      else if (key === 'nodata_value') { noDataVal = val; dataStartIdx = i + 1; }
+      else break;
+    }
+    if (ncols <= 1 || nrows <= 1) return null;
+    if (isCenter) {
+      xllcorner -= cellsize * 0.5;
+      yllcorner -= cellsize * 0.5;
+    }
+    rawWidth = ncols;
+    rawHeight = nrows;
+    bbox = [xllcorner, yllcorner, xllcorner + ncols * cellsize, yllcorner + nrows * cellsize];
+    const parsed = new Float32Array(ncols * nrows);
+    parsed.fill(NaN);
+    let idx = 0;
+    for (let i = dataStartIdx; i < lines.length && idx < parsed.length; i++) {
+      const tokens = lines[i].trim().split(/\s+/);
+      for (let j = 0; j < tokens.length && idx < parsed.length; j++) {
+        if (tokens[j] === '') continue;
+        parsed[idx++] = Number(tokens[j]);
+      }
+    }
+    rawData = parsed;
+  } else {
+    const arrayBuffer = await demFile.arrayBuffer();
+    const tiff = await GeoTIFF.fromArrayBuffer(arrayBuffer);
+    const image = await tiff.getImage();
+    bbox = image.getBoundingBox();
+    rawWidth = image.getWidth();
+    rawHeight = image.getHeight();
+    noDataVal = image.getGDALNoData() ?? -9999;
+    const rasters = await image.readRasters();
+    rawData = rasters[0] as Float32Array | Int16Array | Uint16Array;
+  }
+
+  if (!rawData || rawWidth < 2 || rawHeight < 2) return null;
+
+  // Downsample visualization grid to max 1024px per side for crisp hillshade without UI stalls
+  const maxDim = 1024;
+  const scale = Math.min(1, maxDim / Math.max(rawWidth, rawHeight));
+  const width = Math.max(2, Math.round(rawWidth * scale));
+  const height = Math.max(2, Math.round(rawHeight * scale));
+
+  const xll = bbox[0];
+  const yll = bbox[1];
+  const spanX = Math.abs(bbox[2] - bbox[0]);
+  const spanY = Math.abs(bbox[3] - bbox[1]);
+  const cellSizeX = spanX / width;
+  const cellSizeY = spanY / height;
+
+  const data = new Float32Array(width * height);
+  let minElev = Infinity;
+  let maxElev = -Infinity;
+
+  for (let y = 0; y < height; y++) {
+    const sy = Math.min(rawHeight - 1, Math.floor(((y + 0.5) / height) * rawHeight));
+    const srcRow = sy * rawWidth;
+    const dstRow = y * width;
+    for (let x = 0; x < width; x++) {
+      const sx = Math.min(rawWidth - 1, Math.floor(((x + 0.5) / width) * rawWidth));
+      const v = rawData[srcRow + sx];
+      if (isNaN(v) || v <= -9000 || v > 20000 || v === noDataVal) {
+        data[dstRow + x] = NaN;
+      } else {
+        data[dstRow + x] = v;
+        if (v < minElev) minElev = v;
+        if (v > maxElev) maxElev = v;
+      }
+    }
+  }
+
+  if (!isFinite(minElev) || !isFinite(maxElev)) {
+    minElev = 0;
+    maxElev = 1;
+  }
+
+  // Determine WGS84 geographic bounds and effective cell size in meters
+  const isGeographicBbox =
+    Math.abs(bbox[0]) <= 180 &&
+    Math.abs(bbox[2]) <= 180 &&
+    Math.abs(bbox[1]) <= 90 &&
+    Math.abs(bbox[3]) <= 90;
+
+  const effectiveCrsDef = isGeographicBbox
+    ? '+proj=longlat +datum=WGS84 +no_defs'
+    : crsDef;
+
+  let wgs84Bounds: [[number, number], [number, number]];
+  if (isGeographicBbox) {
+    wgs84Bounds = [
+      [Math.min(bbox[1], bbox[3]), Math.min(bbox[0], bbox[2])],
+      [Math.max(bbox[1], bbox[3]), Math.max(bbox[0], bbox[2])]
+    ];
+  } else {
+    try {
+      const toCRS = '+proj=longlat +datum=WGS84 +no_defs';
+      const pSW = proj4(effectiveCrsDef, toCRS, [bbox[0], bbox[1]]);
+      const pNW = proj4(effectiveCrsDef, toCRS, [bbox[0], bbox[3]]);
+      const pNE = proj4(effectiveCrsDef, toCRS, [bbox[2], bbox[3]]);
+      const pSE = proj4(effectiveCrsDef, toCRS, [bbox[2], bbox[1]]);
+      const lats = [pSW[1], pNW[1], pNE[1], pSE[1]];
+      const lons = [pSW[0], pNW[0], pNE[0], pSE[0]];
+      wgs84Bounds = [
+        [Math.min(...lats), Math.min(...lons)],
+        [Math.max(...lats), Math.max(...lons)]
+      ];
+    } catch {
+      return null;
+    }
+  }
+
+  const midLatRad = (((wgs84Bounds[0][0] + wgs84Bounds[1][0]) / 2) * Math.PI) / 180;
+  const effectiveCellX = isGeographicBbox ? cellSizeX * 111320 * Math.cos(midLatRad) : cellSizeX;
+  const effectiveCellY = isGeographicBbox ? cellSizeY * 111320 : cellSizeY;
+
+  const elevCanvas = document.createElement('canvas');
+  elevCanvas.width = width;
+  elevCanvas.height = height;
+  const elevCtx = elevCanvas.getContext('2d');
+
+  const reliefCanvas = document.createElement('canvas');
+  reliefCanvas.width = width;
+  reliefCanvas.height = height;
+  const reliefCtx = reliefCanvas.getContext('2d');
+
+  if (!elevCtx || !reliefCtx) return null;
+
+  const elevImageData = elevCtx.createImageData(width, height);
+  const reliefImageData = reliefCtx.createImageData(width, height);
+  const ed = elevImageData.data;
+  const rd = reliefImageData.data;
+
+  // Hillshade parameters identical to Static Flood Simulation (App.tsx)
+  const azimuth = 315;
+  const altitude = 45;
+  const zFactor = 2.0;
+  const zenith_rad = ((90 - altitude) * Math.PI) / 180;
+  const azimuth_math = 360.0 - azimuth + 90.0;
+  const azimuth_rad = ((azimuth_math > 360 ? azimuth_math - 360 : azimuth_math) * Math.PI) / 180;
+
+  const stops = [
+    { pos: 0.0, color: [20, 120, 20] },
+    { pos: 0.2, color: [80, 180, 80] },
+    { pos: 0.4, color: [230, 230, 120] },
+    { pos: 0.6, color: [200, 150, 80] },
+    { pos: 0.8, color: [140, 70, 30] },
+    { pos: 1.0, color: [255, 255, 255] }
+  ];
+
+  const range = Math.max(0.001, maxElev - minElev);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      const idx = i * 4;
+      const cellVal = data[i];
+
+      if (isNaN(cellVal) || cellVal <= -9000) {
+        ed[idx + 3] = 0;
+        rd[idx + 3] = 0;
+        continue;
+      }
+
+      // Horn's 3x3 Hillshade
+      let hillshade = 0.707;
+      if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
+        const getSafe = (index: number) => {
+          const v = data[index];
+          return !isNaN(v) && v > -9000 ? v : cellVal;
+        };
+        const a = getSafe((y - 1) * width + (x - 1));
+        const b = getSafe((y - 1) * width + x);
+        const c = getSafe((y - 1) * width + (x + 1));
+        const d_val = getSafe(y * width + (x - 1));
+        const f = getSafe(y * width + (x + 1));
+        const g = getSafe((y + 1) * width + (x - 1));
+        const h = getSafe((y + 1) * width + x);
+        const k = getSafe((y + 1) * width + (x + 1));
+
+        const dz_dx = ((c + 2 * f + k) - (a + 2 * d_val + g)) / (8 * Math.max(0.01, effectiveCellX));
+        const dz_dy = ((g + 2 * h + k) - (a + 2 * b + c)) / (8 * Math.max(0.01, effectiveCellY));
+
+        const slope_rad = Math.atan(zFactor * Math.sqrt(dz_dx * dz_dx + dz_dy * dz_dy));
+        let aspect_rad = 0;
+        if (dz_dx !== 0) {
+          aspect_rad = Math.atan2(dz_dy, -dz_dx);
+          if (aspect_rad < 0) aspect_rad += 2 * Math.PI;
+        } else {
+          if (dz_dy > 0) aspect_rad = Math.PI / 2;
+          else if (dz_dy < 0) aspect_rad = 2 * Math.PI - Math.PI / 2;
+          else aspect_rad = 0;
+        }
+
+        hillshade = Math.max(
+          0,
+          Math.cos(zenith_rad) * Math.cos(slope_rad) +
+            Math.sin(zenith_rad) * Math.sin(slope_rad) * Math.cos(azimuth_rad - aspect_rad)
+        );
+      }
+
+      // Hypsometric Tinting blended with Hillshade
+      const val = Math.max(0, Math.min(1, (cellVal - minElev) / range));
+      let r = 255, g_col = 255, b_col = 255;
+      for (let s = 0; s < stops.length - 1; s++) {
+        const s1 = stops[s];
+        const s2 = stops[s + 1];
+        if (val >= s1.pos && val <= s2.pos) {
+          const frac = (val - s1.pos) / (s2.pos - s1.pos);
+          r = s1.color[0] + (s2.color[0] - s1.color[0]) * frac;
+          g_col = s1.color[1] + (s2.color[1] - s1.color[1]) * frac;
+          b_col = s1.color[2] + (s2.color[2] - s1.color[2]) * frac;
+          break;
+        }
+      }
+
+      const factor = 0.6 + hillshade * 0.5;
+      ed[idx] = Math.min(255, r * factor);
+      ed[idx + 1] = Math.min(255, g_col * factor);
+      ed[idx + 2] = Math.min(255, b_col * factor);
+      ed[idx + 3] = 255;
+
+      // Grayscale Relief for Satellite/Flood Blending
+      const gray = Math.max(0, Math.min(255, 128 + (hillshade - 0.707) * 180));
+      rd[idx] = gray;
+      rd[idx + 1] = gray;
+      rd[idx + 2] = gray;
+      rd[idx + 3] = 255;
+    }
+  }
+
+  elevCtx.putImageData(elevImageData, 0, 0);
+  reliefCtx.putImageData(reliefImageData, 0, 0);
+
+  const visDemInfo = {
+    width,
+    height,
+    xll,
+    yll,
+    cellSize: cellSizeX,
+    cellSizeY
+  };
+
+  const warpedElev = reprojectCanvasToWgs84(elevCanvas, visDemInfo, effectiveCrsDef, wgs84Bounds);
+  const warpedRelief = reprojectCanvasToWgs84(reliefCanvas, visDemInfo, effectiveCrsDef, wgs84Bounds);
+
+  return {
+    elevationImage: warpedElev,
+    reliefImage: warpedRelief,
+    wgs84Bounds,
+    minElev: Number(minElev.toFixed(2)),
+    maxElev: Number(maxElev.toFixed(2))
+  };
 }
 
 export function getElevation(dem: any, lon: number, lat: number, crsDef?: string): number {

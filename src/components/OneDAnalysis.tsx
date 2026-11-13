@@ -45,7 +45,7 @@ import {
   ListFilter,
   RotateCcw
 } from 'lucide-react';
-import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, ImageOverlay, Polyline, Polygon, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as XLSX from 'xlsx';
 import { 
@@ -70,6 +70,8 @@ import {
   bankCoordsToKMLFile,
   extractBankLinesFromSections,
   detectBankStationsFromProfile,
+  buildDEMReliefOverlays,
+  DEMReliefOverlays,
   BankLineItem,
   BankLinesParseResult,
   CrossSection, 
@@ -158,6 +160,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
 
   // Flood Inundation Map Layer Toggles
+  const [showDemReliefLayer, setShowDemReliefLayer] = useState<boolean>(true);
+  const [demReliefStyle, setDemReliefStyle] = useState<'color' | 'relief'>('color');
   const [showFloodPolygons, setShowFloodPolygons] = useState<boolean>(true);
   const [showFloodBoundary, setShowFloodBoundary] = useState<boolean>(true);
   const [showWettedWidths, setShowWettedWidths] = useState<boolean>(true);
@@ -170,8 +174,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     CRS_LIST.find(c => c.code === 'EPSG:5256') || CRS_LIST[0]
   );
 
-  // File Inputs
+  // File Inputs & DEM Shaded Relief Overlays
   const [demFile, setDemFile] = useState<File | null>(null);
+  const [demOverlay, setDemOverlay] = useState<DEMReliefOverlays | null>(null);
   const [centerlineFile, setCenterlineFile] = useState<File | null>(null);
   const [originalCenterlineFile, setOriginalCenterlineFile] = useState<File | null>(null);
   const [originalCenterlineCoords, setOriginalCenterlineCoords] = useState<[number, number][]>([]);
@@ -280,7 +285,27 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
   const currentBasemap = BASEMAP_OPTIONS.find(b => b.id === activeBasemap) || BASEMAP_OPTIONS[0];
 
-  // Compute map bounds from centerline, bank lines, or cross-sections
+  // Build DEM Shaded Relief (Kabartma) Overlays matching Static Flood Simulation
+  useEffect(() => {
+    if (!demFile) {
+      setDemOverlay(null);
+      return;
+    }
+    let cancelled = false;
+    buildDEMReliefOverlays(demFile, selectedCRS.def)
+      .then((res) => {
+        if (!cancelled) setDemOverlay(res);
+      })
+      .catch((err) => {
+        console.error('DEM kabartma görüntüsü oluşturulamadı:', err);
+        if (!cancelled) setDemOverlay(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [demFile, selectedCRS.def]);
+
+  // Compute map bounds from centerline, bank lines, cross-sections, or DEM bounds
   const mapBounds = useMemo<[[number, number], [number, number]] | null>(() => {
     const allPoints: [number, number][] = [];
     if (centerlineCoords.length > 0) {
@@ -304,7 +329,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         allPoints.push(s.coordinates);
       }
     });
-    if (allPoints.length === 0) return null;
+    if (allPoints.length === 0) {
+      return demOverlay?.wgs84Bounds || null;
+    }
 
     let minLat = Infinity, maxLat = -Infinity;
     let minLon = Infinity, maxLon = -Infinity;
@@ -322,7 +349,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       [minLat - 0.002, minLon - 0.002],
       [maxLat + 0.002, maxLon + 0.002]
     ];
-  }, [centerlineCoords, detectedThalwegCoords, leftBankCoords, rightBankCoords, sections, structures]);
+  }, [centerlineCoords, detectedThalwegCoords, leftBankCoords, rightBankCoords, sections, structures, demOverlay]);
 
   // Handle Centerline KML Upload
   const handleCenterlineUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2722,6 +2749,31 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           </button>
                         )}
 
+                        {demOverlay && (
+                          <button
+                            onClick={() => setShowDemReliefLayer(!showDemReliefLayer)}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                              showDemReliefLayer
+                                ? 'bg-emerald-700 text-white shadow-xs'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                            title="DEM verisini kabartma (hillshade) olarak haritada göster/gizle"
+                          >
+                            <span>🏔️</span>
+                            <span>DEM Kabartma</span>
+                          </button>
+                        )}
+
+                        {demOverlay && showDemReliefLayer && (
+                          <button
+                            onClick={() => setDemReliefStyle(prev => prev === 'color' ? 'relief' : 'color')}
+                            className="px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                            title="Renkli hipsometrik kabartma ile gri gölge kabartma arasında geçiş yap"
+                          >
+                            <span>{demReliefStyle === 'color' ? '🎨 Renkli' : '🪨 Gri Kabartma'}</span>
+                          </button>
+                        )}
+
                         {structures.length > 0 && (
                           <button
                             onClick={() => setShowStructuresLayer(!showStructuresLayer)}
@@ -2758,11 +2810,21 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                     {/* Leaflet Map */}
                     <MapContainer
-                      center={centerlineCoords[0] || [39.92, 32.85]}
+                      center={centerlineCoords[0] || (demOverlay ? [(demOverlay.wgs84Bounds[0][0] + demOverlay.wgs84Bounds[1][0]) / 2, (demOverlay.wgs84Bounds[0][1] + demOverlay.wgs84Bounds[1][1]) / 2] : [39.92, 32.85])}
                       zoom={14}
+                      maxZoom={24}
                       className="w-full h-full"
                     >
-                      <TileLayer url={currentBasemap.url} attribution={currentBasemap.attribution} maxZoom={24} />
+                      <TileLayer url={currentBasemap.url} attribution={currentBasemap.attribution} maxZoom={24} maxNativeZoom={20} />
+
+                      {/* 0. DEM Kabartma (Shaded Relief) Katmanı */}
+                      {showDemReliefLayer && demOverlay && (
+                        <ImageOverlay
+                          url={demReliefStyle === 'color' ? demOverlay.elevationImage : demOverlay.reliefImage}
+                          bounds={demOverlay.wgs84Bounds}
+                          opacity={demReliefStyle === 'color' ? 0.78 : 0.6}
+                        />
+                      )}
 
                       {/* 1. Flood Inundation Polygons (Derinlik bazlı renk gradyanı ile) */}
                       {showFloodPolygons && floodMapData?.reachPolygons.map((reach) => (
@@ -4965,7 +5027,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           <button
                             onClick={() => {
                               setIsFileOpened(true);
-                              if (sections.length === 0) handleGenerateSections();
+                              if (sections.length === 0 && (centerlineFile || manualKmlFile)) {
+                                handleGenerateSections();
+                              }
                             }}
                             className="z-10 mt-1 py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer"
                           >
@@ -4976,13 +5040,56 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </div>
                     ) : (
                       <>
+                        {demOverlay && (
+                          <div className="absolute top-2.5 right-2.5 z-[400] flex items-center gap-1.5 bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-300 shadow-md">
+                            <button
+                              type="button"
+                              onClick={() => setShowDemReliefLayer(!showDemReliefLayer)}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                showDemReliefLayer
+                                  ? 'bg-emerald-700 text-white shadow-xs'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
+                              title="DEM verisini kabartma (hillshade) olarak haritada göster/gizle"
+                            >
+                              <span>🏔️</span>
+                              <span>DEM Kabartma</span>
+                            </button>
+                            {showDemReliefLayer && (
+                              <button
+                                type="button"
+                                onClick={() => setDemReliefStyle(prev => prev === 'color' ? 'relief' : 'color')}
+                                className="px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                                title="Renkli hipsometrik kabartma ile gri gölge kabartma arasında geçiş yap"
+                              >
+                                {demReliefStyle === 'color' ? '🎨 Renkli' : '🪨 Gri'}
+                              </button>
+                            )}
+                          </div>
+                        )}
                         <MapContainer
-                          center={centerlineCoords[0] || (sections[0]?.centerCoord) || [39.92, 32.85]}
+                          center={
+                            centerlineCoords[0] ||
+                            sections[0]?.centerCoord ||
+                            (demOverlay
+                              ? [
+                                  (demOverlay.wgs84Bounds[0][0] + demOverlay.wgs84Bounds[1][0]) / 2,
+                                  (demOverlay.wgs84Bounds[0][1] + demOverlay.wgs84Bounds[1][1]) / 2
+                                ]
+                              : [39.92, 32.85])
+                          }
                           zoom={13}
                           maxZoom={24}
                           className="w-full h-full"
                         >
-                          <TileLayer url={currentBasemap.url} attribution={currentBasemap.attribution} maxZoom={24} />
+                          <TileLayer url={currentBasemap.url} attribution={currentBasemap.attribution} maxZoom={24} maxNativeZoom={20} />
+                          {showDemReliefLayer && demOverlay && (
+                            <ImageOverlay
+                              url={demReliefStyle === 'color' ? demOverlay.elevationImage : demOverlay.reliefImage}
+                              bounds={demOverlay.wgs84Bounds}
+                              opacity={demReliefStyle === 'color' ? 0.85 : 0.6}
+                            />
+                          )}
                           {centerlineCoords.length > 0 && (
                             <Polyline positions={centerlineCoords} color="#0284c7" weight={4} opacity={0.9}>
                               <Tooltip sticky>Nehir Merkez Ekseni (Thalweg)</Tooltip>
