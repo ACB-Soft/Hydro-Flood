@@ -539,19 +539,28 @@ export interface ThalwegDetectionResult {
   elevationGain: number;              // Average bed depth gained (drop in elevation, e.g. 1.25m deeper)
   pointsSampled: number;
   pointsShifted: number;
+  usedBankConstraints: boolean;       // Whether scan was bounded by explicit bank lines / sections
   method: string;
 }
 
+export interface ThalwegDetectionOptions {
+  leftBankCoords?: [number, number][];   // [lat, lon]
+  rightBankCoords?: [number, number][];  // [lat, lon]
+  sections?: CrossSection[];
+}
+
 /**
- * Detects the true river thalweg (deepest channel axis) from DEM within a lateral corridor around the initial KML axis.
- * Performs orthogonal cross-swaths along the line to find local minimum elevation points and applies Savitzky-Golay / moving window smoothing.
+ * Detects the true river thalweg (deepest channel axis) from DEM strictly within the detected stream bed.
+ * If bank lines (left/right bank tops) or generated cross-sections exist, scans ONLY between the left and right banks.
+ * Otherwise, automatically detects the local channel bed & bank crests around the axis and stops at bank ridges so it never jumps to distant floodplain pits.
  */
 export async function detectThalwegCenterline(
   demFile: File,
   centerlineFile: File,
-  searchCorridorWidth: number = 60, // Total corridor width in meters (e.g. 60m = +/- 30m)
+  searchCorridorWidth: number = 60, // Fallback outer search width in meters when no bank lines exist
   sampleInterval: number = 10,       // Distance between thalweg probing points in meters
-  crsDef?: string
+  crsDef?: string,
+  options?: ThalwegDetectionOptions
 ): Promise<ThalwegDetectionResult> {
   const dem = await loadDEM(demFile);
   const centerline = await parseKML(centerlineFile);
@@ -561,24 +570,79 @@ export async function detectThalwegCenterline(
     throw new Error("Nehir aksı çok kısa.");
   }
 
-  const halfCorridor = Math.max(5, searchCorridorWidth / 2);
-  const lateralStep = 1.5; // Probe DEM every 1.5m across the perpendicular transect
+  // Resolve stream bed boundaries (Left & Right Bank Tops) if available
+  let leftBankCoords = options?.leftBankCoords && options.leftBankCoords.length >= 2 ? options.leftBankCoords : [];
+  let rightBankCoords = options?.rightBankCoords && options.rightBankCoords.length >= 2 ? options.rightBankCoords : [];
+
+  if ((leftBankCoords.length < 2 || rightBankCoords.length < 2) && options?.sections && options.sections.length >= 2) {
+    const extracted = extractBankLinesFromSections(options.sections);
+    if (leftBankCoords.length < 2) leftBankCoords = extracted.leftBankCoords;
+    if (rightBankCoords.length < 2) rightBankCoords = extracted.rightBankCoords;
+  }
+
+  const hasExplicitBanks = leftBankCoords.length >= 2 && rightBankCoords.length >= 2;
+  const leftBankGeo = hasExplicitBanks
+    ? turf.lineString(leftBankCoords.map(([lat, lon]) => [lon, lat]))
+    : null;
+  const rightBankGeo = hasExplicitBanks
+    ? turf.lineString(rightBankCoords.map(([lat, lon]) => [lon, lat]))
+    : null;
+
+  const fallbackHalfCorridor = Math.max(5, Math.min(30, searchCorridorWidth / 2));
+  const lateralStep = 1.0; // Probe DEM every 1.0m across the perpendicular transect
+
+  const getSignedOffset = (centerPt: Feature<any>, targetPt: Feature<any>, angleRightDeg: number): number => {
+    const dist = turf.distance(centerPt, targetPt, { units: 'meters' });
+    if (dist < 0.01) return 0;
+    const b = turf.bearing(centerPt, targetPt);
+    const diffRad = ((b - angleRightDeg) * Math.PI) / 180;
+    return dist * Math.cos(diffRad);
+  };
+
+  const getPointAtOffset = (centerPt: Feature<any>, offset: number, angleLeft: number, angleRight: number): Feature<any> => {
+    if (offset < -0.001) {
+      return turf.destination(centerPt, Math.abs(offset), angleLeft, { units: 'meters' });
+    } else if (offset > 0.001) {
+      return turf.destination(centerPt, offset, angleRight, { units: 'meters' });
+    }
+    return centerPt;
+  };
 
   const rawThalwegPoints: {
+    origPt: Feature<any>;
     origCoord: [number, number]; // [lat, lon]
     thalwegCoord: [number, number]; // [lat, lon]
     origElev: number;
     minElev: number;
     shiftDist: number;
+    bestOffset: number;
+    minBoundOffset: number;
+    maxBoundOffset: number;
+    angleLeft: number;
+    angleRight: number;
     distanceAlong: number;
   }[] = [];
 
   const actualStep = Math.max(5, sampleInterval);
-
+  const sampleDistances: number[] = [];
   for (let d = 0; d <= totalLength; d += actualStep) {
+    sampleDistances.push(d);
+  }
+  if (sampleDistances.length === 0 || totalLength - sampleDistances[sampleDistances.length - 1] > 1.5) {
+    sampleDistances.push(totalLength);
+  }
+
+  let bankConstrainedStations = 0;
+  let prevBestOffset = 0;
+
+  for (let sIdx = 0; sIdx < sampleDistances.length; sIdx++) {
+    const d = sampleDistances[sIdx];
     const pt = turf.along(centerline, d, { units: 'meters' });
-    const ptNext = turf.along(centerline, Math.min(d + 1, totalLength), { units: 'meters' });
-    const bearing = turf.bearing(pt, ptNext);
+    const dPrev = Math.max(0, d - 1);
+    const dNext = Math.min(totalLength, d + 1);
+    const ptPrev = turf.along(centerline, dPrev, { units: 'meters' });
+    const ptNext = turf.along(centerline, dNext, { units: 'meters' });
+    const bearing = turf.bearing(ptPrev, ptNext);
 
     const angleLeft = bearing - 90;
     const angleRight = bearing + 90;
@@ -586,64 +650,198 @@ export async function detectThalwegCenterline(
     const [origLon, origLat] = pt.geometry.coordinates;
     const origZ = getElevation(dem, origLon, origLat, crsDef);
 
-    let lowestZ = isNaN(origZ) ? 999999 : origZ;
-    let bestLon = origLon;
-    let bestLat = origLat;
-    let bestOffset = 0; // meters from center (+ = right, - = left)
+    // 1. Determine Stream Bed Bounds [minScanOffset, maxScanOffset] at this station
+    let minScanOffset = -fallbackHalfCorridor;
+    let maxScanOffset = fallbackHalfCorridor;
+    let stationHasExplicitBounds = false;
 
-    // Scan laterally perpendicular to river axis
-    for (let offset = -halfCorridor; offset <= halfCorridor; offset += lateralStep) {
-      let probePt;
-      if (offset < 0) {
-        probePt = turf.destination(pt, Math.abs(offset), angleLeft, { units: 'meters' });
-      } else if (offset > 0) {
-        probePt = turf.destination(pt, offset, angleRight, { units: 'meters' });
-      } else {
-        probePt = pt;
-      }
+    if (leftBankGeo && rightBankGeo) {
+      const probeSpan = 150; // meters each side to locate bank lines
+      const leftEnd = turf.destination(pt, probeSpan, angleLeft, { units: 'meters' });
+      const rightEnd = turf.destination(pt, probeSpan, angleRight, { units: 'meters' });
+      const transectLine = turf.lineString([leftEnd.geometry.coordinates, rightEnd.geometry.coordinates]);
 
-      const [pLon, pLat] = probePt.geometry.coordinates;
-      const z = getElevation(dem, pLon, pLat, crsDef);
+      const findBankOffset = (bankGeo: Feature<LineString>): number | null => {
+        const isects = turf.lineIntersect(transectLine, bankGeo);
+        if (isects.features.length > 0) {
+          let bestOff: number | null = null;
+          let bestAbs = Infinity;
+          for (const f of isects.features) {
+            const off = getSignedOffset(pt, f, angleRight);
+            if (Math.abs(off) < bestAbs) {
+              bestAbs = Math.abs(off);
+              bestOff = off;
+            }
+          }
+          if (bestOff !== null) return bestOff;
+        }
+        // Fallback near reach ends: orthogonal projection of nearest bank vertex
+        const nearest = turf.nearestPointOnLine(bankGeo, pt);
+        const nDist = turf.distance(pt, nearest, { units: 'meters' });
+        if (nDist <= probeSpan) {
+          return getSignedOffset(pt, nearest, angleRight);
+        }
+        return null;
+      };
 
-      if (!isNaN(z)) {
-        // We look for deeper points than current lowest
-        if (z < lowestZ) {
-          lowestZ = z;
-          bestLon = pLon;
-          bestLat = pLat;
-          bestOffset = offset;
+      const lOff = findBankOffset(leftBankGeo);
+      const rOff = findBankOffset(rightBankGeo);
+
+      if (lOff !== null && rOff !== null) {
+        const rawMin = Math.min(lOff, rOff);
+        const rawMax = Math.max(lOff, rOff);
+        const bedWidth = rawMax - rawMin;
+
+        // Sanity guard: bank width must be physically reasonable (1m .. 250m)
+        if (bedWidth >= 1.0 && bedWidth <= 250) {
+          // Slight inward margin so we don't snap to the top crest edge of the bank slope
+          const inwardMargin = bedWidth > 4.0 ? Math.min(0.5, bedWidth * 0.05) : 0;
+          minScanOffset = rawMin + inwardMargin;
+          maxScanOffset = rawMax - inwardMargin;
+          stationHasExplicitBounds = true;
+          bankConstrainedStations++;
         }
       }
     }
 
+    // 2. Sample DEM laterally across the transect
+    const sampleMin = stationHasExplicitBounds ? minScanOffset : -fallbackHalfCorridor;
+    const sampleMax = stationHasExplicitBounds ? maxScanOffset : fallbackHalfCorridor;
+
+    const samples: { offset: number; x: number; z: number; lat: number; lon: number }[] = [];
+    for (let offset = sampleMin; offset <= sampleMax + 1e-4; offset += lateralStep) {
+      const clampedOff = Math.min(offset, sampleMax);
+      const probePt = getPointAtOffset(pt, clampedOff, angleLeft, angleRight);
+      const [pLon, pLat] = probePt.geometry.coordinates;
+      const z = getElevation(dem, pLon, pLat, crsDef);
+      if (!isNaN(z)) {
+        samples.push({
+          offset: clampedOff,
+          x: clampedOff - sampleMin,
+          z,
+          lat: pLat,
+          lon: pLon
+        });
+      }
+      if (clampedOff >= sampleMax) break;
+    }
+
+    // 3. If no explicit banks exist, constrain to local detected stream channel & bank-crest barrier
+    let bedSearchMin = sampleMin;
+    let bedSearchMax = sampleMax;
+
+    if (!stationHasExplicitBounds && samples.length >= 5) {
+      // Detect channel banks from the profile anchored around offset = 0
+      const zeroX = -sampleMin;
+      const detected = detectBankStationsFromProfile(
+        samples.map(s => ({ x: s.x, z: s.z })),
+        zeroX
+      );
+
+      let localMinOff = detected.bankLeftX + sampleMin;
+      let localMaxOff = detected.bankRightX + sampleMin;
+
+      // Locate initial bed anchor near offset=0 (or tracked prevBestOffset)
+      const anchorOff = sIdx > 0 ? Math.max(-10, Math.min(10, prevBestOffset)) : 0;
+      const anchorRadius = 8.0;
+      let anchorIdx = 0;
+      let anchorMinZ = Infinity;
+      for (let i = 0; i < samples.length; i++) {
+        if (Math.abs(samples[i].offset - anchorOff) <= anchorRadius && samples[i].z < anchorMinZ) {
+          anchorMinZ = samples[i].z;
+          anchorIdx = i;
+        }
+      }
+      if (anchorMinZ === Infinity) {
+        let closestD = Infinity;
+        for (let i = 0; i < samples.length; i++) {
+          const distToAnchor = Math.abs(samples[i].offset - anchorOff);
+          if (distToAnchor < closestD) {
+            closestD = distToAnchor;
+            anchorIdx = i;
+            anchorMinZ = samples[i].z;
+          }
+        }
+      }
+
+      // Bank-crest / levee barrier guard:
+      // Walk left and right from local bed anchor; stop if we climb over a bank ridge (>0.45m rise then drop)
+      let leftCrestOff = samples[0].offset;
+      let maxLeftZ = anchorMinZ;
+      for (let i = anchorIdx - 1; i >= 0; i--) {
+        if (samples[i].z > maxLeftZ) maxLeftZ = samples[i].z;
+        if (maxLeftZ - anchorMinZ > 0.45 && samples[i].z < maxLeftZ - 0.15) {
+          leftCrestOff = samples[i + 1].offset;
+          break;
+        }
+      }
+
+      let rightCrestOff = samples[samples.length - 1].offset;
+      let maxRightZ = anchorMinZ;
+      for (let i = anchorIdx + 1; i < samples.length; i++) {
+        if (samples[i].z > maxRightZ) maxRightZ = samples[i].z;
+        if (maxRightZ - anchorMinZ > 0.45 && samples[i].z < maxRightZ - 0.15) {
+          rightCrestOff = samples[i - 1].offset;
+          break;
+        }
+      }
+
+      // Intersect detected bank bounds with crest barrier & tight channel limit
+      bedSearchMin = Math.max(localMinOff, leftCrestOff, -Math.min(fallbackHalfCorridor, 20));
+      bedSearchMax = Math.min(localMaxOff, rightCrestOff, Math.min(fallbackHalfCorridor, 20));
+
+      if (bedSearchMin > bedSearchMax) {
+        bedSearchMin = Math.max(leftCrestOff, -10);
+        bedSearchMax = Math.min(rightCrestOff, 10);
+      }
+    }
+
+    // 4. Find lowest DEM elevation strictly inside [bedSearchMin, bedSearchMax]
+    let lowestZ = Infinity;
+    let bestLon = origLon;
+    let bestLat = origLat;
+    let bestOffset = 0;
+
+    for (const s of samples) {
+      if (s.offset >= bedSearchMin - 1e-4 && s.offset <= bedSearchMax + 1e-4) {
+        if (s.z < lowestZ) {
+          lowestZ = s.z;
+          bestLon = s.lon;
+          bestLat = s.lat;
+          bestOffset = s.offset;
+        }
+      }
+    }
+
+    if (lowestZ === Infinity) {
+      lowestZ = isNaN(origZ) ? 0 : origZ;
+      bestOffset = Math.max(bedSearchMin, Math.min(bedSearchMax, 0));
+      const clampedPt = getPointAtOffset(pt, bestOffset, angleLeft, angleRight);
+      bestLon = clampedPt.geometry.coordinates[0];
+      bestLat = clampedPt.geometry.coordinates[1];
+    }
+
+    prevBestOffset = bestOffset;
     const shiftDist = Math.abs(bestOffset);
+
     rawThalwegPoints.push({
+      origPt: pt,
       origCoord: [origLat, origLon],
       thalwegCoord: [bestLat, bestLon],
       origElev: isNaN(origZ) ? lowestZ : origZ,
       minElev: lowestZ,
       shiftDist,
+      bestOffset,
+      minBoundOffset: bedSearchMin,
+      maxBoundOffset: bedSearchMax,
+      angleLeft,
+      angleRight,
       distanceAlong: d
     });
   }
 
-  // Ensure last point of line is included
-  if (rawThalwegPoints.length > 0 && rawThalwegPoints[rawThalwegPoints.length - 1].distanceAlong < totalLength - 2) {
-    const ptEnd = turf.along(centerline, totalLength, { units: 'meters' });
-    const [eLon, eLat] = ptEnd.geometry.coordinates;
-    const eZ = getElevation(dem, eLon, eLat, crsDef);
-    rawThalwegPoints.push({
-      origCoord: [eLat, eLon],
-      thalwegCoord: [eLat, eLon],
-      origElev: isNaN(eZ) ? 0 : eZ,
-      minElev: isNaN(eZ) ? 0 : eZ,
-      shiftDist: 0,
-      distanceAlong: totalLength
-    });
-  }
-
   // Hydrodynamic line smoothing: River thalwegs do not zigzag abruptly.
-  // Apply a 5-point moving window smoothing to the detected coordinates
+  // Apply a 5-point moving window smoothing, then clamp each vertex inside its station's stream bed bounds.
   const smoothedCoords: [number, number][] = [];
   const windowRadius = 2; // window of 5 points
 
@@ -662,7 +860,21 @@ export async function detectThalwegCenterline(
       }
     }
 
-    smoothedCoords.push([sumLat / count, sumLon / count]);
+    let sLat = sumLat / count;
+    let sLon = sumLon / count;
+
+    // Guarantee smoothed vertex never escapes the detected stream bed bounds
+    const item = rawThalwegPoints[i];
+    const smoothedPt = turf.point([sLon, sLat]);
+    const smoothedOffset = getSignedOffset(item.origPt, smoothedPt, item.angleRight);
+    if (smoothedOffset < item.minBoundOffset || smoothedOffset > item.maxBoundOffset) {
+      const clampedOffset = Math.max(item.minBoundOffset, Math.min(item.maxBoundOffset, smoothedOffset));
+      const clampedPt = getPointAtOffset(item.origPt, clampedOffset, item.angleLeft, item.angleRight);
+      sLon = clampedPt.geometry.coordinates[0];
+      sLat = clampedPt.geometry.coordinates[1];
+    }
+
+    smoothedCoords.push([sLat, sLon]);
   }
 
   // Calculate statistics
@@ -687,6 +899,7 @@ export async function detectThalwegCenterline(
 
   const avgShift = rawThalwegPoints.length > 0 ? totalShift / rawThalwegPoints.length : 0;
   const avgElevGain = validElevGainCount > 0 ? totalElevGain / validElevGainCount : 0;
+  const usedBankConstraints = bankConstrainedStations > 0;
 
   return {
     originalCoords: rawThalwegPoints.map(p => p.origCoord),
@@ -696,7 +909,10 @@ export async function detectThalwegCenterline(
     elevationGain: Number(avgElevGain.toFixed(2)),
     pointsSampled: rawThalwegPoints.length,
     pointsShifted: shiftedCount,
-    method: `DEM taban taraması (±${halfCorridor}m koridor, ${lateralStep}m adım) ve hidrodinamik yumuşatma uygulandı.`
+    usedBankConstraints,
+    method: usedBankConstraints
+      ? `Tespit edilen dere yatağı (Sol-Sağ Şev Üstü) içerisinde (${bankConstrainedStations}/${rawThalwegPoints.length} kesitte yatak içi sınırlandırma, ${lateralStep}m adım) tarandı.`
+      : `Otomatik dere yatağı sınırlandırması (şev kırığı ve sedde eşiği kontrollü ±${Math.min(fallbackHalfCorridor, 20)}m tarama, ${lateralStep}m adım) uygulandı.`
   };
 }
 
@@ -1042,18 +1258,20 @@ export function extractBankLinesFromSections(sections: CrossSection[]): {
     const [lLon, lLat] = leftPt.geometry.coordinates;
     leftBankCoords.push([lLat, lLon]);
 
-    // Centerline / Thalweg geographic position
-    let talvegFrac = 0.5;
-    let minZ = sec.profile[0].z;
-    let minXVal = sec.profile[0].x;
-    for (const p of sec.profile) {
-      if (p.z < minZ) {
-        minZ = p.z;
-        minXVal = p.x;
+    // Centerline / Channel Axis geographic position
+    let axisX = sec.centerlineX;
+    if (axisX === undefined || isNaN(axisX)) {
+      let minZ = Infinity;
+      axisX = (sec.bankLeftX + sec.bankRightX) / 2;
+      for (const p of sec.profile) {
+        if (p.x >= sec.bankLeftX && p.x <= sec.bankRightX && p.z < minZ) {
+          minZ = p.z;
+          axisX = p.x;
+        }
       }
     }
-    talvegFrac = Math.max(0, Math.min(1, (minXVal - minX) / totalW));
-    const centerPt = turf.along(lineGeo, totalDistMeters * talvegFrac, { units: 'meters' });
+    const axisFrac = Math.max(0, Math.min(1, (axisX - minX) / totalW));
+    const centerPt = turf.along(lineGeo, totalDistMeters * axisFrac, { units: 'meters' });
     const [cLon, cLat] = centerPt.geometry.coordinates;
     centerlineCoords.push([cLat, cLon]);
 

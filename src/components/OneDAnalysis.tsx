@@ -348,8 +348,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
   };
 
-  // Detect True River Thalweg (Yatak Tabanı) from DEM
-  const handleDetectThalwegCenterline = async (searchCorridorWidth: number = 60) => {
+  // Detect True River Thalweg (Yatak Tabanı) from DEM strictly within detected stream bed
+  const handleDetectThalwegCenterline = async (searchCorridorWidth: number = 40) => {
     if (!demFile) {
       alert("Lütfen önce bir DEM (GeoTIFF) dosyası yükleyin.");
       return;
@@ -367,7 +367,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         targetFile,
         searchCorridorWidth,
         10, // 10m spacing
-        selectedCRS.def
+        selectedCRS.def,
+        {
+          leftBankCoords: leftBankCoords.length >= 2 ? leftBankCoords : undefined,
+          rightBankCoords: rightBankCoords.length >= 2 ? rightBankCoords : undefined,
+          sections: sections.length >= 2 ? sections : undefined
+        }
       );
 
       setThalwegResult(result);
@@ -384,6 +389,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       setCenterlineCoords(result.adjustedCoords);
       setUseDetectedThalweg(true);
 
+      // Recalibrate existing cross-sections to anchor Ana Kanal on the newly detected thalweg
+      if (sections.length > 0) {
+        const updated = calibrateSectionsWithCenterline(sections, result.adjustedCoords);
+        setSections(updated);
+        setOriginalSections(updated);
+      }
     } catch (err: any) {
       console.error("DEM Thalweg tespiti hatası:", err);
       alert("DEM verisinden dere ekseni tespit edilirken bir hata oluştu: " + (err.message || err));
@@ -401,10 +412,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       setCenterlineFile(thalwegFile);
       setCenterlineCoords(detectedThalwegCoords);
       setUseDetectedThalweg(true);
+      if (sections.length > 0) {
+        const updated = calibrateSectionsWithCenterline(sections, detectedThalwegCoords);
+        setSections(updated);
+        setOriginalSections(updated);
+      }
     } else if (!useThalweg && originalCenterlineFile && originalCenterlineCoords.length > 0) {
       setCenterlineFile(originalCenterlineFile);
       setCenterlineCoords(originalCenterlineCoords);
       setUseDetectedThalweg(false);
+      if (sections.length > 0) {
+        const updated = calibrateSectionsWithCenterline(sections, originalCenterlineCoords);
+        setSections(updated);
+        setOriginalSections(updated);
+      }
     }
   };
 
@@ -3503,15 +3524,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     {centerlineFile && demFile && (
                       <button
                         type="button"
-                        onClick={() => handleDetectThalwegCenterline(60)}
+                        onClick={() => handleDetectThalwegCenterline(40)}
                         disabled={isDetectingThalweg}
                         className="text-[10px] font-bold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 bg-cyan-50 hover:bg-cyan-100 px-1.5 py-0.5 rounded-md border border-cyan-200 cursor-pointer transition-colors"
-                        title="DEM verisini tarayarak en düşük kota sahip gerçek yatak tabanını (thalweg) otomatik tespit eder"
+                        title={
+                          (leftBankCoords.length >= 2 && rightBankCoords.length >= 2) || sections.length >= 2
+                            ? "Tespit edilen dere yatağı (Sol-Sağ Şev Üstü) içerisinde en derin tabanı (thalweg) tarar"
+                            : "Dere yatağı şev kırıkları içerisinde en derin yatak tabanını (thalweg) tarar"
+                        }
                       >
                         {isDetectingThalweg ? (
                           <>
                             <RefreshCw size={11} className="animate-spin text-cyan-700" />
-                            <span>DEM Taranıyor...</span>
+                            <span>Dere Yatağı Taranıyor...</span>
                           </>
                         ) : (
                           <>
@@ -3570,6 +3595,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             </div>
                           </div>
 
+                          <p className="text-[9px] text-cyan-800 bg-cyan-50/70 px-1.5 py-1 rounded border border-cyan-100 leading-tight">
+                            {thalwegResult.method}
+                          </p>
+
                           <div className="grid grid-cols-3 gap-1 text-center py-0.5">
                             <div className="bg-slate-50 p-1 rounded border border-slate-200/60">
                               <span className="text-slate-500 block text-[9px]">Ortalama Kayma</span>
@@ -3623,13 +3652,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                       {/* Bilgilendirme ve Hızlı Buton (Eğer henüz çalıştırılmadıysa) */}
                       {!thalwegResult && demFile && (
-                        <div className="pt-1 border-t border-blue-200/70 flex items-center justify-between">
-                          <span className="text-[9px] text-blue-700">
-                            KML ekseni civarındaki en derin kotlar tespit edilsin mi?
+                        <div className="pt-1 border-t border-blue-200/70 flex items-center justify-between gap-2">
+                          <span className="text-[9px] text-blue-700 leading-tight">
+                            {(leftBankCoords.length >= 2 && rightBankCoords.length >= 2) || sections.length >= 2
+                              ? 'Tespit edilen dere yatağı (şev üstleri) içinde gerçek taban bulunsun mu?'
+                              : 'Dere yatağı içindeki en derin yatak tabanı tespit edilsin mi?'}
                           </span>
                           <button
                             type="button"
-                            onClick={() => handleDetectThalwegCenterline(60)}
+                            onClick={() => handleDetectThalwegCenterline(40)}
                             disabled={isDetectingThalweg}
                             className="px-2 py-0.5 bg-cyan-700 hover:bg-cyan-800 text-white rounded font-bold text-[9px] cursor-pointer shadow-xs transition-colors shrink-0"
                           >
