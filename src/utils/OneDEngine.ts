@@ -16,11 +16,15 @@ export interface CrossSection {
   centerCoord?: [number, number]; // [lat, lon]
   cutLine?: [[number, number], [number, number]]; // [[latLeft, lonLeft], [latRight, lonRight]]
   minElevation: number;
+  channelBedElevation?: number; // Ana kanal [bankLeftX, bankRightX] içindeki gerçek taban kotu
   maxElevation: number;
   bankLeftX: number;
   bankRightX: number;
   centerlineX?: number;     // Yüklenen dere ekseni istasyonu (Centerline intersection station)
   talvegX?: number;         // En derin yatak istasyonu (Thalweg station)
+  nMain?: number;           // Kesite özgü ana kanal Manning pürüzlülüğü
+  nLOB?: number;            // Kesite özgü sol taşkın ovası Manning pürüzlülüğü
+  nROB?: number;            // Kesite özgü sağ taşkın ovası Manning pürüzlülüğü
   angleAdjustment?: number; // deg rotasyon sapması (örn: -7°, +9°)
   isTrimmed?: boolean;      // kesişmeyi önlemek için boyu güvenle kısaltıldı mı?
   isIntersecting?: boolean; // hâlâ komşu bir kesitle kesişiyor mu?
@@ -45,11 +49,91 @@ export interface RoutingResult {
   bankLeftZ: number;
   bankRightZ: number;
   discharge?: number;
+  alpha?: number;
+  criticalWSE?: number;
+  flowRegime?: 'subcritical' | 'critical' | 'supercritical' | 'jump';
   structureEffect?: {
     structureName: string;
     flowState: 'free' | 'pressure' | 'overtopping';
     backwaterRise: number;
   };
+}
+
+export function computeChannelBedElevation(
+  profile: ProfilePoint[],
+  bankLeftX: number,
+  bankRightX: number,
+  fallbackMinZ?: number
+): number {
+  if (!profile || profile.length === 0) return fallbackMinZ ?? 0;
+  let minBedZ = Infinity;
+  for (const pt of profile) {
+    if (pt.x >= bankLeftX && pt.x <= bankRightX) {
+      if (pt.z < minBedZ) minBedZ = pt.z;
+    }
+  }
+  if (minBedZ < Infinity) return Number(minBedZ.toFixed(2));
+  const midX = (bankLeftX + bankRightX) / 2;
+  let closestZ = profile[0].z;
+  let closestDist = Infinity;
+  for (const pt of profile) {
+    const d = Math.abs(pt.x - midX);
+    if (d < closestDist) {
+      closestDist = d;
+      closestZ = pt.z;
+    }
+  }
+  return Number((fallbackMinZ !== undefined ? Math.min(closestZ, fallbackMinZ) : closestZ).toFixed(2));
+}
+
+export function getChannelBedElevation(section: CrossSection): number {
+  if (section.channelBedElevation != null && !isNaN(section.channelBedElevation)) {
+    return section.channelBedElevation;
+  }
+  return computeChannelBedElevation(
+    section.profile || [],
+    section.bankLeftX,
+    section.bankRightX,
+    section.minElevation
+  );
+}
+
+/**
+ * Determines river flow direction across all sections using least-squares linear regression
+ * of main-channel bed elevations vs stationing.
+ * Returns true if sections[0] is upstream and sections[N-1] is downstream.
+ */
+export function detectFlowDirection(sections: CrossSection[]): boolean {
+  if (sections.length < 2) return true;
+  const n = sections.length;
+  let sumX = 0;
+  let sumZ = 0;
+  const pts = sections.map(s => {
+    const x = s.station;
+    const z = getChannelBedElevation(s);
+    sumX += x;
+    sumZ += z;
+    return { x, z };
+  });
+  const meanX = sumX / n;
+  const meanZ = sumZ / n;
+  let covXZ = 0;
+  let varX = 0;
+  for (const p of pts) {
+    const dx = p.x - meanX;
+    covXZ += dx * (p.z - meanZ);
+    varX += dx * dx;
+  }
+  if (varX > 1e-6) {
+    const slope = covXZ / varX;
+    if (Math.abs(slope) > 1e-7) {
+      return slope < 0; // Negative dZ/dStation => higher station is downstream
+    }
+  }
+  const third = Math.max(1, Math.floor(n / 3));
+  const avgStart = pts.slice(0, third).reduce((a, b) => a + b.z, 0) / third;
+  const avgEnd = pts.slice(n - third).reduce((a, b) => a + b.z, 0) / third;
+  return avgStart >= avgEnd;
 }
 
 export interface DynamicTimeStepResult {
@@ -606,11 +690,14 @@ export function calibrateSectionsWithBankLines(
       }
     }
 
+    const resolvedBedZ = minBedZ < Infinity ? Number(minBedZ.toFixed(2)) : sec.minElevation;
+
     return {
       ...sec,
       bankLeftX: Number(finalBankLeftX.toFixed(2)),
       bankRightX: Number(finalBankRightX.toFixed(2)),
       talvegX: Number(talvegX.toFixed(2)),
+      channelBedElevation: resolvedBedZ,
       profile: newProfile
     };
   });
@@ -642,14 +729,14 @@ export function calculateDownstreamSlopeFromDEM(
   const sStart = sections[0];
   const sEnd = sections[sections.length - 1];
   const totalDist = Math.abs(sEnd.station - sStart.station);
-  
-  // Check elevation trend to determine downstream end
-  const startIsUpstream = sStart.minElevation >= sEnd.minElevation;
+
+  // Determine true physical flow direction across all channel beds
+  const startIsUpstream = detectFlowDirection(sections);
   const dsEndSec = startIsUpstream ? sEnd : sStart;
-  
+
   // Target downstream reach length: last 150m - 800m or 25% of river reach
   const targetDsLength = Math.max(150, Math.min(800, totalDist * 0.25));
-  
+
   let dsStartSec = dsEndSec;
   if (startIsUpstream) {
     for (let i = sections.length - 2; i >= 0; i--) {
@@ -665,7 +752,12 @@ export function calculateDownstreamSlopeFromDEM(
     }
   }
 
-  const dsDeltaZ = dsStartSec.minElevation - dsEndSec.minElevation;
+  const dsStartBed = getChannelBedElevation(dsStartSec);
+  const dsEndBed = getChannelBedElevation(dsEndSec);
+  const sStartBed = getChannelBedElevation(sStart);
+  const sEndBed = getChannelBedElevation(sEnd);
+
+  const dsDeltaZ = dsStartBed - dsEndBed;
   const dsDist = Math.abs(dsStartSec.station - dsEndSec.station);
 
   let rawSlope = 0.001;
@@ -673,12 +765,11 @@ export function calculateDownstreamSlopeFromDEM(
 
   if (dsDeltaZ > 0.05 && dsDist > 10) {
     rawSlope = dsDeltaZ / dsDist;
-    method = `Mansap son ${Math.round(dsDist)} m yatak taban kot farkından (ΔZ = ${dsDeltaZ.toFixed(2)} m) hesaplandı.`;
+    method = `Mansap son ${Math.round(dsDist)} m ana kanal taban kot farkından (ΔZ = ${dsDeltaZ.toFixed(2)} m) hesaplandı.`;
   } else {
-    // If downstream local bed has adverse slope or ponding, use overall river bed slope
-    const overallDeltaZ = Math.abs(sStart.minElevation - sEnd.minElevation);
+    const overallDeltaZ = Math.abs(sStartBed - sEndBed);
     rawSlope = overallDeltaZ / Math.max(1, totalDist);
-    method = `Toplam akarsu menzili ortalama taban kot farkından (ΔZ = ${overallDeltaZ.toFixed(2)} m, L = ${Math.round(totalDist)} m) hesaplandı.`;
+    method = `Toplam akarsu menzili ana kanal taban kot farkından (ΔZ = ${overallDeltaZ.toFixed(2)} m, L = ${Math.round(totalDist)} m) hesaplandı.`;
   }
 
   const boundedSlope = Math.max(0.0001, Math.min(0.15, rawSlope));
@@ -689,24 +780,89 @@ export function calculateDownstreamSlopeFromDEM(
     slope: finalSlope,
     percent,
     method,
-    deltaZ: dsDeltaZ > 0 ? dsDeltaZ : Math.abs(sStart.minElevation - sEnd.minElevation),
+    deltaZ: dsDeltaZ > 0 ? dsDeltaZ : Math.abs(sStartBed - sEndBed),
     reachLength: dsDist > 10 ? dsDist : totalDist,
-    upstreamZ: Number(dsStartSec.minElevation.toFixed(2)),
-    downstreamZ: Number(dsEndSec.minElevation.toFixed(2))
+    upstreamZ: Number(dsStartBed.toFixed(2)),
+    downstreamZ: Number(dsEndBed.toFixed(2))
   };
 }
 
-export async function loadDEM(file: File) {
-  const arrayBuffer = await file.arrayBuffer();
-  const tiff = await GeoTIFF.fromArrayBuffer(arrayBuffer);
-  const image = await tiff.getImage();
-  const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY]
-  const width = image.getWidth();
-  const height = image.getHeight();
-  const rasters = await image.readRasters();
-  const data = rasters[0] as Float32Array | Int16Array | Uint16Array;
-  
-  return { bbox, width, height, data };
+export interface LoadedDEMRaster {
+  bbox: number[];
+  width: number;
+  height: number;
+  data: Float32Array | Int16Array | Uint16Array;
+  noDataVal: number;
+}
+
+const demRasterCache = new WeakMap<File, Promise<LoadedDEMRaster>>();
+
+export async function loadDEM(file: File): Promise<LoadedDEMRaster> {
+  const cached = demRasterCache.get(file);
+  if (cached) return cached;
+
+  const promise = (async (): Promise<LoadedDEMRaster> => {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.asc')) {
+      const text = await file.text();
+      const lines = text.trim().split(/\r?\n/);
+      let ncols = 0, nrows = 0, xllcorner = 0, yllcorner = 0, cellsize = 10, noDataVal = -9999;
+      let isCenter = false;
+      let dataStartIdx = 0;
+      for (let i = 0; i < Math.min(12, lines.length); i++) {
+        const parts = lines[i].trim().split(/\s+/);
+        if (parts.length < 2) continue;
+        const key = parts[0].toLowerCase();
+        const val = Number(parts[1]);
+        if (key === 'ncols') { ncols = val; dataStartIdx = i + 1; }
+        else if (key === 'nrows') { nrows = val; dataStartIdx = i + 1; }
+        else if (key === 'xllcorner') { xllcorner = val; dataStartIdx = i + 1; }
+        else if (key === 'xllcenter') { xllcorner = val; isCenter = true; dataStartIdx = i + 1; }
+        else if (key === 'yllcorner') { yllcorner = val; dataStartIdx = i + 1; }
+        else if (key === 'yllcenter') { yllcorner = val; isCenter = true; dataStartIdx = i + 1; }
+        else if (key === 'cellsize') { cellsize = val; dataStartIdx = i + 1; }
+        else if (key === 'nodata_value') { noDataVal = val; dataStartIdx = i + 1; }
+        else break;
+      }
+      if (isCenter) {
+        xllcorner -= cellsize * 0.5;
+        yllcorner -= cellsize * 0.5;
+      }
+      const parsed = new Float32Array(Math.max(1, ncols * nrows));
+      parsed.fill(NaN);
+      let idx = 0;
+      for (let i = dataStartIdx; i < lines.length && idx < parsed.length; i++) {
+        const tokens = lines[i].trim().split(/\s+/);
+        for (let j = 0; j < tokens.length && idx < parsed.length; j++) {
+          if (tokens[j] === '') continue;
+          const num = Number(tokens[j]);
+          parsed[idx++] = num === noDataVal ? NaN : num;
+        }
+      }
+      return {
+        bbox: [xllcorner, yllcorner, xllcorner + ncols * cellsize, yllcorner + nrows * cellsize],
+        width: ncols,
+        height: nrows,
+        data: parsed,
+        noDataVal
+      };
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const tiff = await GeoTIFF.fromArrayBuffer(arrayBuffer);
+    const image = await tiff.getImage();
+    const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY]
+    const width = image.getWidth();
+    const height = image.getHeight();
+    const noDataVal = image.getGDALNoData() ?? -9999;
+    const rasters = await image.readRasters();
+    const data = rasters[0] as Float32Array | Int16Array | Uint16Array;
+
+    return { bbox, width, height, data, noDataVal };
+  })();
+
+  demRasterCache.set(file, promise);
+  return promise;
 }
 
 export interface DEMReliefOverlays {
@@ -2111,6 +2267,7 @@ export function sampleCrossSectionProfile(
   profile: ProfilePoint[];
   cutLine: [[number, number], [number, number]];
   minElevation: number;
+  channelBedElevation: number;
   maxElevation: number;
   bankLeftX: number;
   bankRightX: number;
@@ -2186,10 +2343,14 @@ export function sampleCrossSectionProfile(
   ];
 
   const elevations = profile.map(p => p.z);
+  const minElevation = Math.min(...elevations);
+  const channelBedElevation = computeChannelBedElevation(profile, bankLeftX, bankRightX, minElevation);
+
   return {
     profile,
     cutLine,
-    minElevation: Math.min(...elevations),
+    minElevation,
+    channelBedElevation,
     maxElevation: Math.max(...elevations),
     bankLeftX: Number(bankLeftX.toFixed(2)),
     bankRightX: Number(bankRightX.toFixed(2)),
@@ -2483,6 +2644,7 @@ export async function generateCrossSections(
       centerCoord: draft.centerCoord,
       cutLine: sampled.cutLine,
       minElevation: sampled.minElevation,
+      channelBedElevation: sampled.channelBedElevation,
       maxElevation: sampled.maxElevation,
       bankLeftX: sampled.bankLeftX,
       bankRightX: sampled.bankRightX,
@@ -2514,6 +2676,7 @@ export async function generateCrossSections(
           centerCoord: draft.centerCoord,
           cutLine: sampled.cutLine,
           minElevation: sampled.minElevation,
+          channelBedElevation: sampled.channelBedElevation,
           maxElevation: sampled.maxElevation,
           bankLeftX: sampled.bankLeftX,
           bankRightX: sampled.bankRightX,
@@ -2614,15 +2777,22 @@ export async function deconflictExistingCrossSections(
       2
     );
 
+    const origSec = sections.find(s => Math.abs(s.station - draft.station) < 1);
     updatedSections.push({
       station: draft.station,
       profile: sampled.profile,
       centerCoord: draft.centerCoord,
       cutLine: sampled.cutLine,
       minElevation: sampled.minElevation,
+      channelBedElevation: sampled.channelBedElevation,
       maxElevation: sampled.maxElevation,
       bankLeftX: sampled.bankLeftX,
       bankRightX: sampled.bankRightX,
+      centerlineX: sampled.centerlineX,
+      talvegX: sampled.talvegX,
+      nMain: origSec?.nMain,
+      nLOB: origSec?.nLOB,
+      nROB: origSec?.nROB,
       angleAdjustment: draft.angleOffset !== 0 ? draft.angleOffset : undefined
     });
   }
@@ -2637,6 +2807,30 @@ export async function deconflictExistingCrossSections(
   return { sections: updatedSections, report };
 }
 
+function parseStationFromLabel(rawName: string | null | undefined): number | null {
+  if (!rawName) return null;
+  const trimmed = rawName.trim();
+  // Match Km+m format like "1+250", "0+050.5", "Km 2+100"
+  const kmPlusMatch = trimmed.match(/(\d+)\s*\+\s*(\d+(?:[.,]\d+)?)/);
+  if (kmPlusMatch) {
+    const kmPart = parseFloat(kmPlusMatch[1]);
+    const mPart = parseFloat(kmPlusMatch[2].replace(',', '.'));
+    if (!isNaN(kmPart) && !isNaN(mPart)) {
+      return kmPart * 1000 + mPart;
+    }
+  }
+  // Match explicit numeric with optional "m" or "km" unit
+  const numMatch = trimmed.match(/(?:km\s*)?(\d+(?:[.,]\d+)?)\s*(km|m)?\b/i);
+  if (numMatch) {
+    const val = parseFloat(numMatch[1].replace(',', '.'));
+    const unit = numMatch[2]?.toLowerCase();
+    if (!isNaN(val)) {
+      return unit === 'km' ? val * 1000 : val;
+    }
+  }
+  return null;
+}
+
 export async function parseManualCrossSections(
   demFile: File,
   kmlFile: File,
@@ -2648,16 +2842,20 @@ export async function parseManualCrossSections(
   const parser = new DOMParser();
   const xml = parser.parseFromString(text, 'text/xml');
   const placemarks = xml.getElementsByTagName('Placemark');
-  
+
   const sections: CrossSection[] = [];
   const resolution = 2; // sample DEM every 2 meters
   const elements = placemarks.length > 0 ? Array.from(placemarks) : Array.from(xml.getElementsByTagName('LineString'));
 
   let cumulativeStation = 0;
+  let prevMidPt: Feature<any> | null = null;
 
   let centerlineGeo: Feature<LineString> | null = null;
+  let clStartPt: Feature<any> | null = null;
   if (centerlineCoords && centerlineCoords.length >= 2) {
-    centerlineGeo = turf.lineString(centerlineCoords.map(([lat, lon]) => [lon, lat]));
+    const clLonLat = centerlineCoords.map(([lat, lon]) => [lon, lat]);
+    centerlineGeo = turf.lineString(clLonLat);
+    clStartPt = turf.point(clLonLat[0]);
   }
 
   for (let i = 0; i < elements.length; i++) {
@@ -2680,14 +2878,7 @@ export async function parseManualCrossSections(
     const lineLen = turf.length(line, { units: 'meters' });
     if (lineLen < 5) continue; // skip too short lines
 
-    let station = cumulativeStation;
-    const nameNode = el.getElementsByTagName('name')[0];
-    if (nameNode && nameNode.textContent) {
-      const match = nameNode.textContent.match(/\d+(\.\d+)?/);
-      if (match) {
-        station = parseFloat(match[0]);
-      }
-    }
+    const midPt = turf.along(line, lineLen / 2, { units: 'meters' });
 
     const rawSamples: { x: number; z: number }[] = [];
     for (let d = 0; d <= lineLen; d += resolution) {
@@ -2704,18 +2895,50 @@ export async function parseManualCrossSections(
       if (isNaN(rawSamples[j].z)) rawSamples[j].z = avgValid;
     }
 
-    // Determine intersection with the user's uploaded Dere Ekseni if available
+    // Determine intersection & TRUE river centerline chainage (station) if Dere Ekseni is uploaded
     let centerlineX = lineLen / 2;
-    if (centerlineGeo) {
+    let stationFromCenterline: number | null = null;
+    if (centerlineGeo && clStartPt) {
       const cutStartPt = turf.point(lineCoords[0]);
       const intersect = turf.lineIntersect(line, centerlineGeo);
       if (intersect.features.length > 0) {
-        const dist = turf.distance(cutStartPt, intersect.features[0], { units: 'meters' });
-        if (dist > 0 && dist < lineLen) {
-          centerlineX = dist;
+        const isectPt = intersect.features[0];
+        const distOnCut = turf.distance(cutStartPt, isectPt, { units: 'meters' });
+        if (distOnCut > 0 && distOnCut < lineLen) {
+          centerlineX = distOnCut;
+        }
+        try {
+          const sliced = turf.lineSlice(clStartPt, isectPt, centerlineGeo);
+          stationFromCenterline = turf.length(sliced, { units: 'meters' });
+        } catch {
+          const snapped = turf.nearestPointOnLine(centerlineGeo, isectPt, { units: 'meters' });
+          stationFromCenterline = snapped.properties?.location ?? null;
+        }
+      } else {
+        // Snap midpoint perpendicularly onto river centerline to obtain true station
+        const snapped = turf.nearestPointOnLine(centerlineGeo, midPt, { units: 'meters' });
+        if (snapped.properties?.location != null && !isNaN(snapped.properties.location)) {
+          stationFromCenterline = snapped.properties.location;
         }
       }
     }
+
+    let station: number;
+    if (stationFromCenterline !== null && !isNaN(stationFromCenterline)) {
+      station = Math.round(stationFromCenterline);
+    } else {
+      const nameNode = el.getElementsByTagName('name')[0];
+      const parsedFromName = parseStationFromLabel(nameNode?.textContent);
+      if (parsedFromName !== null) {
+        station = Math.round(parsedFromName);
+      } else {
+        if (prevMidPt) {
+          cumulativeStation += turf.distance(prevMidPt, midPt, { units: 'meters' });
+        }
+        station = Math.round(cumulativeStation);
+      }
+    }
+    prevMidPt = midPt;
 
     // Detect Talveg & Bank Stations anchored around the user's Dere Ekseni
     const detected = detectBankStationsFromProfile(rawSamples, centerlineX);
@@ -2726,49 +2949,59 @@ export async function parseManualCrossSections(
       let type: 'LOB' | 'MAIN' | 'ROB' = 'MAIN';
       if (s.x < bankLeftX) type = 'LOB';
       else if (s.x > bankRightX) type = 'ROB';
-      return { x: s.x, z: s.z, type };
+      return { x: Number(s.x.toFixed(2)), z: Number(s.z.toFixed(2)), type };
     });
 
     const elevations = profile.map(p => p.z);
     const minElevation = elevations.length > 0 ? Math.min(...elevations) : 0;
     const maxElevation = elevations.length > 0 ? Math.max(...elevations) : 0;
+    const channelBedElevation = computeChannelBedElevation(profile, bankLeftX, bankRightX, minElevation);
 
     const firstPt = lineCoords[0];
     const lastPt = lineCoords[lineCoords.length - 1];
+    const centerCoordPt = turf.along(line, centerlineX, { units: 'meters' });
 
     sections.push({
-      station: Math.round(station),
+      station,
       profile,
-      centerCoord: [(firstPt[1] + lastPt[1]) / 2, (firstPt[0] + lastPt[0]) / 2],
+      centerCoord: [centerCoordPt.geometry.coordinates[1], centerCoordPt.geometry.coordinates[0]],
       cutLine: [
         [firstPt[1], firstPt[0]],
         [lastPt[1], lastPt[0]]
       ],
       minElevation,
+      channelBedElevation,
       maxElevation,
-      bankLeftX,
-      bankRightX,
+      bankLeftX: Number(bankLeftX.toFixed(2)),
+      bankRightX: Number(bankRightX.toFixed(2)),
       centerlineX: Number(centerlineX.toFixed(2)),
-      talvegX: detected.talvegX
+      talvegX: Number(detected.talvegX.toFixed(2))
     });
-
-    cumulativeStation += 50;
   }
 
   sections.sort((a, b) => a.station - b.station);
+  // Guarantee strictly unique integer stations after sorting
+  for (let i = 1; i < sections.length; i++) {
+    if (sections[i].station <= sections[i - 1].station) {
+      sections[i].station = sections[i - 1].station + 1;
+    }
+  }
   return sections;
 }
 
 export function calibrateSectionsWithCenterline(
   sections: CrossSection[],
-  centerlineCoords: [number, number][]
+  centerlineCoords: [number, number][],
+  recomputeStations: boolean = false
 ): CrossSection[] {
   if (!sections || sections.length === 0 || !centerlineCoords || centerlineCoords.length < 2) {
     return sections;
   }
-  const centerlineGeo = turf.lineString(centerlineCoords.map(([lat, lon]) => [lon, lat]));
+  const clLonLat = centerlineCoords.map(([lat, lon]) => [lon, lat]);
+  const centerlineGeo = turf.lineString(clLonLat);
+  const clStartPt = turf.point(clLonLat[0]);
 
-  return sections.map(sec => {
+  const calibrated = sections.map(sec => {
     if (!sec.cutLine || !sec.profile || sec.profile.length < 2) return sec;
     const [ptL, ptR] = sec.cutLine; // [lat, lon]
     const cutGeo = turf.lineString([[ptL[1], ptL[0]], [ptR[1], ptR[0]]]);
@@ -2778,11 +3011,30 @@ export function calibrateSectionsWithCenterline(
     const maxX = sec.profile[sec.profile.length - 1].x;
 
     let centerlineX = sec.centerlineX;
+    let nextStation = sec.station;
     const intersect = turf.lineIntersect(cutGeo, centerlineGeo);
     if (intersect.features.length > 0) {
-      const dist = turf.distance(cutStartPt, intersect.features[0], { units: 'meters' });
+      const isectPt = intersect.features[0];
+      const dist = turf.distance(cutStartPt, isectPt, { units: 'meters' });
       if (dist >= minX && dist <= maxX) {
         centerlineX = Number(dist.toFixed(2));
+      }
+      if (recomputeStations) {
+        try {
+          const sliced = turf.lineSlice(clStartPt, isectPt, centerlineGeo);
+          nextStation = Math.round(turf.length(sliced, { units: 'meters' }));
+        } catch {
+          const snapped = turf.nearestPointOnLine(centerlineGeo, isectPt, { units: 'meters' });
+          if (snapped.properties?.location != null) {
+            nextStation = Math.round(snapped.properties.location);
+          }
+        }
+      }
+    } else if (recomputeStations) {
+      const midPt = turf.midpoint(cutStartPt, turf.point([ptR[1], ptR[0]]));
+      const snapped = turf.nearestPointOnLine(centerlineGeo, midPt, { units: 'meters' });
+      if (snapped.properties?.location != null) {
+        nextStation = Math.round(snapped.properties.location);
       }
     }
 
@@ -2820,16 +3072,29 @@ export function calibrateSectionsWithCenterline(
         }
       }
     }
+    const channelBedElevation = minBedZ < Infinity ? Number(minBedZ.toFixed(2)) : sec.minElevation;
 
     return {
       ...sec,
+      station: nextStation,
       centerlineX,
       talvegX: Number(talvegX.toFixed(2)),
+      channelBedElevation,
       bankLeftX: Number(bankLeftX.toFixed(2)),
       bankRightX: Number(bankRightX.toFixed(2)),
       profile: newProfile
     };
   });
+
+  if (recomputeStations) {
+    calibrated.sort((a, b) => a.station - b.station);
+    for (let i = 1; i < calibrated.length; i++) {
+      if (calibrated[i].station <= calibrated[i - 1].station) {
+        calibrated[i].station = calibrated[i - 1].station + 1;
+      }
+    }
+  }
+  return calibrated;
 }
 
 export interface CrossSectionGeometry {
@@ -2847,7 +3112,13 @@ export interface CrossSectionGeometry {
   totalW: number;
   waterLeftX: number;
   waterRightX: number;
+  kMain: number;
+  kLOB: number;
+  kROB: number;
   kTotal: number;
+  alpha: number;
+  hydraulicDepth: number;
+  hydrostaticForceMoment: number; // A * y_bar (m^3) for Momentum M = Q^2/(gA) + A*y_bar
   bedElevation: number;
   talvegX: number;
   bankLeftZ: number;
@@ -2870,10 +3141,16 @@ export function evaluateCrossSectionGeometry(
       areaROB: 0, pROB: 0, wROB: 0,
       totalArea: 0, totalP: 0, totalW: 0,
       waterLeftX: 0, waterRightX: 0,
-      kTotal: 0, bedElevation: 0, talvegX: 0,
+      kMain: 0, kLOB: 0, kROB: 0, kTotal: 0,
+      alpha: 1, hydraulicDepth: 0, hydrostaticForceMoment: 0,
+      bedElevation: 0, talvegX: 0,
       bankLeftZ: 0, bankRightZ: 0, bankMinZ: 0
     };
   }
+
+  const effMainN = Math.max(0.01, section.nMain ?? nMain);
+  const effLobN = Math.max(0.01, section.nLOB ?? nLOB);
+  const effRobN = Math.max(0.01, section.nROB ?? nROB);
 
   // Anchor on user-defined Dere Ekseni (centerlineX)
   const axisX = (section.centerlineX !== undefined && !isNaN(section.centerlineX))
@@ -2946,12 +3223,14 @@ export function evaluateCrossSectionGeometry(
       areaROB: 0, pROB: 0, wROB: 0,
       totalArea: 0, totalP: 0, totalW: 0,
       waterLeftX: talvegX, waterRightX: talvegX,
-      kTotal: 0, bedElevation, talvegX,
+      kMain: 0, kLOB: 0, kROB: 0, kTotal: 0,
+      alpha: 1, hydraulicDepth: 0, hydrostaticForceMoment: 0,
+      bedElevation, talvegX,
       bankLeftZ, bankRightZ, bankMinZ
     };
   }
 
-  // Hydrologically connected flow boundary tracing outward from talveg:
+  // Hydrologically connected flow boundary tracing outward from talveg
   let leftWetX = talvegX;
   for (let i = minIdx; i > 0; i--) {
     const curr = profile[i];
@@ -2981,6 +3260,7 @@ export function evaluateCrossSectionGeometry(
   let areaMAIN = 0, pMAIN = 0, wMAIN = 0;
   let areaLOB = 0, pLOB = 0, wLOB = 0;
   let areaROB = 0, pROB = 0, wROB = 0;
+  let hydrostaticForceMoment = 0;
 
   for (let i = 0; i < profile.length - 1; i++) {
     const p1 = profile[i];
@@ -2999,6 +3279,9 @@ export function evaluateCrossSectionGeometry(
     const dz = zSeg2 - zSeg1;
     const a = ((h1 + h2) / 2) * dx;
     const p = Math.sqrt(dx * dx + dz * dz);
+
+    // Exact integral of 0.5 * h(x)^2 dx across linear segment
+    hydrostaticForceMoment += (dx / 6) * (h1 * h1 + h1 * h2 + h2 * h2);
 
     const midX = (segX1 + segX2) / 2;
     if (midX < bLeftX) {
@@ -3021,26 +3304,131 @@ export function evaluateCrossSectionGeometry(
     return (1 / n) * A * Math.pow(A / P, 2 / 3);
   };
 
-  const kMain = computeK(areaMAIN, pMAIN, Math.max(0.01, nMain));
-  const kLOB = computeK(areaLOB, pLOB, Math.max(0.01, nLOB));
-  const kROB = computeK(areaROB, pROB, Math.max(0.01, nROB));
+  const kMain = computeK(areaMAIN, pMAIN, effMainN);
+  const kLOB = computeK(areaLOB, pLOB, effLobN);
+  const kROB = computeK(areaROB, pROB, effRobN);
   const kTotal = kMain + kLOB + kROB;
+
+  const totalArea = areaMAIN + areaLOB + areaROB;
+  const totalP = pMAIN + pLOB + pROB;
+  const totalW = wMAIN + wLOB + wROB;
+
+  // Coriolis kinetic energy distribution coefficient:
+  // alpha = (Sum(Ki^3 / Ai^2)) / (Ktotal^3 / Atotal^2)
+  let alpha = 1.0;
+  if (totalArea > 1e-6 && kTotal > 1e-6) {
+    let sumSub = 0;
+    if (areaMAIN > 1e-6 && kMain > 0) sumSub += Math.pow(kMain, 3) / (areaMAIN * areaMAIN);
+    if (areaLOB > 1e-6 && kLOB > 0) sumSub += Math.pow(kLOB, 3) / (areaLOB * areaLOB);
+    if (areaROB > 1e-6 && kROB > 0) sumSub += Math.pow(kROB, 3) / (areaROB * areaROB);
+    const denom = Math.pow(kTotal, 3) / (totalArea * totalArea);
+    if (denom > 1e-12 && sumSub > 0) {
+      alpha = Math.max(1.0, Math.min(2.5, sumSub / denom));
+    }
+  }
+
+  const hydraulicDepth = totalW > 1e-4 ? totalArea / totalW : Math.max(0.05, WSE - bedElevation);
 
   return {
     areaMAIN, pMAIN, wMAIN,
     areaLOB, pLOB, wLOB,
     areaROB, pROB, wROB,
-    totalArea: areaMAIN + areaLOB + areaROB,
-    totalP: pMAIN + pLOB + pROB,
-    totalW: wMAIN + wLOB + wROB,
+    totalArea,
+    totalP,
+    totalW,
     waterLeftX: leftWetX,
     waterRightX: rightWetX,
+    kMain,
+    kLOB,
+    kROB,
     kTotal,
+    alpha,
+    hydraulicDepth,
+    hydrostaticForceMoment,
     bedElevation,
     talvegX,
     bankLeftZ,
     bankRightZ,
     bankMinZ
+  };
+}
+
+/**
+ * Computes Critical Water Surface Elevation (WSE_c) by minimizing Specific Energy
+ * E(WSE) = WSE + alpha * (Q / A)^2 / (2g), which handles compound floodplain transitions robustly.
+ */
+export function computeCriticalDepth(
+  section: CrossSection,
+  Q: number,
+  nMain: number,
+  nLOB: number,
+  nROB: number
+): { criticalWSE: number; minEnergy: number } {
+  const bedZ = getChannelBedElevation(section);
+  const maxProfZ = section.maxElevation || Math.max(...section.profile.map(p => p.z));
+  const lo = bedZ + 0.02;
+  const hi = Math.max(lo + 5, maxProfZ + 20);
+  const g = 9.81;
+
+  const evalSpecE = (wse: number): number => {
+    const gm = evaluateCrossSectionGeometry(section, wse, nMain, nLOB, nROB);
+    const a = Math.max(1e-4, gm.totalArea);
+    const v = Q / a;
+    return wse + gm.alpha * ((v * v) / (2 * g));
+  };
+
+  // Coarse scan to find global minimum bracket (avoids compound bank local minima)
+  const steps = 60;
+  let bestWSE = lo + 0.5;
+  let bestE = Infinity;
+  const gridWSE: number[] = [];
+  const gridE: number[] = [];
+  for (let i = 0; i <= steps; i++) {
+    // Non-linear spacing denser near the bed
+    const t = i / steps;
+    const w = lo + (hi - lo) * (t * t);
+    const e = evalSpecE(w);
+    gridWSE.push(w);
+    gridE.push(e);
+    if (e < bestE) {
+      bestE = e;
+      bestWSE = w;
+    }
+  }
+
+  let bestIdx = gridE.indexOf(bestE);
+  let a = gridWSE[Math.max(0, bestIdx - 1)];
+  let b = gridWSE[Math.min(steps, bestIdx + 1)];
+
+  // Golden-section search to refine WSE_c to ~0.001 m
+  const phi = (Math.sqrt(5) - 1) / 2;
+  let c = b - phi * (b - a);
+  let d = a + phi * (b - a);
+  let fc = evalSpecE(c);
+  let fd = evalSpecE(d);
+
+  for (let iter = 0; iter < 32; iter++) {
+    if (b - a < 0.001) break;
+    if (fc < fd) {
+      b = d;
+      d = c;
+      fd = fc;
+      c = b - phi * (b - a);
+      fc = evalSpecE(c);
+    } else {
+      a = c;
+      c = d;
+      fc = fd;
+      d = a + phi * (b - a);
+      fd = evalSpecE(d);
+    }
+  }
+
+  const criticalWSE = (a + b) / 2;
+  const minEnergy = Math.min(bestE, evalSpecE(criticalWSE));
+  return {
+    criticalWSE: Number(criticalWSE.toFixed(3)),
+    minEnergy: Number(minEnergy.toFixed(3))
   };
 }
 
@@ -3071,15 +3459,18 @@ export function computeNormalDepth(
       overbankAreaROB: 0,
       bankLeftZ: 0,
       bankRightZ: 0,
+      alpha: 1,
+      criticalWSE: 0,
+      flowRegime: 'subcritical',
       discharge: Q
     };
   }
 
-  const minZ = section.minElevation || Math.min(...profile.map(p => p.z));
+  const bedZ = getChannelBedElevation(section);
   const effSlope = Math.max(0.00005, Math.abs(S0));
 
-  let lowWSE = minZ + 0.001;
-  let highWSE = minZ + 2.0;
+  let lowWSE = bedZ + 0.001;
+  let highWSE = bedZ + 2.0;
   const maxAllowableZ = Math.max(...profile.map(p => p.z)) + 25;
 
   while (
@@ -3112,16 +3503,17 @@ export function computeNormalDepth(
 
   const finalArea = finalGeom.totalArea;
   const finalVel = finalArea > 0 ? Q / finalArea : 0;
-  const hydraulicDepth = finalGeom.totalW > 0 ? finalArea / finalGeom.totalW : Math.max(0.1, bestWSE - minZ);
-  const froudeNumber = hydraulicDepth > 0 ? finalVel / Math.sqrt(9.81 * hydraulicDepth) : 0;
-  const velocityHead = (finalVel * finalVel) / (2 * 9.81);
+  const hydraulicDepth = finalGeom.hydraulicDepth;
+  const froudeNumber = hydraulicDepth > 0
+    ? finalVel / Math.sqrt((9.81 * hydraulicDepth) / Math.max(1, finalGeom.alpha))
+    : 0;
+  const velocityHead = finalGeom.alpha * ((finalVel * finalVel) / (2 * 9.81));
   const energyElevation = bestWSE + velocityHead;
-
   const isOverbank = bestWSE > finalGeom.bankMinZ && (finalGeom.areaLOB > 0.05 || finalGeom.areaROB > 0.05);
 
   return {
     waterElevation: bestWSE,
-    maxDepth: Math.max(0, bestWSE - minZ),
+    maxDepth: Math.max(0, bestWSE - bedZ),
     area: finalArea,
     velocity: finalVel,
     wettedPerimeter: finalGeom.totalP,
@@ -3129,13 +3521,15 @@ export function computeNormalDepth(
     froudeNumber,
     isOverbank,
     energyElevation,
-    bedElevation: minZ,
+    bedElevation: bedZ,
     waterLeftX: finalGeom.waterLeftX,
     waterRightX: finalGeom.waterRightX,
     overbankAreaLOB: finalGeom.areaLOB,
     overbankAreaROB: finalGeom.areaROB,
     bankLeftZ: finalGeom.bankLeftZ,
     bankRightZ: finalGeom.bankRightZ,
+    alpha: finalGeom.alpha,
+    flowRegime: froudeNumber > 1.02 ? 'supercritical' : froudeNumber < 0.98 ? 'subcritical' : 'critical',
     discharge: Q
   };
 }
@@ -3153,6 +3547,11 @@ export async function parseKMLStructures(
   const structures: HydraulicStructure[] = [];
   const elements = placemarks.length > 0 ? Array.from(placemarks) : Array.from(xml.getElementsByTagName('Point'));
 
+  let clGeo: Feature<LineString> | null = null;
+  if (centerlineCoords && centerlineCoords.length >= 2) {
+    clGeo = turf.lineString(centerlineCoords.map(([lat, lon]) => [lon, lat]));
+  }
+
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
     const coordsNode = el.getElementsByTagName('coordinates')[0];
@@ -3166,14 +3565,12 @@ export async function parseKMLStructures(
     const lat = parts[1];
     const elevInKml = parts.length >= 3 && !isNaN(parts[2]) ? parts[2] : null;
 
-    // Extract name
     let name = `Sanat Yapısı ${i + 1}`;
     const nameNode = el.getElementsByTagName('name')[0];
     if (nameNode && nameNode.textContent?.trim()) {
       name = nameNode.textContent.trim();
     }
 
-    // Determine type: bridge or culvert based on name
     let type: StructureType = 'bridge';
     const lowerName = name.toLowerCase();
     if (lowerName.includes('menfez') || lowerName.includes('culvert') || lowerName.includes('kutu')) {
@@ -3182,8 +3579,14 @@ export async function parseKMLStructures(
       type = 'pipe_culvert';
     }
 
-    // Find closest station from sections or centerline
     let matchedStation = i * 200 + 100;
+    if (clGeo) {
+      const snapped = turf.nearestPointOnLine(clGeo, turf.point([lon, lat]), { units: 'meters' });
+      if (snapped.properties?.location != null && !isNaN(snapped.properties.location)) {
+        matchedStation = Math.round(snapped.properties.location);
+      }
+    }
+
     let closestDist = Infinity;
     let refBedElevation = elevInKml || 100;
 
@@ -3195,14 +3598,13 @@ export async function parseKMLStructures(
           const dist = Math.sqrt(dLat * dLat + dLon * dLon);
           if (dist < closestDist) {
             closestDist = dist;
-            matchedStation = sec.station;
-            refBedElevation = sec.minElevation;
+            if (!clGeo) matchedStation = sec.station;
+            refBedElevation = getChannelBedElevation(sec);
           }
         }
       }
     }
 
-    // Reasonable default geometry based on type and bed elevation
     const bedZ = refBedElevation;
     const defaultLowChord = type === 'bridge' ? bedZ + 3.0 : bedZ + 2.0;
     const defaultRoadElev = defaultLowChord + (type === 'bridge' ? 1.2 : 0.8);
@@ -3228,7 +3630,6 @@ export async function parseKMLStructures(
     });
   }
 
-  // Sort structures by station
   structures.sort((a, b) => a.station - b.station);
   return structures;
 }
@@ -3239,8 +3640,11 @@ export function computeStructureHydraulics(
   bedElevation: number,
   Q: number
 ): StructureHydraulicResult {
+  const effBed = structure.invertElevation != null && !isNaN(structure.invertElevation)
+    ? Math.max(bedElevation, structure.invertElevation)
+    : bedElevation;
   const B_net = Math.max(1, structure.openingWidth - (structure.pierCount * structure.pierWidth));
-  const H_open = Math.max(0.5, structure.lowChordElevation - bedElevation);
+  const H_open = Math.max(0.5, structure.lowChordElevation - effBed);
   const A_open = B_net * H_open * Math.max(1, structure.barrelCount);
   const Cd = structure.orificeCoefficient || 0.8;
   const Cw = structure.weirCoefficient || 1.7;
@@ -3252,12 +3656,21 @@ export function computeStructureHydraulics(
   let weirDischarge = 0;
   let culvertDischarge = Q;
 
-  // Case 1: Low Flow (Free Surface)
-  if (tailwaterWSE < structure.lowChordElevation - 0.2) {
-    const V_approx = Q / Math.max(1, A_open * 0.7);
-    const dH_pier = (structure.pierCount * 0.15 + 0.1) * ((V_approx * V_approx) / (2 * g));
-    const backwater = Math.max(0.08, Math.min(2.0, dH_pier));
-    upstreamWSE = tailwaterWSE + backwater;
+  // Case 1: Low Flow (Free Surface) - Yarnell pier contraction / momentum headloss
+  const effDepth = Math.max(0.2, Math.min(H_open, tailwaterWSE - effBed));
+  const flowAreaFree = Math.max(0.5, B_net * effDepth * Math.max(1, structure.barrelCount));
+
+  if (tailwaterWSE < structure.lowChordElevation - 0.15) {
+    const V_through = Q / flowAreaFree;
+    const froude2 = (V_through * V_through) / (g * Math.max(0.2, effDepth));
+    const blockageRatio = Math.min(0.45, (structure.pierCount * structure.pierWidth) / Math.max(1, structure.openingWidth));
+    const K_yarnell = 1.05;
+    const dH_pier = Math.max(
+      0.02,
+      effDepth * K_yarnell * (K_yarnell + 5 * froude2 - 0.6) * (blockageRatio + 15 * blockageRatio * blockageRatio * blockageRatio * blockageRatio) * froude2
+    );
+    const expansionLoss = 0.25 * ((V_through * V_through) / (2 * g));
+    upstreamWSE = tailwaterWSE + Math.min(2.5, dH_pier + expansionLoss);
 
     if (upstreamWSE >= structure.lowChordElevation) {
       flowState = 'pressure';
@@ -3265,33 +3678,63 @@ export function computeStructureHydraulics(
       flowState = 'free';
     }
   } else {
-    // Case 2: Surcharged / Pressure Flow through bridge opening
-    // Q = Cd * A * sqrt(2g * deltaH) -> deltaH = Q^2 / (2g * (Cd * A)^2)
+    // Case 2: Pressure Flow (Orifice equation)
     const dH_orifice = Math.pow(Q, 2) / (2 * g * Math.pow(Cd * A_open, 2));
-    upstreamWSE = Math.max(structure.lowChordElevation + 0.1, tailwaterWSE + dH_orifice);
+    upstreamWSE = Math.max(structure.lowChordElevation + 0.05, tailwaterWSE + dH_orifice);
     flowState = 'pressure';
   }
 
-  // Case 3: Overtopping / Weir Flow over road deck
+  // Case 3: Overtopping / Combined Orifice + Broad-Crested Weir over Road Deck (bisection energy balance)
   if (upstreamWSE > structure.roadElevation) {
     isOvertopped = true;
     flowState = 'overtopping';
 
-    // Iterative balance of orifice flow and weir flow
-    // Q = Q_orifice + Q_weir
-    const deltaH_deck = Math.max(0.2, structure.roadElevation - structure.lowChordElevation);
-    const Q_max_orifice = Cd * A_open * Math.sqrt(2 * g * deltaH_deck);
-    culvertDischarge = Math.min(Q, Q_max_orifice);
-    weirDischarge = Math.max(0, Q - culvertDischarge);
-
     const roadWidth = Math.max(10, structure.openingWidth * 1.5);
-    const H_weir = Math.pow(weirDischarge / Math.max(0.1, Cw * roadWidth), 2 / 3);
-    upstreamWSE = structure.roadElevation + H_weir;
+    const submergenceCoeff = (hw: number) => {
+      const tw = tailwaterWSE - structure.roadElevation;
+      const head = Math.max(0.01, hw - structure.roadElevation);
+      if (tw <= 0 || tw / head <= 0.67) return 1.0;
+      const ratio = Math.min(0.99, tw / head);
+      return Math.max(0.15, 1 - Math.pow((ratio - 0.67) / 0.33, 1.5));
+    };
+
+    const evalCombinedQ = (hw: number): { qOrf: number; qWeir: number } => {
+      const hOrf = Math.max(0.05, hw - Math.max(tailwaterWSE, (structure.lowChordElevation + effBed) * 0.5));
+      const qOrf = Cd * A_open * Math.sqrt(2 * g * hOrf);
+      const hWeir = Math.max(0, hw - structure.roadElevation);
+      const qWeir = Cw * submergenceCoeff(hw) * roadWidth * Math.pow(hWeir, 1.5);
+      return { qOrf, qWeir };
+    };
+
+    let lo = structure.roadElevation;
+    let hi = structure.roadElevation + 10;
+    while (lo + 0.001 < hi) {
+      const { qOrf, qWeir } = evalCombinedQ(hi);
+      if (qOrf + qWeir >= Q || hi > structure.roadElevation + 30) break;
+      hi += 5;
+    }
+
+    let solvedHW = hi;
+    for (let it = 0; it < 36; it++) {
+      const mid = (lo + hi) / 2;
+      const { qOrf, qWeir } = evalCombinedQ(mid);
+      solvedHW = mid;
+      if (Math.abs(qOrf + qWeir - Q) < 0.01 || (hi - lo) < 0.001) {
+        culvertDischarge = qOrf;
+        weirDischarge = qWeir;
+        break;
+      }
+      if (qOrf + qWeir < Q) lo = mid;
+      else hi = mid;
+      culvertDischarge = qOrf;
+      weirDischarge = qWeir;
+    }
+    upstreamWSE = solvedHW;
   }
 
   const backwaterRise = Math.max(0, upstreamWSE - tailwaterWSE);
   const freeboard = structure.lowChordElevation - upstreamWSE;
-  const throughVelocity = culvertDischarge / Math.max(0.5, A_open);
+  const throughVelocity = culvertDischarge / Math.max(0.5, flowState === 'free' ? flowAreaFree : A_open);
 
   return {
     structure,
@@ -3308,10 +3751,84 @@ export function computeStructureHydraulics(
   };
 }
 
+function buildRoutingResultFromGeom(
+  sec: CrossSection,
+  wse: number,
+  q: number,
+  geom: CrossSectionGeometry,
+  criticalWSE: number,
+  flowRegime: 'subcritical' | 'critical' | 'supercritical' | 'jump',
+  structureEffect?: RoutingResult['structureEffect']
+): RoutingResult {
+  const bedZ = geom.bedElevation;
+  const area = geom.totalArea;
+  const vel = area > 1e-4 ? q / area : 0;
+  const hydDepth = Math.max(0.05, geom.hydraulicDepth);
+  const froude = (hydDepth > 0 && area > 1e-4)
+    ? vel / Math.sqrt((9.81 * hydDepth) / Math.max(1, geom.alpha))
+    : 0;
+  const velocityHead = geom.alpha * ((vel * vel) / (2 * 9.81));
+  const energyElevation = wse + velocityHead;
+  const isOverbank = wse > geom.bankMinZ && (geom.areaLOB > 0.05 || geom.areaROB > 0.05);
+
+  return {
+    station: sec.station,
+    waterElevation: wse,
+    maxDepth: Math.max(0, wse - bedZ),
+    area,
+    velocity: vel,
+    wettedPerimeter: geom.totalP,
+    topWidth: Math.max(0.5, geom.totalW),
+    froudeNumber: froude,
+    isOverbank,
+    energyElevation,
+    bedElevation: bedZ,
+    waterLeftX: geom.waterLeftX,
+    waterRightX: geom.waterRightX,
+    overbankAreaLOB: geom.areaLOB,
+    overbankAreaROB: geom.areaROB,
+    bankLeftZ: geom.bankLeftZ,
+    bankRightZ: geom.bankRightZ,
+    discharge: q,
+    alpha: Number(geom.alpha.toFixed(3)),
+    criticalWSE,
+    flowRegime,
+    ...(structureEffect ? { structureEffect } : {})
+  };
+}
+
+function mapStructuresToSections(
+  sections: CrossSection[],
+  structures: HydraulicStructure[]
+): Map<number, HydraulicStructure[]> {
+  const map = new Map<number, HydraulicStructure[]>();
+  const active = structures.filter(s => s.isActive);
+  if (sections.length === 0 || active.length === 0) return map;
+
+  for (const struct of active) {
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < sections.length; i++) {
+      const diff = Math.abs(sections[i].station - struct.station);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+    const existing = map.get(bestIdx) || [];
+    existing.push(struct);
+    map.set(bestIdx, existing);
+  }
+  return map;
+}
+
 /**
- * 1D Standard Step Backwater & Energy Equation Solver
- * Solves the subcritical open-channel energy equation from downstream to upstream:
- * WS_u + V_u^2 / (2g) = WS_d + V_d^2 / (2g) + Sf_avg * dx + h_loss
+ * 1D Mixed-Regime Standard Step Backwater & Energy Equation Solver
+ * - Uses Coriolis energy coefficient alpha
+ * - Removes artificial WSE clamp
+ * - Integrates hydraulic structures directly into the energy sweep
+ * - Solves both subcritical (downstream -> upstream) and supercritical (upstream -> downstream)
+ *   branches and resolves hydraulic jumps using Specific Force conservation.
  */
 export function solveStandardStepBackwater(
   sections: CrossSection[],
@@ -3319,24 +3836,27 @@ export function solveStandardStepBackwater(
   nMain: number,
   nLOB: number,
   nROB: number,
-  S0: number
+  S0: number,
+  structures: HydraulicStructure[] = []
 ): RoutingResult[] {
   if (sections.length === 0) return [];
 
   const getQ = (idx: number): number => {
     if (Array.isArray(discharges)) {
-      return discharges[idx] !== undefined ? Math.max(1, discharges[idx]) : 100;
+      return discharges[idx] !== undefined ? Math.max(0.5, discharges[idx]) : 100;
     }
-    return Math.max(1, discharges);
+    return Math.max(0.5, discharges);
   };
 
-  // 1. Calculate baseline normal depths for all sections
+  // 1. Precompute baseline normal depths & critical elevations
+  const critData = sections.map((sec, idx) => computeCriticalDepth(sec, getQ(idx), nMain, nLOB, nROB));
   const normalResults: RoutingResult[] = sections.map((sec, idx) => {
     const q = getQ(idx);
     const nd = computeNormalDepth(sec, q, nMain, nLOB, nROB, S0);
     return {
       station: sec.station,
       ...nd,
+      criticalWSE: critData[idx].criticalWSE,
       discharge: q
     };
   });
@@ -3345,129 +3865,238 @@ export function solveStandardStepBackwater(
     return normalResults;
   }
 
-  // 2. Identify physical flow direction (Flow runs from higher bed elevation to lower bed elevation)
-  const zStart = sections[0].minElevation;
-  const zEnd = sections[sections.length - 1].minElevation;
-  const isForward = zStart >= zEnd; // if true: 0 is upstream, N-1 is downstream
-
   const N = sections.length;
-  const orderIndices: number[] = [];
+  const g = 9.81;
+  const isForward = detectFlowDirection(sections); // true => 0 is upstream, N-1 is downstream
+
+  // Upstream -> Downstream ordering
+  const forwardOrder: number[] = [];
   if (isForward) {
-    // Step from downstream (N-1) to upstream (0)
-    for (let i = N - 1; i >= 0; i--) orderIndices.push(i);
+    for (let i = 0; i < N; i++) forwardOrder.push(i);
   } else {
-    // Step from downstream (0) to upstream (N-1)
-    for (let i = 0; i < N; i++) orderIndices.push(i);
+    for (let i = N - 1; i >= 0; i--) forwardOrder.push(i);
   }
+  // Downstream -> Upstream ordering
+  const reverseOrder = [...forwardOrder].reverse();
 
-  const finalResults: RoutingResult[] = normalResults.map(r => ({ ...r }));
+  const structMap = mapStructuresToSections(sections, structures);
 
-  // Downstream boundary condition is set by normal depth at downstream section
-  const dsIdx = orderIndices[0];
-  let prevIdx = dsIdx;
+  // --- PASS A: Subcritical Backwater Sweep (Downstream -> Upstream) ---
+  const subWSE = new Float64Array(N);
+  const subForce = new Float64Array(N);
+  const subStructEffect = new Map<number, RoutingResult['structureEffect']>();
+  const supercriticalForced = new Uint8Array(N);
 
-  // Step upstream through reach
-  for (let step = 1; step < orderIndices.length; step++) {
-    const uIdx = orderIndices[step];
-    const dIdx = prevIdx;
+  const dsIdx0 = reverseOrder[0];
+  const dsInitWSE = Math.max(normalResults[dsIdx0].waterElevation, critData[dsIdx0].criticalWSE);
+  subWSE[dsIdx0] = dsInitWSE;
+  const dsGeom0 = evaluateCrossSectionGeometry(sections[dsIdx0], dsInitWSE, nMain, nLOB, nROB);
+  subForce[dsIdx0] = (getQ(dsIdx0) * getQ(dsIdx0)) / (g * Math.max(0.05, dsGeom0.totalArea)) + dsGeom0.hydrostaticForceMoment;
 
+  for (let step = 1; step < reverseOrder.length; step++) {
+    const uIdx = reverseOrder[step];
+    const dIdx = reverseOrder[step - 1];
     const secU = sections[uIdx];
     const secD = sections[dIdx];
     const qU = getQ(uIdx);
     const qD = getQ(dIdx);
 
-    const resD = finalResults[dIdx];
-    const geomD = evaluateCrossSectionGeometry(secD, resD.waterElevation, nMain, nLOB, nROB);
-    const areaD = Math.max(0.1, geomD.totalArea);
-    const velD = qD / areaD;
-    const vHeadD = (velD * velD) / (2 * 9.81);
-    const E_d = resD.waterElevation + vHeadD;
-    const Sf_d = Math.pow(qD / Math.max(0.1, geomD.kTotal), 2);
-
+    const wseD = subWSE[dIdx];
+    const geomD = evaluateCrossSectionGeometry(secD, wseD, nMain, nLOB, nROB);
+    const aD = Math.max(0.05, geomD.totalArea);
+    const vD = qD / aD;
+    const vHeadD = geomD.alpha * ((vD * vD) / (2 * g));
+    const E_d = wseD + vHeadD;
+    const Sf_d = Math.pow(qD / Math.max(0.05, geomD.kTotal), 2);
     const dx = Math.max(1, Math.abs(secU.station - secD.station));
-    const minZu = secU.minElevation;
+    const critU = critData[uIdx].criticalWSE;
+    const bedU = getChannelBedElevation(secU);
 
-    // Upstream normal depth baseline
-    const normWSEu = normalResults[uIdx].waterElevation;
+    // Integrate structure directly into step if present on uIdx
+    const structsAtU = structMap.get(uIdx);
+    let structUpstreamWSE = -Infinity;
+    if (structsAtU && structsAtU.length > 0) {
+      let currentTW = wseD;
+      for (const st of structsAtU) {
+        const sHyd = computeStructureHydraulics(st, currentTW, bedU, qU);
+        if (sHyd.upstreamWSE > structUpstreamWSE) {
+          structUpstreamWSE = sHyd.upstreamWSE;
+          subStructEffect.set(uIdx, {
+            structureName: st.name,
+            flowState: sHyd.flowState,
+            backwaterRise: Number(sHyd.backwaterRise.toFixed(3))
+          });
+        }
+        currentTW = sHyd.upstreamWSE;
+      }
+    }
 
-    // Energy balance function f(WSE_u) = E_u - (E_d + Sf_bar * dx + h_loss)
-    const evalEnergyDiff = (wseCandidate: number): number => {
-      const geomU = evaluateCrossSectionGeometry(secU, wseCandidate, nMain, nLOB, nROB);
-      const aU = Math.max(0.1, geomU.totalArea);
+    const evalEnergyDiff = (wseCand: number): number => {
+      const geomU = evaluateCrossSectionGeometry(secU, wseCand, nMain, nLOB, nROB);
+      const aU = Math.max(0.05, geomU.totalArea);
       const vU = qU / aU;
-      const vHeadU = (vU * vU) / (2 * 9.81);
-      const Eu = wseCandidate + vHeadU;
-
-      const Sf_u = Math.pow(qU / Math.max(0.1, geomU.kTotal), 2);
+      const vHeadU = geomU.alpha * ((vU * vU) / (2 * g));
+      const Eu = wseCand + vHeadU;
+      const Sf_u = Math.pow(qU / Math.max(0.05, geomU.kTotal), 2);
       const Sf_bar = (Sf_d + Sf_u) / 2;
-      const frictionLoss = Sf_bar * dx;
-
-      // Contraction / Expansion loss
       const deltaVhead = vHeadU - vHeadD;
       const lossCoeff = deltaVhead >= 0 ? 0.1 : 0.3;
-      const minorLoss = lossCoeff * Math.abs(deltaVhead);
-
-      return Eu - (E_d + frictionLoss + minorLoss);
+      return Eu - (E_d + Sf_bar * dx + lossCoeff * Math.abs(deltaVhead));
     };
 
-    // Bisection search for upstream WSE
-    let lowW = Math.max(minZu + 0.05, resD.waterElevation - 0.001);
-    let highW = Math.max(lowW + 1.0, normWSEu + 3.0, resD.waterElevation + 3.0);
+    const diffAtCrit = evalEnergyDiff(critU);
+    let targetWSE: number;
 
-    while (evalEnergyDiff(highW) < 0 && highW < minZu + 35) {
-      highW += 2.0;
+    if (diffAtCrit > 0.002 && structUpstreamWSE <= critU) {
+      // Required downstream+friction energy is less than minimum critical specific energy at U:
+      // Flow passes through critical depth (chute/steep drop) -> mark supercritical candidate
+      targetWSE = critU;
+      supercriticalForced[uIdx] = 1;
+    } else {
+      let lowW = critU;
+      let highW = Math.max(lowW + 2.0, normalResults[uIdx].waterElevation + 3.0, wseD + 3.0);
+      while (evalEnergyDiff(highW) < 0 && highW < bedU + 40) {
+        highW += 3.0;
+      }
+      let solvedWSE = highW;
+      for (let iter = 0; iter < 48; iter++) {
+        const mid = (lowW + highW) / 2;
+        const diff = evalEnergyDiff(mid);
+        solvedWSE = mid;
+        if (Math.abs(diff) < 0.002 || (highW - lowW) < 0.0005) break;
+        if (diff < 0) lowW = mid;
+        else highW = mid;
+      }
+      targetWSE = Math.max(critU, solvedWSE);
     }
 
-    let solvedWSE = highW;
-    for (let iter = 0; iter < 45; iter++) {
-      const mid = (lowW + highW) / 2;
-      const diff = evalEnergyDiff(mid);
-      solvedWSE = mid;
+    if (structUpstreamWSE > targetWSE) {
+      targetWSE = structUpstreamWSE;
+      supercriticalForced[uIdx] = 0;
+    }
 
-      if (Math.abs(diff) < 0.005 || (highW - lowW) < 0.0005) {
-        break;
+    subWSE[uIdx] = targetWSE;
+    const gU = evaluateCrossSectionGeometry(secU, targetWSE, nMain, nLOB, nROB);
+    subForce[uIdx] = (qU * qU) / (g * Math.max(0.05, gU.totalArea)) + gU.hydrostaticForceMoment;
+  }
+
+  // --- PASS B: Supercritical Forward Sweep (Upstream -> Downstream) ---
+  const supWSE = new Float64Array(N);
+  const supForce = new Float64Array(N);
+  const hasSupercritical = new Uint8Array(N);
+
+  const usIdx0 = forwardOrder[0];
+  if (normalResults[usIdx0].froudeNumber > 1.02 || supercriticalForced[usIdx0] === 1) {
+    supWSE[usIdx0] = Math.min(critData[usIdx0].criticalWSE - 0.01, normalResults[usIdx0].waterElevation);
+    hasSupercritical[usIdx0] = 1;
+    const g0 = evaluateCrossSectionGeometry(sections[usIdx0], supWSE[usIdx0], nMain, nLOB, nROB);
+    supForce[usIdx0] = (getQ(usIdx0) * getQ(usIdx0)) / (g * Math.max(0.05, g0.totalArea)) + g0.hydrostaticForceMoment;
+  }
+
+  for (let step = 1; step < forwardOrder.length; step++) {
+    const dIdx = forwardOrder[step];
+    const uIdx = forwardOrder[step - 1];
+    const secU = sections[uIdx];
+    const secD = sections[dIdx];
+    const qU = getQ(uIdx);
+    const qD = getQ(dIdx);
+    const bedD = getChannelBedElevation(secD);
+    const critD = critData[dIdx].criticalWSE;
+
+    // Start supercritical branch if upstream is supercritical OR normal depth at dIdx is supercritical
+    const canStartFromU = hasSupercritical[uIdx] === 1 || supercriticalForced[uIdx] === 1;
+    if (!canStartFromU && normalResults[dIdx].froudeNumber <= 1.02) continue;
+
+    // Structures force subcritical pool upstream; clear supercritical jump past bridge/culvert unless unsubmerged
+    if (subStructEffect.has(dIdx)) continue;
+
+    const startWSE_u = hasSupercritical[uIdx] === 1 ? supWSE[uIdx] : critData[uIdx].criticalWSE;
+    const geomU = evaluateCrossSectionGeometry(secU, startWSE_u, nMain, nLOB, nROB);
+    const aU = Math.max(0.05, geomU.totalArea);
+    const vU = qU / aU;
+    const vHeadU = geomU.alpha * ((vU * vU) / (2 * g));
+    const E_u = startWSE_u + vHeadU;
+    const Sf_u = Math.pow(qU / Math.max(0.05, geomU.kTotal), 2);
+    const dx = Math.max(1, Math.abs(secD.station - secU.station));
+
+    // On supercritical branch (bedD < wse < critD), E decreases as wse increases!
+    const evalSuperEnergyDiff = (wseCand: number): number => {
+      const geomD = evaluateCrossSectionGeometry(secD, wseCand, nMain, nLOB, nROB);
+      const aD = Math.max(0.05, geomD.totalArea);
+      const vD = qD / aD;
+      const vHeadD = geomD.alpha * ((vD * vD) / (2 * g));
+      const Ed = wseCand + vHeadD;
+      const Sf_d = Math.pow(qD / Math.max(0.05, geomD.kTotal), 2);
+      const Sf_bar = (Sf_u + Sf_d) / 2;
+      const deltaVhead = vHeadD - vHeadU;
+      const lossCoeff = deltaVhead >= 0 ? 0.1 : 0.3;
+      return (Ed + Sf_bar * dx + lossCoeff * Math.abs(deltaVhead)) - E_u;
+    };
+
+    const lo = bedD + 0.04;
+    const hi = Math.max(lo + 0.02, critD - 0.005);
+    const diffHi = evalSuperEnergyDiff(hi);
+    if (diffHi <= 0) {
+      let lowW = lo;
+      let highW = hi;
+      let solvedSup = highW;
+      for (let it = 0; it < 42; it++) {
+        const mid = (lowW + highW) / 2;
+        const dVal = evalSuperEnergyDiff(mid);
+        solvedSup = mid;
+        if (Math.abs(dVal) < 0.002 || (highW - lowW) < 0.0005) break;
+        // Supercritical: higher WSE -> lower E -> lower (Ed + loss)
+        if (dVal > 0) lowW = mid;
+        else highW = mid;
       }
-      if (diff < 0) {
-        lowW = mid;
+      supWSE[dIdx] = solvedSup;
+      hasSupercritical[dIdx] = 1;
+      const gD = evaluateCrossSectionGeometry(secD, solvedSup, nMain, nLOB, nROB);
+      supForce[dIdx] = (qD * qD) / (g * Math.max(0.05, gD.totalArea)) + gD.hydrostaticForceMoment;
+    }
+  }
+
+  // --- PASS C: Specific Force Momentum Comparison & Hydraulic Jump Detection ---
+  const finalResults: RoutingResult[] = new Array(N);
+  let prevWasSuper = false;
+  for (let step = 0; step < forwardOrder.length; step++) {
+    const idx = forwardOrder[step];
+    const sec = sections[idx];
+    const q = getQ(idx);
+    const critWSE = critData[idx].criticalWSE;
+
+    let chosenWSE = subWSE[idx];
+    let regime: 'subcritical' | 'critical' | 'supercritical' | 'jump' = 'subcritical';
+
+    if (hasSupercritical[idx] === 1 && !subStructEffect.has(idx)) {
+      if (supForce[idx] > subForce[idx] * 1.005 || supercriticalForced[idx] === 1) {
+        chosenWSE = supWSE[idx];
+        regime = 'supercritical';
+        prevWasSuper = true;
       } else {
-        highW = mid;
+        chosenWSE = subWSE[idx];
+        regime = prevWasSuper ? 'jump' : 'subcritical';
+        prevWasSuper = false;
       }
+    } else {
+      if (Math.abs(chosenWSE - critWSE) <= 0.03) {
+        regime = 'critical';
+      } else if (prevWasSuper) {
+        regime = 'jump';
+      }
+      prevWasSuper = false;
     }
 
-    // Subcritical flow constraint: Upstream WSE cannot drop below downstream WSE in backwater pooling
-    const targetWSE = Math.max(solvedWSE, normWSEu, resD.waterElevation);
-
-    const finalGeomU = evaluateCrossSectionGeometry(secU, targetWSE, nMain, nLOB, nROB);
-    const finalArea = finalGeomU.totalArea;
-    const finalVel = finalArea > 0 ? qU / finalArea : 0;
-    const hydraulicDepth = finalGeomU.totalW > 0 ? finalArea / finalGeomU.totalW : Math.max(0.1, targetWSE - minZu);
-    const froudeNumber = hydraulicDepth > 0 ? finalVel / Math.sqrt(9.81 * hydraulicDepth) : 0;
-    const velocityHead = (finalVel * finalVel) / (2 * 9.81);
-    const energyElevation = targetWSE + velocityHead;
-    const isOverbank = targetWSE > finalGeomU.bankMinZ && (finalGeomU.areaLOB > 0.05 || finalGeomU.areaROB > 0.05);
-
-    finalResults[uIdx] = {
-      station: secU.station,
-      waterElevation: targetWSE,
-      maxDepth: Math.max(0, targetWSE - minZu),
-      area: finalArea,
-      velocity: finalVel,
-      wettedPerimeter: finalGeomU.totalP,
-      topWidth: Math.max(0.5, finalGeomU.totalW),
-      froudeNumber,
-      isOverbank,
-      energyElevation,
-      bedElevation: minZu,
-      waterLeftX: finalGeomU.waterLeftX,
-      waterRightX: finalGeomU.waterRightX,
-      overbankAreaLOB: finalGeomU.areaLOB,
-      overbankAreaROB: finalGeomU.areaROB,
-      bankLeftZ: finalGeomU.bankLeftZ,
-      bankRightZ: finalGeomU.bankRightZ,
-      discharge: qU
-    };
-
-    prevIdx = uIdx;
+    const geom = evaluateCrossSectionGeometry(sec, chosenWSE, nMain, nLOB, nROB);
+    finalResults[idx] = buildRoutingResultFromGeom(
+      sec,
+      chosenWSE,
+      q,
+      geom,
+      critWSE,
+      regime,
+      subStructEffect.get(idx)
+    );
   }
 
   return finalResults;
@@ -3486,24 +4115,16 @@ export function runRouting(
     return { results: [], structureResults: [] };
   }
 
-  // Step 1: 1D Standard Step Backwater & Energy balance
-  const baseResults = solveStandardStepBackwater(sections, peakFlow, nMain, nLOB, nROB, S0);
+  // Integrated 1D Mixed-Regime Standard Step + Direct Structure Coupling
+  const results = solveStandardStepBackwater(sections, peakFlow, nMain, nLOB, nROB, S0, structures);
 
   const activeStructures = structures.filter(s => s.isActive);
-  const structureResults: StructureHydraulicResult[] = [];
-
   if (activeStructures.length === 0) {
-    return { results: baseResults, structureResults: [] };
+    return { results, structureResults: [] };
   }
 
-  // Step 2: Compute hydraulic backwater for each structure and propagate in true upstream direction
-  const finalResults = baseResults.map(r => ({ ...r }));
-
-  const zStart = sections[0].minElevation;
-  const zEnd = sections[sections.length - 1].minElevation;
-  const isForward = zStart >= zEnd; // true: 0 is upstream, N-1 is downstream
-
-  for (const struct of activeStructures) {
+  const isForward = detectFlowDirection(sections);
+  const structureResults: StructureHydraulicResult[] = activeStructures.map(struct => {
     let closestIdx = 0;
     let minDiff = Infinity;
     for (let i = 0; i < sections.length; i++) {
@@ -3513,62 +4134,19 @@ export function runRouting(
         closestIdx = i;
       }
     }
+    const dsNeighborIdx = isForward
+      ? Math.min(sections.length - 1, closestIdx + 1)
+      : Math.max(0, closestIdx - 1);
+    const tailwater = results[dsNeighborIdx]?.waterElevation ?? results[closestIdx].waterElevation;
+    const bedZ = getChannelBedElevation(sections[closestIdx]);
+    const hyd = computeStructureHydraulics(struct, tailwater, bedZ, peakFlow);
+    return {
+      ...hyd,
+      upstreamWSE: Math.max(hyd.upstreamWSE, results[closestIdx].waterElevation)
+    };
+  });
 
-    const sec = sections[closestIdx];
-    const tailwater = finalResults[closestIdx].waterElevation;
-    const structHyd = computeStructureHydraulics(struct, tailwater, sec.minElevation, peakFlow);
-    structureResults.push(structHyd);
-
-    const backwaterSurge = structHyd.backwaterRise;
-    if (backwaterSurge > 0.02) {
-      const normalDepth = Math.max(1, tailwater - sec.minElevation);
-      const L_reach = Math.max(300, Math.min(3000, (2.5 * normalDepth) / Math.max(0.0005, Math.abs(S0))));
-
-      // Upstream direction:
-      // If forward flow (0 is upstream): upstream is indices < closestIdx
-      // If reverse flow (N-1 is upstream): upstream is indices > closestIdx
-      const stepDelta = isForward ? -1 : 1;
-      let currI = closestIdx;
-
-      while (currI >= 0 && currI < sections.length) {
-        const distUpstream = Math.abs(sections[currI].station - struct.station);
-        if (distUpstream > L_reach) break;
-
-        const decay = Math.exp(-2.5 * (distUpstream / L_reach));
-        const addedWSE = backwaterSurge * decay;
-
-        if (addedWSE > 0.02) {
-          finalResults[currI].waterElevation += addedWSE;
-          finalResults[currI].maxDepth = finalResults[currI].waterElevation - finalResults[currI].bedElevation;
-          finalResults[currI].energyElevation += addedWSE * 0.9;
-
-          const newGeom = evaluateCrossSectionGeometry(
-            sections[currI],
-            finalResults[currI].waterElevation,
-            nMain,
-            nLOB,
-            nROB
-          );
-          finalResults[currI].waterLeftX = newGeom.waterLeftX;
-          finalResults[currI].waterRightX = newGeom.waterRightX;
-          finalResults[currI].topWidth = Math.max(0.5, newGeom.totalW);
-          finalResults[currI].area = newGeom.totalArea;
-          finalResults[currI].velocity = newGeom.totalArea > 0 ? peakFlow / newGeom.totalArea : 0;
-          finalResults[currI].isOverbank = finalResults[currI].waterElevation > newGeom.bankMinZ;
-
-          finalResults[currI].structureEffect = {
-            structureName: struct.name,
-            flowState: structHyd.flowState,
-            backwaterRise: addedWSE
-          };
-        }
-
-        currI += stepDelta;
-      }
-    }
-  }
-
-  return { results: finalResults, structureResults };
+  return { results, structureResults };
 }
 
 /**
@@ -3586,11 +4164,9 @@ export function generateSyntheticHydrograph(
   for (let t = 0; t <= totalHours; t += (totalHours > 48 ? 2 : 1)) {
     let q = baseFlow;
     if (t <= tPeak) {
-      // Rising limb: parabolic / exponential rise
       const frac = t / tPeak;
       q = baseFlow + (peakFlow - baseFlow) * Math.pow(frac, 2.2);
     } else {
-      // Recession limb: exponential decay
       const k = 2.5 / (totalHours - tPeak);
       const decay = Math.exp(-k * (t - tPeak));
       q = baseFlow + (peakFlow - baseFlow) * decay;
@@ -3601,8 +4177,139 @@ export function generateSyntheticHydrograph(
   return points;
 }
 
+interface HydTable {
+  levels: Float64Array;
+  A: Float64Array;
+  B: Float64Array;
+  K: Float64Array;
+  alpha: Float64Array;
+  bedZ: number;
+}
+
+function buildSectionHydraulicTable(
+  sec: CrossSection,
+  nMain: number,
+  nLOB: number,
+  nROB: number
+): HydTable {
+  const bedZ = getChannelBedElevation(sec);
+  const maxProfZ = sec.maxElevation || Math.max(...sec.profile.map(p => p.z));
+  const span = Math.max(8, (maxProfZ - bedZ) + 18);
+  const count = 48;
+  const levels = new Float64Array(count);
+  const A = new Float64Array(count);
+  const B = new Float64Array(count);
+  const K = new Float64Array(count);
+  const alpha = new Float64Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const frac = i / (count - 1);
+    const wse = bedZ + 0.02 + span * Math.pow(frac, 1.35);
+    const gm = evaluateCrossSectionGeometry(sec, wse, nMain, nLOB, nROB);
+    levels[i] = wse;
+    A[i] = Math.max(0.05, gm.totalArea);
+    B[i] = Math.max(0.5, gm.totalW);
+    K[i] = Math.max(0.05, gm.kTotal);
+    alpha[i] = gm.alpha;
+  }
+
+  return { levels, A, B, K, alpha, bedZ };
+}
+
+function lookupHydTable(
+  tbl: HydTable,
+  wse: number
+): { A: number; B: number; K: number; alpha: number } {
+  const n = tbl.levels.length;
+  if (wse <= tbl.levels[0]) {
+    return { A: tbl.A[0], B: tbl.B[0], K: tbl.K[0], alpha: tbl.alpha[0] };
+  }
+  const last = n - 1;
+  if (wse >= tbl.levels[last]) {
+    const dh = wse - tbl.levels[last];
+    const extraA = tbl.B[last] * dh;
+    const totA = tbl.A[last] + extraA;
+    const slopeK = (tbl.K[last] - tbl.K[last - 1]) / Math.max(1e-4, tbl.levels[last] - tbl.levels[last - 1]);
+    return {
+      A: totA,
+      B: tbl.B[last],
+      K: tbl.K[last] + Math.max(0, slopeK) * dh,
+      alpha: tbl.alpha[last]
+    };
+  }
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (tbl.levels[mid] <= wse) lo = mid;
+    else hi = mid;
+  }
+  const f = (wse - tbl.levels[lo]) / Math.max(1e-6, tbl.levels[hi] - tbl.levels[lo]);
+  return {
+    A: tbl.A[lo] + f * (tbl.A[hi] - tbl.A[lo]),
+    B: tbl.B[lo] + f * (tbl.B[hi] - tbl.B[lo]),
+    K: tbl.K[lo] + f * (tbl.K[hi] - tbl.K[lo]),
+    alpha: tbl.alpha[lo] + f * (tbl.alpha[hi] - tbl.alpha[lo])
+  };
+}
+
 /**
- * 1D Dynamic Unsteady Flow Routing (Saint-Venant / Wave Translation & Attenuation)
+ * Solves A * x = b for a banded square matrix (full dense array size N*N with small N, partial pivoting)
+ * Optimized via sparse/banded skip over zeros since Preissmann 4-point matrix has half-bandwidth 3.
+ */
+function solveBandedLinearSystem(mat: Float64Array, rhs: Float64Array, n: number): Float64Array {
+  const bw = 4; // Preissmann bandwidth <= 3; keep margin of 4 for row pivoting
+  for (let k = 0; k < n; k++) {
+    let pivotRow = k;
+    let maxVal = Math.abs(mat[k * n + k]);
+    const rLimit = Math.min(n, k + bw + 1);
+    for (let r = k + 1; r < rLimit; r++) {
+      const v = Math.abs(mat[r * n + k]);
+      if (v > maxVal) {
+        maxVal = v;
+        pivotRow = r;
+      }
+    }
+    if (maxVal < 1e-12) continue;
+    if (pivotRow !== k) {
+      const cLimit = Math.min(n, k + 2 * bw + 1);
+      for (let c = k; c < cLimit; c++) {
+        const tmp = mat[k * n + c];
+        mat[k * n + c] = mat[pivotRow * n + c];
+        mat[pivotRow * n + c] = tmp;
+      }
+      const tmpB = rhs[k];
+      rhs[k] = rhs[pivotRow];
+      rhs[pivotRow] = tmpB;
+    }
+    const diag = mat[k * n + k];
+    const cMax = Math.min(n, k + 2 * bw + 1);
+    for (let r = k + 1; r < rLimit; r++) {
+      const factor = mat[r * n + k] / diag;
+      if (Math.abs(factor) < 1e-14) continue;
+      mat[r * n + k] = 0;
+      for (let c = k + 1; c < cMax; c++) {
+        mat[r * n + c] -= factor * mat[k * n + c];
+      }
+      rhs[r] -= factor * rhs[k];
+    }
+  }
+  const sol = new Float64Array(n);
+  for (let r = n - 1; r >= 0; r--) {
+    let sum = rhs[r];
+    const cMax = Math.min(n, r + 2 * bw + 1);
+    for (let c = r + 1; c < cMax; c++) {
+      sum -= mat[r * n + c] * sol[c];
+    }
+    const diag = mat[r * n + r];
+    sol[r] = Math.abs(diag) > 1e-12 ? sum / diag : 0;
+  }
+  return sol;
+}
+
+/**
+ * 1D Unsteady Preissmann 4-Point Implicit Saint-Venant Solver
+ * Solves conservation of mass & momentum dynamically with storage attenuation and coupled structures.
  */
 export function runDynamicRouting(
   sections: CrossSection[],
@@ -3627,126 +4334,344 @@ export function runDynamicRouting(
     };
   }
 
-  // Prepare input hydrograph points
-  let hydroPoints = hydrograph && hydrograph.length >= 2 ? [...hydrograph] : generateSyntheticHydrograph(peakFlow, simDuration);
+  let hydroPoints = hydrograph && hydrograph.length >= 2
+    ? [...hydrograph]
+    : generateSyntheticHydrograph(peakFlow, simDuration);
   hydroPoints.sort((a, b) => a.time - b.time);
 
   const maxT = Math.max(simDuration, hydroPoints[hydroPoints.length - 1].time);
-  const totalReachLength = Math.max(100, Math.abs(sections[sections.length - 1].station - sections[0].station));
-
-  // Determine flow direction
-  const zStart = sections[0].minElevation;
-  const zEnd = sections[sections.length - 1].minElevation;
-  const isForward = zStart >= zEnd;
-
-  // Estimate mean channel velocity for kinematic wave celerity c ~= 1.5 * V (m/s)
-  const refPeakResult = runRouting(sections, peakFlow, nMain, nLOB, nROB, S0, structures);
-  const avgV = Math.max(0.8, refPeakResult.results.reduce((acc, r) => acc + r.velocity, 0) / refPeakResult.results.length);
-  const celerity = 1.5 * avgV; // m/s
-  const celerityKmH = (celerity * 3600) / 1000; // km/h
-
-  // Interpolation helper for upstream inflow Q(t)
   const getInflowAtT = (t: number): number => {
-    if (t <= hydroPoints[0].time) return hydroPoints[0].flow;
-    if (t >= hydroPoints[hydroPoints.length - 1].time) return hydroPoints[hydroPoints.length - 1].flow;
+    if (t <= hydroPoints[0].time) return Math.max(0.5, hydroPoints[0].flow);
+    if (t >= hydroPoints[hydroPoints.length - 1].time) return Math.max(0.5, hydroPoints[hydroPoints.length - 1].flow);
     for (let i = 0; i < hydroPoints.length - 1; i++) {
       const p1 = hydroPoints[i];
       const p2 = hydroPoints[i + 1];
       if (t >= p1.time && t <= p2.time) {
         const frac = (t - p1.time) / Math.max(1e-6, p2.time - p1.time);
-        return p1.flow + frac * (p2.flow - p1.flow);
+        return Math.max(0.5, p1.flow + frac * (p2.flow - p1.flow));
       }
     }
-    return hydroPoints[0].flow;
+    return Math.max(0.5, hydroPoints[0].flow);
   };
 
-  // Uniform time steps for dynamic simulation (e.g. hourly or 2-hourly)
-  const timeStepInterval = maxT > 48 ? 2 : 1;
-  const timeStepHours: number[] = [];
-  for (let t = 0; t <= maxT; t += timeStepInterval) {
-    timeStepHours.push(t);
+  // Fallback for 1 section
+  if (sections.length === 1) {
+    const reportIntervalH = maxT > 48 ? 2 : 1;
+    const steps: DynamicTimeStepResult[] = [];
+    const upH: { time: number; flow: number }[] = [];
+    const dnH: { time: number; flow: number }[] = [];
+    let bestRes: RoutingResult | null = null;
+    for (let t = 0; t <= maxT; t += reportIntervalH) {
+      const q = getInflowAtT(t);
+      const { results, structureResults } = runRouting(sections, q, nMain, nLOB, nROB, S0, structures);
+      upH.push({ time: t, flow: Math.round(q * 10) / 10 });
+      dnH.push({ time: t, flow: Math.round(q * 10) / 10 });
+      steps.push({
+        timeHours: t,
+        timeFormatted: `Saat ${String(t).padStart(2, '0')}:00`,
+        inflowQ: Math.round(q * 10) / 10,
+        outflowQ: Math.round(q * 10) / 10,
+        results,
+        structureResults
+      });
+      if (!bestRes || results[0].waterElevation > bestRes.waterElevation) {
+        bestRes = results[0];
+      }
+    }
+    return {
+      peakResults: bestRes ? [bestRes] : [],
+      structureResults: steps[0]?.structureResults || [],
+      timeSteps: steps,
+      peakTimeHours: 0,
+      maxFloodAreaM2: 0,
+      upstreamHydrograph: upH,
+      downstreamHydrograph: dnH
+    };
   }
 
+  const N = sections.length;
+  const isForward = detectFlowDirection(sections);
+  const flowOrder: number[] = [];
+  if (isForward) {
+    for (let i = 0; i < N; i++) flowOrder.push(i);
+  } else {
+    for (let i = N - 1; i >= 0; i--) flowOrder.push(i);
+  }
+
+  const orderedSecs = flowOrder.map(idx => sections[idx]);
+  const tables = orderedSecs.map(sec => buildSectionHydraulicTable(sec, nMain, nLOB, nROB));
+  const reachDx = new Float64Array(N - 1);
+  for (let j = 0; j < N - 1; j++) {
+    reachDx[j] = Math.max(5, Math.abs(orderedSecs[j + 1].station - orderedSecs[j].station));
+  }
+
+  // Map active structures onto ordered reach index j (link between j and j+1, or node j)
+  const activeStructs = structures.filter(s => s.isActive);
+  const structByReach = new Map<number, HydraulicStructure>();
+  for (const st of activeStructs) {
+    let bestJ = 0;
+    let minD = Infinity;
+    for (let j = 0; j < N - 1; j++) {
+      const midSt = (orderedSecs[j].station + orderedSecs[j + 1].station) / 2;
+      const d = Math.abs(midSt - st.station);
+      if (d < minD) {
+        minD = d;
+        bestJ = j;
+      }
+    }
+    structByReach.set(bestJ, st);
+  }
+
+  // Initialize steady flow at t = 0
+  const q0 = getInflowAtT(0);
+  const initRun = solveStandardStepBackwater(sections, q0, nMain, nLOB, nROB, S0, structures);
+  let curWSE = new Float64Array(N);
+  let curQ = new Float64Array(N);
+  for (let j = 0; j < N; j++) {
+    const origIdx = flowOrder[j];
+    curWSE[j] = initRun[origIdx].waterElevation;
+    curQ[j] = q0;
+  }
+
+  // Preissmann implicit parameters
+  const theta = 0.65;
+  const g = 9.81;
+  const effS0Ds = Math.max(0.0001, Math.abs(S0));
+  const reportIntervalH = maxT > 48 ? 2 : 1;
+  // Adaptive hydraulic sub-stepping (~3–6 min step, bounded so runtime < ~120ms)
+  const subStepsPerHour = Math.max(4, Math.min(12, Math.ceil(3600 / Math.max(300, Math.min(...Array.from(reachDx)) * 8))));
+  const dt = 3600 / subStepsPerHour;
+  const totalSubSteps = Math.round(maxT * subStepsPerHour);
+
   const timeSteps: DynamicTimeStepResult[] = [];
-  const downstreamHydrograph: { time: number; flow: number }[] = [];
   const upstreamHydrograph: { time: number; flow: number }[] = [];
+  const downstreamHydrograph: { time: number; flow: number }[] = [];
 
-  // Track maximum envelope across all time steps for each section
-  const peakEnvelope: RoutingResult[] = sections.map((sec, idx) => ({
-    ...refPeakResult.results[idx],
-    waterElevation: -Infinity,
-    maxDepth: 0,
-    velocity: 0,
-    topWidth: 0,
-    discharge: 0
-  }));
+  const peakEnvelope: RoutingResult[] = new Array(N);
+  for (let i = 0; i < N; i++) {
+    peakEnvelope[i] = {
+      ...initRun[i],
+      waterElevation: -Infinity,
+      maxDepth: 0,
+      velocity: 0,
+      topWidth: 0,
+      discharge: 0
+    };
+  }
+  const peakStructEnvelope = new Map<string, StructureHydraulicResult>();
 
-  let overallStructureResults: StructureHydraulicResult[] = refPeakResult.structureResults;
+  const recordSnapshot = (tHours: number, wseVec: Float64Array, qVec: Float64Array) => {
+    const qIn = qVec[0];
+    const qOut = qVec[N - 1];
+    upstreamHydrograph.push({ time: tHours, flow: Math.round(qIn * 10) / 10 });
+    downstreamHydrograph.push({ time: tHours, flow: Math.round(qOut * 10) / 10 });
 
-  for (const t of timeStepHours) {
-    const qInflow = getInflowAtT(t);
-    upstreamHydrograph.push({ time: t, flow: Math.round(qInflow * 10) / 10 });
+    const stepResults = new Array<RoutingResult>(N);
+    const critCache = orderedSecs.map((sec, j) => computeCriticalDepth(sec, Math.max(0.5, qVec[j]), nMain, nLOB, nROB));
 
-    // Compute local discharge at each section based on distance from upstream and celerity delay
-    const sectionDischarges: number[] = sections.map((sec) => {
-      const distFromUpstreamM = isForward
-        ? Math.abs(sec.station - sections[0].station)
-        : Math.abs(sec.station - sections[sections.length - 1].station);
-
-      const delayHours = distFromUpstreamM / Math.max(1, celerity * 3600);
-      const delayedT = Math.max(0, t - delayHours);
-
-      // Storage attenuation: wave peak dampens slightly as it travels downstream
-      const attenRatio = Math.max(0.85, 1 - 0.00003 * distFromUpstreamM);
-      const baseFlow = hydroPoints[0].flow;
-      const rawQ = getInflowAtT(delayedT);
-      const routedQ = baseFlow + (rawQ - baseFlow) * attenRatio;
-
-      return Math.max(baseFlow * 0.8, routedQ);
-    });
-
-    const dsSectionQ = isForward ? sectionDischarges[sections.length - 1] : sectionDischarges[0];
-    downstreamHydrograph.push({ time: t, flow: Math.round(dsSectionQ * 10) / 10 });
-
-    // Solve 1D Standard Step Backwater for this time step's discharges
-    const stepRouting = solveStandardStepBackwater(sections, sectionDischarges, nMain, nLOB, nROB, S0);
-
-    // Apply structures for this time step
-    let stepStructResults: StructureHydraulicResult[] = [];
-    if (structures.length > 0) {
-      const strRouting = runRouting(sections, qInflow, nMain, nLOB, nROB, S0, structures);
-      stepStructResults = strRouting.structureResults;
+    const stepStructs: StructureHydraulicResult[] = [];
+    for (const [jReach, st] of structByReach.entries()) {
+      const tw = wseVec[jReach + 1];
+      const bed = tables[jReach].bedZ;
+      const sh = computeStructureHydraulics(st, tw, bed, Math.max(0.5, qVec[jReach]));
+      stepStructs.push(sh);
+      const prevBest = peakStructEnvelope.get(st.id);
+      if (!prevBest || sh.upstreamWSE > prevBest.upstreamWSE) {
+        peakStructEnvelope.set(st.id, sh);
+      }
     }
 
-    const formattedTime = `Saat ${String(t).padStart(2, '0')}:00`;
+    for (let j = 0; j < N; j++) {
+      const origIdx = flowOrder[j];
+      const sec = orderedSecs[j];
+      const wse = wseVec[j];
+      const q = Math.max(0.5, qVec[j]);
+      const geom = evaluateCrossSectionGeometry(sec, wse, nMain, nLOB, nROB);
+      const crit = critCache[j].criticalWSE;
+      const vel = geom.totalArea > 1e-4 ? q / geom.totalArea : 0;
+      const fr = geom.hydraulicDepth > 0
+        ? vel / Math.sqrt((g * geom.hydraulicDepth) / Math.max(1, geom.alpha))
+        : 0;
+      const regime: RoutingResult['flowRegime'] =
+        Math.abs(wse - crit) <= 0.03 ? 'critical' : fr > 1.02 ? 'supercritical' : 'subcritical';
 
-    timeSteps.push({
-      timeHours: t,
-      timeFormatted: formattedTime,
-      inflowQ: Math.round(qInflow * 10) / 10,
-      outflowQ: Math.round(dsSectionQ * 10) / 10,
-      results: stepRouting,
-      structureResults: stepStructResults
-    });
+      const stAtJ = structByReach.get(j);
+      const stResAtJ = stAtJ ? stepStructs.find(sr => sr.structure.id === stAtJ.id) : undefined;
+      const sEffect = stResAtJ && stResAtJ.backwaterRise > 0.01
+        ? {
+            structureName: stResAtJ.structure.name,
+            flowState: stResAtJ.flowState,
+            backwaterRise: Number(stResAtJ.backwaterRise.toFixed(3))
+          }
+        : undefined;
 
-    // Update peak envelope
-    for (let i = 0; i < sections.length; i++) {
-      const res = stepRouting[i];
-      if (res.waterElevation > peakEnvelope[i].waterElevation) {
-        peakEnvelope[i] = {
+      stepResults[origIdx] = buildRoutingResultFromGeom(sec, wse, q, geom, crit, regime, sEffect);
+
+      const res = stepResults[origIdx];
+      if (res.waterElevation > peakEnvelope[origIdx].waterElevation) {
+        peakEnvelope[origIdx] = {
           ...res,
-          waterElevation: res.waterElevation,
-          maxDepth: res.maxDepth,
-          velocity: Math.max(peakEnvelope[i].velocity, res.velocity),
-          topWidth: Math.max(peakEnvelope[i].topWidth, res.topWidth),
-          discharge: Math.max(peakEnvelope[i].discharge || 0, res.discharge || 0),
-          isOverbank: res.isOverbank || peakEnvelope[i].isOverbank
+          velocity: Math.max(peakEnvelope[origIdx].velocity, res.velocity),
+          topWidth: Math.max(peakEnvelope[origIdx].topWidth, res.topWidth),
+          discharge: Math.max(peakEnvelope[origIdx].discharge || 0, res.discharge || 0),
+          isOverbank: res.isOverbank || peakEnvelope[origIdx].isOverbank
         };
       }
     }
+
+    timeSteps.push({
+      timeHours: tHours,
+      timeFormatted: `Saat ${String(tHours).padStart(2, '0')}:00`,
+      inflowQ: Math.round(qIn * 10) / 10,
+      outflowQ: Math.round(qOut * 10) / 10,
+      results: stepResults,
+      structureResults: stepStructs
+    });
+  };
+
+  recordSnapshot(0, curWSE, curQ);
+
+  // Reusable buffers for Newton-Raphson Preissmann step
+  const dim = 2 * N;
+  const mat = new Float64Array(dim * dim);
+  const rhs = new Float64Array(dim);
+  const fBase = new Float64Array(dim);
+  const fPert = new Float64Array(dim);
+
+  const evalResiduals = (
+    wNew: Float64Array,
+    qNew: Float64Array,
+    wOld: Float64Array,
+    qOld: Float64Array,
+    qUpBound: number,
+    outF: Float64Array
+  ) => {
+    const hNew = new Array<{ A: number; B: number; K: number; alpha: number }>(N);
+    const hOld = new Array<{ A: number; B: number; K: number; alpha: number }>(N);
+    for (let j = 0; j < N; j++) {
+      hNew[j] = lookupHydTable(tables[j], wNew[j]);
+      hOld[j] = lookupHydTable(tables[j], wOld[j]);
+    }
+
+    // Row 0: Upstream inflow boundary Q_0^{n+1} - Q_in(t) = 0
+    outF[0] = qNew[0] - qUpBound;
+
+    for (let j = 0; j < N - 1; j++) {
+      const dx = reachDx[j];
+      const A_j0 = hOld[j].A, A_j1 = hOld[j + 1].A;
+      const A_j0N = hNew[j].A, A_j1N = hNew[j + 1].A;
+
+      // Row 2j + 1: Preissmann Continuity Equation
+      const dAdt = (A_j0N + A_j1N - A_j0 - A_j1) / (2 * dt);
+      const dQdx = (theta * (qNew[j + 1] - qNew[j]) + (1 - theta) * (qOld[j + 1] - qOld[j])) / dx;
+      outF[2 * j + 1] = dAdt + dQdx;
+
+      // Row 2j + 2: Momentum Equation or Coupled Structure Headloss Equation
+      const st = structByReach.get(j);
+      if (st) {
+        const sHyd = computeStructureHydraulics(st, wNew[j + 1], tables[j].bedZ, Math.max(0.5, qNew[j]));
+        // Scale to momentum residual units for clean Newton conditioning
+        outF[2 * j + 2] = (wNew[j] - sHyd.upstreamWSE) * g * Math.max(5, 0.5 * (A_j0N + A_j1N)) / dx;
+      } else {
+        const dQdt = (qNew[j] + qNew[j + 1] - qOld[j] - qOld[j + 1]) / (2 * dt);
+        const mom0N = (hNew[j].alpha * qNew[j] * Math.abs(qNew[j])) / Math.max(0.1, A_j0N);
+        const mom1N = (hNew[j + 1].alpha * qNew[j + 1] * Math.abs(qNew[j + 1])) / Math.max(0.1, A_j1N);
+        const mom0O = (hOld[j].alpha * qOld[j] * Math.abs(qOld[j])) / Math.max(0.1, A_j0);
+        const mom1O = (hOld[j + 1].alpha * qOld[j + 1] * Math.abs(qOld[j + 1])) / Math.max(0.1, A_j1);
+        const conv = (theta * (mom1N - mom0N) + (1 - theta) * (mom1O - mom0O)) / dx;
+
+        const A_bar = theta * 0.5 * (A_j0N + A_j1N) + (1 - theta) * 0.5 * (A_j0 + A_j1);
+        const dWdx = (theta * (wNew[j + 1] - wNew[j]) + (1 - theta) * (wOld[j + 1] - wOld[j])) / dx;
+
+        const sf0N = (qNew[j] * Math.abs(qNew[j])) / Math.max(0.01, hNew[j].K * hNew[j].K);
+        const sf1N = (qNew[j + 1] * Math.abs(qNew[j + 1])) / Math.max(0.01, hNew[j + 1].K * hNew[j + 1].K);
+        const sf0O = (qOld[j] * Math.abs(qOld[j])) / Math.max(0.01, hOld[j].K * hOld[j].K);
+        const sf1O = (qOld[j + 1] * Math.abs(qOld[j + 1])) / Math.max(0.01, hOld[j + 1].K * hOld[j + 1].K);
+        const sf_bar = theta * 0.5 * (sf0N + sf1N) + (1 - theta) * 0.5 * (sf0O + sf1O);
+
+        outF[2 * j + 2] = dQdt + conv + g * A_bar * (dWdx + sf_bar);
+      }
+    }
+
+    // Row 2N - 1: Downstream normal-depth rating curve boundary Q_{N-1} - K_{N-1} * sqrt(S0) = 0
+    outF[dim - 1] = qNew[N - 1] - hNew[N - 1].K * Math.sqrt(effS0Ds);
+  };
+
+  for (let sub = 1; sub <= totalSubSteps; sub++) {
+    const tNextH = sub / subStepsPerHour;
+    const qInNext = getInflowAtT(tNextH);
+
+    const wNew = new Float64Array(curWSE);
+    const qNew = new Float64Array(curQ);
+    qNew[0] = qInNext;
+
+    for (let newton = 0; newton < 6; newton++) {
+      evalResiduals(wNew, qNew, curWSE, curQ, qInNext, fBase);
+
+      let maxNorm = 0;
+      for (let r = 0; r < dim; r++) {
+        maxNorm = Math.max(maxNorm, Math.abs(fBase[r]));
+      }
+      if (maxNorm < 0.02) break;
+
+      mat.fill(0);
+      for (let r = 0; r < dim; r++) rhs[r] = -fBase[r];
+
+      // Build banded finite-difference Jacobian cleanly
+      for (let j = 0; j < N; j++) {
+        // Variable 2j: WSE_j
+        const epsW = 1e-4;
+        const origW = wNew[j];
+        wNew[j] = origW + epsW;
+        evalResiduals(wNew, qNew, curWSE, curQ, qInNext, fPert);
+        wNew[j] = origW;
+        const colW = 2 * j;
+        const rMinW = Math.max(0, colW - 3);
+        const rMaxW = Math.min(dim, colW + 4);
+        for (let r = rMinW; r < rMaxW; r++) {
+          mat[r * dim + colW] = (fPert[r] - fBase[r]) / epsW;
+        }
+
+        // Variable 2j + 1: Q_j
+        const epsQ = Math.max(1e-3, Math.abs(qNew[j]) * 1e-4);
+        const origQ = qNew[j];
+        qNew[j] = origQ + epsQ;
+        evalResiduals(wNew, qNew, curWSE, curQ, qInNext, fPert);
+        qNew[j] = origQ;
+        const colQ = 2 * j + 1;
+        const rMinQ = Math.max(0, colQ - 3);
+        const rMaxQ = Math.min(dim, colQ + 4);
+        for (let r = rMinQ; r < rMaxQ; r++) {
+          mat[r * dim + colQ] = (fPert[r] - fBase[r]) / epsQ;
+        }
+      }
+
+      const delta = solveBandedLinearSystem(mat, rhs, dim);
+
+      // Damped physical update so WSE stays above bed and Q stays positive
+      let stepScale = 1.0;
+      for (let j = 0; j < N; j++) {
+        const dW = delta[2 * j];
+        if (Math.abs(dW) > 1.0) {
+          stepScale = Math.min(stepScale, 1.0 / Math.abs(dW));
+        }
+      }
+      for (let j = 0; j < N; j++) {
+        const nextW = wNew[j] + stepScale * delta[2 * j];
+        wNew[j] = Math.max(tables[j].bedZ + 0.03, Math.min(tables[j].bedZ + 55, nextW));
+        qNew[j] = Math.max(0.25, qNew[j] + stepScale * delta[2 * j + 1]);
+      }
+      qNew[0] = qInNext;
+    }
+
+    curWSE = wNew;
+    curQ = qNew;
+
+    if (sub % (subStepsPerHour * reportIntervalH) === 0) {
+      recordSnapshot(Math.round(tNextH), curWSE, curQ);
+    }
   }
 
-  // Find peak time
   let maxInflow = -Infinity;
   let peakTimeHours = 0;
   for (const pt of hydroPoints) {
@@ -3756,6 +4681,12 @@ export function runDynamicRouting(
     }
   }
 
+  const overallStructureResults = activeStructs.map(st => {
+    const best = peakStructEnvelope.get(st.id);
+    if (best) return best;
+    return computeStructureHydraulics(st, curWSE[0], tables[0].bedZ, peakFlow);
+  });
+
   return {
     peakResults: peakEnvelope,
     structureResults: overallStructureResults,
@@ -3764,5 +4695,354 @@ export function runDynamicRouting(
     maxFloodAreaM2: 0,
     upstreamHydrograph,
     downstreamHydrograph
+  };
+}
+
+export interface DEMFloodDepthOverlay {
+  imageUrl: string;
+  wgs84Bounds: [[number, number], [number, number]];
+  pixelFloodAreaM2: number;
+  pixelFloodAreaHa: number;
+  studyAreaPixelFloodM2?: number;
+  studyAreaPixelFloodHa?: number;
+  maxPixelDepth: number;
+  wetPixelCount: number;
+}
+
+/**
+ * RAS Mapper Style DEM Flood Depth Rasterizer:
+ * Interpolates 1D solved WSE linearly along reach quads onto DEM cells, subtracts terrain elevation
+ * (h = WSE - DEM), applies 8-connected channel connectivity to remove isolated dry-ridge ponds,
+ * and computes exact flooded pixel area and Study Area pixel overlap.
+ */
+export async function buildDEMFloodDepthOverlay(
+  demFile: File,
+  sections: CrossSection[],
+  results: RoutingResult[],
+  crsDef: string,
+  studyAreaPolygons?: [number, number][][]
+): Promise<DEMFloodDepthOverlay | null> {
+  if (!demFile || sections.length < 2 || results.length < 2) return null;
+
+  const rawDem = await loadDEM(demFile);
+  const { bbox, width: rawWidth, height: rawHeight, data: rawData, noDataVal } = rawDem;
+  if (!rawData || rawWidth < 2 || rawHeight < 2) return null;
+
+  // Downsample working raster to max 900px per side for crisp pixels & fast connectivity BFS
+  const maxDim = 900;
+  const scale = Math.min(1, maxDim / Math.max(rawWidth, rawHeight));
+  const width = Math.max(2, Math.round(rawWidth * scale));
+  const height = Math.max(2, Math.round(rawHeight * scale));
+
+  const xll = bbox[0];
+  const yll = bbox[1];
+  const xur = bbox[2];
+  const yur = bbox[3];
+  const spanX = Math.abs(xur - xll);
+  const spanY = Math.abs(yur - yll);
+  const cellSizeX = spanX / width;
+  const cellSizeY = spanY / height;
+
+  const demGrid = new Float32Array(width * height);
+  for (let y = 0; y < height; y++) {
+    const sy = Math.min(rawHeight - 1, Math.floor(((y + 0.5) / height) * rawHeight));
+    const srcRow = sy * rawWidth;
+    const dstRow = y * width;
+    for (let x = 0; x < width; x++) {
+      const sx = Math.min(rawWidth - 1, Math.floor(((x + 0.5) / width) * rawWidth));
+      const v = rawData[srcRow + sx];
+      demGrid[dstRow + x] = (isNaN(v) || v <= -9000 || v > 20000 || v === noDataVal) ? NaN : v;
+    }
+  }
+
+  const isGeographicBbox =
+    Math.abs(bbox[0]) <= 180 &&
+    Math.abs(bbox[2]) <= 180 &&
+    Math.abs(bbox[1]) <= 90 &&
+    Math.abs(bbox[3]) <= 90;
+
+  const effectiveCrsDef = isGeographicBbox
+    ? '+proj=longlat +datum=WGS84 +no_defs'
+    : crsDef;
+
+  let wgs84Bounds: [[number, number], [number, number]];
+  if (isGeographicBbox) {
+    wgs84Bounds = [
+      [Math.min(bbox[1], bbox[3]), Math.min(bbox[0], bbox[2])],
+      [Math.max(bbox[1], bbox[3]), Math.max(bbox[0], bbox[2])]
+    ];
+  } else {
+    try {
+      const toCRS = '+proj=longlat +datum=WGS84 +no_defs';
+      const pSW = proj4(effectiveCrsDef, toCRS, [bbox[0], bbox[1]]);
+      const pNW = proj4(effectiveCrsDef, toCRS, [bbox[0], bbox[3]]);
+      const pNE = proj4(effectiveCrsDef, toCRS, [bbox[2], bbox[3]]);
+      const pSE = proj4(effectiveCrsDef, toCRS, [bbox[2], bbox[1]]);
+      const lats = [pSW[1], pNW[1], pNE[1], pSE[1]];
+      const lons = [pSW[0], pNW[0], pNE[0], pSE[0]];
+      wgs84Bounds = [
+        [Math.min(...lats), Math.min(...lons)],
+        [Math.max(...lats), Math.max(...lons)]
+      ];
+    } catch {
+      return null;
+    }
+  }
+
+  const midLatRad = (((wgs84Bounds[0][0] + wgs84Bounds[1][0]) / 2) * Math.PI) / 180;
+  const effCellX = isGeographicBbox ? cellSizeX * 111320 * Math.cos(midLatRad) : cellSizeX;
+  const effCellY = isGeographicBbox ? cellSizeY * 111320 : cellSizeY;
+  const cellAreaM2 = Math.max(0.01, effCellX * effCellY);
+
+  const wgs84ToGrid = (lat: number, lon: number): [number, number] => {
+    let px = lon;
+    let py = lat;
+    if (!isGeographicBbox) {
+      try {
+        [px, py] = proj4('EPSG:4326', effectiveCrsDef, [lon, lat]);
+      } catch {
+        // ignore
+      }
+    }
+    const gx = ((px - xll) / Math.max(1e-9, spanX)) * width;
+    const gy = ((yur - py) / Math.max(1e-9, spanY)) * height;
+    return [gx, gy];
+  };
+
+  interface GridSectionPts {
+    lx: number;
+    ly: number;
+    cx: number;
+    cy: number;
+    rx: number;
+    ry: number;
+    wse: number;
+  }
+
+  const gridSecs: GridSectionPts[] = [];
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    const res = results[i];
+    if (!sec.cutLine || !res) continue;
+    const [glx, gly] = wgs84ToGrid(sec.cutLine[0][0], sec.cutLine[0][1]);
+    const [grx, gry] = wgs84ToGrid(sec.cutLine[1][0], sec.cutLine[1][1]);
+    const cCoord = sec.centerCoord || [
+      (sec.cutLine[0][0] + sec.cutLine[1][0]) / 2,
+      (sec.cutLine[0][1] + sec.cutLine[1][1]) / 2
+    ];
+    const [gcx, gcy] = wgs84ToGrid(cCoord[0], cCoord[1]);
+    gridSecs.push({ lx: glx, ly: gly, cx: gcx, cy: gcy, rx: grx, ry: gry, wse: res.waterElevation });
+  }
+
+  if (gridSecs.length < 2) return null;
+
+  // Rasterize WSE field across reach triangles
+  const wseGrid = new Float32Array(width * height);
+  wseGrid.fill(NaN);
+
+  const rasterizeTriangle = (
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+    x2: number, y2: number, z2: number
+  ) => {
+    const minPx = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+    const maxPx = Math.min(width - 1, Math.ceil(Math.max(x0, x1, x2)));
+    const minPy = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+    const maxPy = Math.min(height - 1, Math.ceil(Math.max(y0, y1, y2)));
+
+    const denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+    if (Math.abs(denom) < 1e-6) return;
+
+    for (let py = minPy; py <= maxPy; py++) {
+      const cy = py + 0.5;
+      const rowOff = py * width;
+      for (let px = minPx; px <= maxPx; px++) {
+        const cx = px + 0.5;
+        const w0 = ((y1 - y2) * (cx - x2) + (x2 - x1) * (cy - y2)) / denom;
+        const w1 = ((y2 - y0) * (cx - x2) + (x0 - x2) * (cy - y2)) / denom;
+        const w2 = 1 - w0 - w1;
+        if (w0 >= -0.002 && w1 >= -0.002 && w2 >= -0.002) {
+          wseGrid[rowOff + px] = w0 * z0 + w1 * z1 + w2 * z2;
+        }
+      }
+    }
+  };
+
+  for (let i = 0; i < gridSecs.length - 1; i++) {
+    const a = gridSecs[i];
+    const b = gridSecs[i + 1];
+    rasterizeTriangle(a.lx, a.ly, a.wse, b.lx, b.ly, b.wse, b.rx, b.ry, b.wse);
+    rasterizeTriangle(a.lx, a.ly, a.wse, b.rx, b.ry, b.wse, a.rx, a.ry, a.wse);
+  }
+
+  // Raw wet cells where WSE > DEM
+  const totalPixels = width * height;
+  const candidateWet = new Uint8Array(totalPixels);
+  for (let idx = 0; idx < totalPixels; idx++) {
+    const wse = wseGrid[idx];
+    const demZ = demGrid[idx];
+    if (!isNaN(wse) && !isNaN(demZ) && wse - demZ > 0.01) {
+      candidateWet[idx] = 1;
+    }
+  }
+
+  // Seed 8-connected BFS flood fill along river centerline so disconnected depressions stay dry
+  const connectedWet = new Uint8Array(totalPixels);
+  const queue = new Int32Array(totalPixels);
+  let qHead = 0;
+  let qTail = 0;
+
+  const trySeedCell = (px: number, py: number) => {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = px + dx;
+        const ny = py + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const nIdx = ny * width + nx;
+          if (candidateWet[nIdx] && !connectedWet[nIdx]) {
+            connectedWet[nIdx] = 1;
+            queue[qTail++] = nIdx;
+          }
+        }
+      }
+    }
+  };
+
+  for (let i = 0; i < gridSecs.length - 1; i++) {
+    const a = gridSecs[i];
+    const b = gridSecs[i + 1];
+    const distPix = Math.max(1, Math.ceil(Math.hypot(b.cx - a.cx, b.cy - a.cy)));
+    for (let s = 0; s <= distPix; s++) {
+      const f = s / distPix;
+      const sx = Math.round(a.cx + f * (b.cx - a.cx));
+      const sy = Math.round(a.cy + f * (b.cy - a.cy));
+      trySeedCell(sx, sy);
+    }
+  }
+
+  const dirs = [-1, 1, -width, width, -width - 1, -width + 1, width - 1, width + 1];
+  while (qHead < qTail) {
+    const cur = queue[qHead++];
+    const cx = cur % width;
+    for (let k = 0; k < dirs.length; k++) {
+      const nxt = cur + dirs[k];
+      if (nxt < 0 || nxt >= totalPixels) continue;
+      const nx = nxt % width;
+      if (Math.abs(nx - cx) > 1) continue;
+      if (candidateWet[nxt] && !connectedWet[nxt]) {
+        connectedWet[nxt] = 1;
+        queue[qTail++] = nxt;
+      }
+    }
+  }
+
+  // Pre-project Study Area polygons into grid coords if supplied
+  const studyRingsGrid: [number, number][][] = [];
+  if (studyAreaPolygons && studyAreaPolygons.length > 0) {
+    for (const ring of studyAreaPolygons) {
+      if (ring.length >= 3) {
+        studyRingsGrid.push(ring.map(([lat, lon]) => wgs84ToGrid(lat, lon)));
+      }
+    }
+  }
+
+  const pointInPolyGrid = (px: number, py: number, ring: [number, number][]): boolean => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1];
+      const xj = ring[j][0], yj = ring[j][1];
+      const intersect = (yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi + 1e-12) + xi;
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  };
+
+  // Paint water-depth RGBA canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const imgData = ctx.createImageData(width, height);
+  const pix = imgData.data;
+
+  let wetPixelCount = 0;
+  let studyWetPixelCount = 0;
+  let maxPixelDepth = 0;
+
+  for (let py = 0; py < height; py++) {
+    const rowOff = py * width;
+    for (let px = 0; px < width; px++) {
+      const idx = rowOff + px;
+      const p4 = idx * 4;
+      if (!connectedWet[idx]) {
+        pix[p4 + 3] = 0;
+        continue;
+      }
+
+      const depth = wseGrid[idx] - demGrid[idx];
+      if (depth <= 0.01) {
+        pix[p4 + 3] = 0;
+        continue;
+      }
+
+      wetPixelCount++;
+      if (depth > maxPixelDepth) maxPixelDepth = depth;
+
+      if (studyRingsGrid.length > 0) {
+        const cx = px + 0.5;
+        const cy = py + 0.5;
+        for (let r = 0; r < studyRingsGrid.length; r++) {
+          if (pointInPolyGrid(cx, cy, studyRingsGrid[r])) {
+            studyWetPixelCount++;
+            break;
+          }
+        }
+      }
+
+      // Color ramp matching 1D depth legend
+      let rC = 56, gC = 189, bC = 248, alpha = 195;
+      if (depth >= 3.0) {
+        rC = 30; gC = 58; bC = 138; alpha = 235;
+      } else if (depth >= 1.5) {
+        rC = 3; gC = 105; bC = 161; alpha = 225;
+      } else if (depth >= 0.5) {
+        rC = 2; gC = 132; bC = 199; alpha = 210;
+      }
+
+      pix[p4] = rC;
+      pix[p4 + 1] = gC;
+      pix[p4 + 2] = bC;
+      pix[p4 + 3] = alpha;
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+
+  const visDemInfo = {
+    width,
+    height,
+    xll,
+    yll,
+    cellSize: cellSizeX,
+    cellSizeY
+  };
+
+  const warpedUrl = reprojectCanvasToWgs84(canvas, visDemInfo, effectiveCrsDef, wgs84Bounds);
+  const pixelFloodAreaM2 = wetPixelCount * cellAreaM2;
+  const studyAreaPixelFloodM2 = studyRingsGrid.length > 0 ? studyWetPixelCount * cellAreaM2 : undefined;
+
+  return {
+    imageUrl: warpedUrl,
+    wgs84Bounds,
+    pixelFloodAreaM2,
+    pixelFloodAreaHa: pixelFloodAreaM2 / 10000,
+    ...(studyAreaPixelFloodM2 !== undefined ? {
+      studyAreaPixelFloodM2,
+      studyAreaPixelFloodHa: studyAreaPixelFloodM2 / 10000
+    } : {}),
+    maxPixelDepth: Number(maxPixelDepth.toFixed(2)),
+    wetPixelCount
   };
 }

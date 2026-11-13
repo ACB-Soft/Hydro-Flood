@@ -79,6 +79,11 @@ interface CrossSectionManagerModalProps {
   selectedSectionIdx: number;
   onSelectSection: (index: number) => void;
   onUpdateBankTops?: (station: number, bankLeftX: number, bankRightX: number) => void;
+  globalManning?: { nLOB: number; nMain: number; nROB: number };
+  onUpdateSectionManning?: (
+    stationOrIndex: number,
+    patch: { nLOB?: number; nMain?: number; nROB?: number }
+  ) => void;
   onExportJson?: () => void;
   onImportJson?: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
@@ -108,6 +113,8 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
   selectedSectionIdx,
   onSelectSection,
   onUpdateBankTops,
+  globalManning,
+  onUpdateSectionManning,
   onExportJson,
   onImportJson
 }) => {
@@ -558,13 +565,13 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                                 )}
                               </div>
                             </td>
-                            <td className="py-2 px-3 font-mono font-bold text-cyan-900">
-                              {fmtNum(sec.minElevation)} m
+                            <td className="py-2 px-3 font-mono tabular-nums font-bold text-cyan-900">
+                              {fmtNum(sec.channelBedElevation ?? sec.minElevation)} m
                             </td>
-                            <td className="py-2 px-3 font-mono text-slate-600">
+                            <td className="py-2 px-3 font-mono tabular-nums text-slate-600">
                               {fmtNum(sec.maxElevation)} m
                             </td>
-                            <td className="py-2 px-3 font-mono text-slate-700">
+                            <td className="py-2 px-3 font-mono tabular-nums text-slate-700">
                               {fmtNum(width, 1)} m
                             </td>
                             <td className="py-2 px-3 text-slate-500 text-[11px]">
@@ -635,10 +642,10 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                                 </span>
                               </div>
                             </td>
-                            <td className="py-2 px-3 font-mono text-slate-700">
-                              {fmtNum(sec.minElevation)} m
+                            <td className="py-2 px-3 font-mono tabular-nums text-slate-700">
+                              {fmtNum(sec.channelBedElevation ?? sec.minElevation)} m
                             </td>
-                            <td className="py-2 px-3 font-mono text-slate-700">{fmtNum(width, 1)} m</td>
+                            <td className="py-2 px-3 font-mono tabular-nums text-slate-700">{fmtNum(width, 1)} m</td>
                             <td className="py-2 px-3 text-slate-500">{profile.length} nokta</td>
                             <td className="py-2 px-3 text-right" onClick={(e) => e.stopPropagation()}>
                               <button
@@ -674,8 +681,8 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                       İstasyon: {fmtM(focusedSection.station)} m
                     </span>
                   </div>
-                  <span className="bg-cyan-100 text-cyan-900 text-[10px] font-bold px-2 py-0.5 rounded-full border border-cyan-200">
-                    Taban: {fmtNum(focusedSection.minElevation)}m
+                  <span className="bg-cyan-100 text-cyan-900 text-[10px] font-bold font-mono tabular-nums px-2 py-0.5 rounded-full border border-cyan-200">
+                    Taban: {fmtNum(focusedSection.channelBedElevation ?? focusedSection.minElevation)}m
                   </span>
                 </div>
 
@@ -945,26 +952,26 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                       <>
                         <div className="bg-sky-50/90 p-2 rounded-lg border border-sky-300">
                           <span className="text-sky-900 font-bold block">🌊 Dere Ekseni:</span>
-                          <span className="font-bold text-sky-950 text-xs font-mono block">
+                          <span className="font-bold text-sky-950 text-xs font-mono tabular-nums block">
                             X: {fmtNum(cX, 1)} m
                           </span>
-                          <span className="text-[9px] text-sky-700 font-mono">
-                            Taban: {fmtNum(focusedSection.minElevation)} m
+                          <span className="text-[9px] text-sky-700 font-mono tabular-nums">
+                            Kanal Tabanı: {fmtNum(focusedSection.channelBedElevation ?? focusedSection.minElevation)} m
                           </span>
                         </div>
                         <div className="bg-white p-2 rounded-lg border border-slate-200">
                           <span className="text-slate-500 block">Kanal Genişliği:</span>
-                          <span className="font-bold text-slate-800 text-xs font-mono block">
+                          <span className="font-bold text-slate-800 text-xs font-mono tabular-nums block">
                             {fmtNum(Math.abs(sec.bankRightX - sec.bankLeftX), 1)} m
                           </span>
-                          <span className="text-[9px] text-slate-400 font-mono">
+                          <span className="text-[9px] text-slate-400 font-mono tabular-nums">
                             Tepe Z: {fmtNum(focusedSection.maxElevation)} m
                           </span>
                         </div>
                         <div className="bg-emerald-50/80 p-2 rounded-lg border border-emerald-300">
                           <div className="flex items-center justify-between text-emerald-900 font-bold mb-1">
                             <span>🌿 Sol Şev (m):</span>
-                            <span className="text-[9px] font-mono font-normal">(-{dL.toFixed(1)}m)</span>
+                            <span className="text-[9px] font-mono tabular-nums font-normal">(-{dL.toFixed(1)}m)</span>
                           </div>
                           <input
                             type="number"
@@ -976,13 +983,13 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                                 onUpdateBankTops(focusedSection.station, val, focusedSection.bankRightX);
                               }
                             }}
-                            className="w-full bg-white border border-emerald-400 rounded px-2 py-1 text-xs font-bold text-emerald-900 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-2xs"
+                            className="w-full bg-white border border-emerald-400 rounded px-2 py-1 text-xs font-bold font-mono tabular-nums text-emerald-900 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-2xs"
                           />
                         </div>
                         <div className="bg-amber-50/80 p-2 rounded-lg border border-amber-300">
                           <div className="flex items-center justify-between text-amber-900 font-bold mb-1">
                             <span>🌾 Sağ Şev (m):</span>
-                            <span className="text-[9px] font-mono font-normal">(+{dR.toFixed(1)}m)</span>
+                            <span className="text-[9px] font-mono tabular-nums font-normal">(+{dR.toFixed(1)}m)</span>
                           </div>
                           <input
                             type="number"
@@ -994,13 +1001,118 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
                                 onUpdateBankTops(focusedSection.station, focusedSection.bankLeftX, val);
                               }
                             }}
-                            className="w-full bg-white border border-amber-400 rounded px-2 py-1 text-xs font-bold text-amber-900 focus:outline-none focus:ring-1 focus:ring-amber-600 shadow-2xs"
+                            className="w-full bg-white border border-amber-400 rounded px-2 py-1 text-xs font-bold font-mono tabular-nums text-amber-900 focus:outline-none focus:ring-1 focus:ring-amber-600 shadow-2xs"
                           />
                         </div>
                       </>
                     );
                   })()}
                 </div>
+
+                {/* Per-Section Manning Roughness (n) Override */}
+                {onUpdateSectionManning && (
+                  <div className="bg-white border border-slate-200 rounded-lg p-2 space-y-1.5 text-[10px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-700">
+                        Kesit Manning Pürüzlülüğü (n)
+                      </span>
+                      {(focusedSection.nLOB !== undefined ||
+                        focusedSection.nMain !== undefined ||
+                        focusedSection.nROB !== undefined) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateSectionManning(focusedSection.station, {
+                              nLOB: undefined,
+                              nMain: undefined,
+                              nROB: undefined
+                            })
+                          }
+                          className="text-[9px] font-bold text-cyan-700 hover:text-cyan-900 underline cursor-pointer"
+                        >
+                          Genel Değere Sıfırla
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <div>
+                        <label className="text-[9px] font-semibold text-emerald-800 block mb-0.5">
+                          n (Sol LOB)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0.008"
+                          max="0.5"
+                          placeholder={globalManning ? globalManning.nLOB.toFixed(3) : '0.060'}
+                          value={focusedSection.nLOB ?? ''}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              onUpdateSectionManning(focusedSection.station, { nLOB: undefined });
+                            } else {
+                              const v = Number(raw);
+                              if (!Number.isNaN(v) && v > 0) {
+                                onUpdateSectionManning(focusedSection.station, { nLOB: v });
+                              }
+                            }
+                          }}
+                          className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] font-semibold text-sky-800 block mb-0.5">
+                          n (Ana Kanal)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0.008"
+                          max="0.5"
+                          placeholder={globalManning ? globalManning.nMain.toFixed(3) : '0.035'}
+                          value={focusedSection.nMain ?? ''}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              onUpdateSectionManning(focusedSection.station, { nMain: undefined });
+                            } else {
+                              const v = Number(raw);
+                              if (!Number.isNaN(v) && v > 0) {
+                                onUpdateSectionManning(focusedSection.station, { nMain: v });
+                              }
+                            }
+                          }}
+                          className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] font-semibold text-amber-800 block mb-0.5">
+                          n (Sağ ROB)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0.008"
+                          max="0.5"
+                          placeholder={globalManning ? globalManning.nROB.toFixed(3) : '0.060'}
+                          value={focusedSection.nROB ?? ''}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              onUpdateSectionManning(focusedSection.station, { nROB: undefined });
+                            } else {
+                              const v = Number(raw);
+                              if (!Number.isNaN(v) && v > 0) {
+                                onUpdateSectionManning(focusedSection.station, { nROB: v });
+                              }
+                            }
+                          }}
+                          className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs text-center p-4">

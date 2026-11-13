@@ -74,6 +74,10 @@ import {
   detectBankStationsFromProfile,
   buildDEMReliefOverlays,
   DEMReliefOverlays,
+  buildDEMFloodDepthOverlay,
+  DEMFloodDepthOverlay,
+  computeChannelBedElevation,
+  getChannelBedElevation,
   BankLineItem,
   BankLinesParseResult,
   CrossSection, 
@@ -167,6 +171,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   // Flood Inundation Map Layer Toggles
   const [showDemReliefLayer, setShowDemReliefLayer] = useState<boolean>(true);
   const [demReliefStyle, setDemReliefStyle] = useState<'color' | 'relief'>('color');
+  const [showDemFloodDepthLayer, setShowDemFloodDepthLayer] = useState<boolean>(true);
+  const [demFloodOverlay, setDemFloodOverlay] = useState<DEMFloodDepthOverlay | null>(null);
+  const [isComputingDemFlood, setIsComputingDemFlood] = useState<boolean>(false);
   const [showFloodPolygons, setShowFloodPolygons] = useState<boolean>(true);
   const [showFloodBoundary, setShowFloodBoundary] = useState<boolean>(true);
   const [showWettedWidths, setShowWettedWidths] = useState<boolean>(true);
@@ -268,14 +275,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [hydrographData, setHydrographData] = useState<HydrographPoint[]>([]);
   const [hydrographFileName, setHydrographFileName] = useState<string | null>(null);
 
-  // Computed topographic bed slope from cross sections
+  // Computed topographic bed slope from cross sections (uses main channel bed)
   const detectedBedSlope = useMemo(() => {
     if (sections.length < 2) return null;
     const sStart = sections[0];
     const sEnd = sections[sections.length - 1];
     const dStat = Math.abs(sEnd.station - sStart.station);
     if (dStat <= 0) return null;
-    const dZ = Math.abs(sStart.minElevation - sEnd.minElevation);
+    const dZ = Math.abs(getChannelBedElevation(sStart) - getChannelBedElevation(sEnd));
     const s = dZ / dStat;
     return Math.max(0.0001, Math.min(0.2, Number(s.toFixed(5))));
   }, [sections]);
@@ -384,7 +391,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         setCenterlineCoords(coords);
         setOriginalCenterlineCoords(coords);
         if (sections.length > 0) {
-          const updated = calibrateSectionsWithCenterline(sections, coords);
+          const updated = calibrateSectionsWithCenterline(
+            sections,
+            coords,
+            crossSectionMode === 'manual'
+          );
           setSections(updated);
           setOriginalSections(updated);
         }
@@ -739,12 +750,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
               ? ('ROB' as const)
               : ('MAIN' as const)
       }));
+      const channelBedElevation = computeChannelBedElevation(
+        reclassifiedProfile,
+        validLeftX,
+        validRightX,
+        sec.minElevation
+      );
       return {
         ...sec,
         bankLeftX: validLeftX,
         bankRightX: validRightX,
         centerlineX: validCenterX,
         talvegX: validCenterX,
+        channelBedElevation,
         centerCoord: updatedCenterCoord,
         profile: reclassifiedProfile
       };
@@ -813,6 +831,35 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       bankLeftX: newBankLeftX,
       bankRightX: newBankRightX
     });
+  };
+
+  // Per-section Manning roughness (nLOB, nMain, nROB) editor handler
+  const handleUpdateSectionManning = (
+    stationOrIndex: number,
+    patch: { nLOB?: number; nMain?: number; nROB?: number }
+  ) => {
+    const currentSections = sectionsRef.current;
+    let targetIdx = currentSections.findIndex(s => Math.abs(s.station - stationOrIndex) < 0.5);
+    if (targetIdx === -1 && stationOrIndex >= 0 && stationOrIndex < currentSections.length) {
+      targetIdx = stationOrIndex;
+    }
+    if (targetIdx === -1) return;
+
+    const cleanVal = (val: number | undefined) =>
+      val !== undefined && !Number.isNaN(val) && val > 0 ? Number(val.toFixed(4)) : undefined;
+
+    const updated = currentSections.map((sec, idx) => {
+      if (idx !== targetIdx) return sec;
+      return {
+        ...sec,
+        ...('nLOB' in patch ? { nLOB: cleanVal(patch.nLOB) } : {}),
+        ...('nMain' in patch ? { nMain: cleanVal(patch.nMain) } : {}),
+        ...('nROB' in patch ? { nROB: cleanVal(patch.nROB) } : {})
+      };
+    });
+    sectionsRef.current = updated;
+    setSections(updated);
+    setOriginalSections(updated);
   };
 
   // Export all cross-sections (plus deleted sections & calibrated geometry lines) as a .json backup
@@ -933,17 +980,26 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
           ? item.centerCoord as [number, number]
           : undefined;
 
+        const channelBedElevation =
+          typeof item.channelBedElevation === 'number' && !Number.isNaN(item.channelBedElevation)
+            ? item.channelBedElevation
+            : computeChannelBedElevation(taggedProfile, bankLeftX, bankRightX, minElevation);
+
         return {
           station,
           profile: taggedProfile,
           centerCoord,
           cutLine,
           minElevation,
+          channelBedElevation,
           maxElevation,
           bankLeftX: Number(bankLeftX.toFixed(2)),
           bankRightX: Number(bankRightX.toFixed(2)),
           centerlineX: Number(centerlineX.toFixed(2)),
           talvegX: Number(talvegX.toFixed(2)),
+          ...(typeof item.nMain === 'number' && item.nMain > 0 ? { nMain: item.nMain } : {}),
+          ...(typeof item.nLOB === 'number' && item.nLOB > 0 ? { nLOB: item.nLOB } : {}),
+          ...(typeof item.nROB === 'number' && item.nROB > 0 ? { nROB: item.nROB } : {}),
           angleAdjustment: typeof item.angleAdjustment === 'number' ? item.angleAdjustment : undefined,
           isTrimmed: Boolean(item.isTrimmed),
           isIntersecting: Boolean(item.isIntersecting)
@@ -1120,7 +1176,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       }
       setIsExtracting(true);
       try {
-        let data = await parseManualCrossSections(demFile, manualKmlFile, selectedCRS.def);
+        let data = await parseManualCrossSections(
+          demFile,
+          manualKmlFile,
+          selectedCRS.def,
+          centerlineCoords
+        );
         if (leftBankCoords.length > 0 || rightBankCoords.length > 0) {
           data = calibrateSectionsWithBankLines(data, leftBankCoords, rightBankCoords);
         } else {
@@ -1523,7 +1584,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
 
     const matchedSec = sections.find(s => Math.abs(s.station - defaultStation) < 60) || sections[0];
-    const bedZ = matchedSec ? matchedSec.minElevation : 100;
+    const bedZ = matchedSec ? getChannelBedElevation(matchedSec) : 100;
     const defaultLowChord = type === 'bridge' ? bedZ + 3.0 : bedZ + 2.0;
     const defaultRoadElev = defaultLowChord + (type === 'bridge' ? 1.2 : 0.8);
 
@@ -1555,7 +1616,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const handleMapLocationSelected = (lat: number, lon: number) => {
     if (editingStructure) {
       const { station, coordinates, nearestSec } = findNearestStationOnReach(lat, lon, sections);
-      const bed = nearestSec ? Number(nearestSec.minElevation.toFixed(2)) : editingStructure.invertElevation;
+      const bed = nearestSec ? Number(getChannelBedElevation(nearestSec).toFixed(2)) : editingStructure.invertElevation;
       const diff = editingStructure.lowChordElevation - editingStructure.invertElevation;
       const newLow = Number((bed + (diff > 0.5 ? diff : (editingStructure.type === 'bridge' ? 3.0 : 2.0))).toFixed(2));
       const roadDiff = editingStructure.roadElevation - editingStructure.lowChordElevation;
@@ -1704,6 +1765,30 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       setStructureResults(step.structureResults);
     }
   }, [currentStepIdx, resultDisplayMode, dynamicResults]);
+
+  // RAS Mapper style DEM-based Flood Depth Raster Overlay (h = WSE - DEM > 0)
+  useEffect(() => {
+    if (!isResultPage || !demFile || sections.length < 2 || simResults.length < 2) {
+      setDemFloodOverlay(null);
+      return;
+    }
+    let cancelled = false;
+    setIsComputingDemFlood(true);
+    buildDEMFloodDepthOverlay(demFile, sections, simResults, selectedCRS.def, studyAreaKml?.polygons)
+      .then((overlay) => {
+        if (!cancelled) setDemFloodOverlay(overlay);
+      })
+      .catch((err) => {
+        console.error('DEM su derinliği haritası oluşturulamadı:', err);
+        if (!cancelled) setDemFloodOverlay(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsComputingDemFlood(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isResultPage, demFile, sections, simResults, selectedCRS.def, studyAreaKml]);
 
   // 1D Flood Inundation Polygons & Extents Computation
   const floodMapData = useMemo(() => {
@@ -2501,8 +2586,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 {/* Result Tab 1: Longitudinal Profile */}
                 {resultTab === 'profile' && simResults.length > 0 && (
                   <div className="flex-1 flex flex-col min-h-0 pt-2 relative overflow-hidden">
-                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 px-1 mb-1">
-                      <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 px-1 mb-1 flex-wrap gap-2">
+                      <div className="flex items-center gap-3 flex-wrap">
                         <span className="flex items-center gap-1.5">
                           <span className="w-3 h-0.5 bg-blue-600 inline-block"></span>
                           <span className="text-blue-700">Su Yüzeyi (WSE)</span>
@@ -2512,11 +2597,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           <span className="text-amber-700">Enerji Çizgisi (EGL)</span>
                         </span>
                         <span className="flex items-center gap-1.5">
+                          <span className="w-3 h-0.5 border-t border-dotted border-purple-600 inline-block"></span>
+                          <span className="text-purple-700">Kritik Su Kotu (yc)</span>
+                        </span>
+                        <span className="flex items-center gap-1.5">
                           <span className="w-3 h-0.5 bg-slate-800 inline-block"></span>
                           <span className="text-slate-800">Nehir Taban Kotu (Thalweg)</span>
                         </span>
                       </div>
-                      <span className="text-slate-500 font-medium">Toplam Uzunluk: {(sections[sections.length - 1]?.station / 1000).toFixed(2)} km</span>
+                      <span className="text-slate-500 font-medium font-mono tabular-nums">Toplam Uzunluk: {(sections[sections.length - 1]?.station / 1000).toFixed(2)} km</span>
                     </div>
 
                     <div className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-xl p-2 relative overflow-hidden flex flex-col justify-center">
@@ -2529,7 +2618,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                         {(() => {
                           const minZ = Math.min(...simResults.map(r => r.bedElevation));
-                          const maxZ = Math.max(...simResults.map(r => r.energyElevation)) + 2;
+                          const maxZ = Math.max(...simResults.map(r => Math.max(r.energyElevation, r.criticalWSE ?? r.waterElevation))) + 2;
                           const totalDist = sections[sections.length - 1]?.station || 1;
 
                           const mapX = (station: number) => 40 + (station / totalDist) * 740;
@@ -2538,6 +2627,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           const bedPoints = simResults.map(r => `${mapX(r.station)},${mapY(r.bedElevation)}`).join(' ');
                           const wsePoints = simResults.map(r => `${mapX(r.station)},${mapY(r.waterElevation)}`).join(' ');
                           const eglPoints = simResults.map(r => `${mapX(r.station)},${mapY(r.energyElevation)}`).join(' ');
+                          const critPoints = simResults
+                            .filter(r => r.criticalWSE !== undefined && !isNaN(r.criticalWSE))
+                            .map(r => `${mapX(r.station)},${mapY(r.criticalWSE!)}`)
+                            .join(' ');
 
                           const waterPoly = `${mapX(simResults[0].station)},${mapY(simResults[0].bedElevation)} ` +
                             simResults.map(r => `${mapX(r.station)},${mapY(r.waterElevation)}`).join(' ') +
@@ -2552,6 +2645,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               <polyline points={bedPoints} fill="none" stroke="#1e293b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
                               <polyline points={wsePoints} fill="none" stroke="#0284c7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                               <polyline points={eglPoints} fill="none" stroke="#d97706" strokeWidth="1.5" strokeDasharray="5 3" />
+                              {critPoints && (
+                                <polyline points={critPoints} fill="none" stroke="#9333ea" strokeWidth="1.5" strokeDasharray="3 3" />
+                              )}
                               <line x1={curX} y1="30" x2={curX} y2="260" stroke="#0ea5e9" strokeWidth="2" strokeDasharray="3 3" />
                               <circle cx={curX} cy={mapY(currentActiveResult?.waterElevation || 0)} r="4" fill="#0284c7" stroke="#fff" strokeWidth="2" />
 
@@ -2673,23 +2769,48 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </div>
                       )}
 
-                      <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1 mb-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-cyan-800">Kesit: Km {(currentActiveSection.station / 1000).toFixed(3)}</span>
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1 mb-1 flex-wrap gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-cyan-800 font-mono tabular-nums">Kesit: Km {(currentActiveSection.station / 1000).toFixed(3)}</span>
                           {currentActiveResult.isOverbank ? (
                             <span className="text-[10px] bg-red-100 text-red-800 px-2 py-0.5 rounded-full border border-red-300">
-                              Taşkın Yatağına Taştı
+                              ▲ Taşkın Yatağına Taştı
                             </span>
                           ) : (
                             <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
-                              Ana Kanalda Sınırlandı
+                              ● Ana Kanalda Sınırlandı
+                            </span>
+                          )}
+                          {currentActiveResult.flowRegime && (
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-bold ${
+                              currentActiveResult.flowRegime === 'jump'
+                                ? 'bg-rose-100 text-rose-900 border-rose-300'
+                                : currentActiveResult.flowRegime === 'supercritical'
+                                  ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                  : currentActiveResult.flowRegime === 'critical'
+                                    ? 'bg-purple-100 text-purple-900 border-purple-300'
+                                    : 'bg-sky-100 text-sky-900 border-sky-300'
+                            }`}>
+                              {currentActiveResult.flowRegime === 'jump'
+                                ? '▲ Hidrolik Sıçrama'
+                                : currentActiveResult.flowRegime === 'supercritical'
+                                  ? '▲ Süperkritik'
+                                  : currentActiveResult.flowRegime === 'critical'
+                                    ? '◆ Kritik'
+                                    : '● Subkritik'}
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 text-[11px] text-slate-600">
+                        <div className="flex items-center gap-2.5 text-[11px] text-slate-600 font-mono tabular-nums flex-wrap">
                           <span>Su Kotu: <strong>{currentActiveResult.waterElevation.toFixed(2)} m</strong></span>
+                          {currentActiveResult.criticalWSE !== undefined && (
+                            <span className="text-purple-800">yc: <strong>{currentActiveResult.criticalWSE.toFixed(2)} m</strong></span>
+                          )}
                           <span>Derinlik: <strong>{currentActiveResult.maxDepth.toFixed(2)} m</strong></span>
                           <span>Hız: <strong>{currentActiveResult.velocity.toFixed(2)} m/s</strong></span>
+                          {currentActiveResult.alpha !== undefined && (
+                            <span className="text-amber-800" title="Coriolis Enerji Katsayısı">α: <strong>{currentActiveResult.alpha.toFixed(2)}</strong></span>
+                          )}
                         </div>
                       </div>
 
@@ -2821,6 +2942,28 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 <g>
                                   <path d={waterPath} fill={currentActiveResult.isOverbank ? "#ef4444" : "#0284c7"} fillOpacity="0.4" />
                                   <line x1={firstWetX} y1={waterTopY} x2={lastWetX} y2={waterTopY} stroke={currentActiveResult.isOverbank ? "#dc2626" : "#0284c7"} strokeWidth="2.5" />
+                                  {currentActiveResult.criticalWSE !== undefined && currentActiveResult.criticalWSE > minZ && (
+                                    <>
+                                      <line
+                                        x1={firstWetX}
+                                        y1={mapZ(currentActiveResult.criticalWSE)}
+                                        x2={lastWetX}
+                                        y2={mapZ(currentActiveResult.criticalWSE)}
+                                        stroke="#9333ea"
+                                        strokeWidth="1.5"
+                                        strokeDasharray="4 3"
+                                      />
+                                      <text
+                                        x={Math.max(45, firstWetX + 4)}
+                                        y={mapZ(currentActiveResult.criticalWSE) - 3}
+                                        fontSize="8"
+                                        fill="#7e22ce"
+                                        fontWeight="bold"
+                                      >
+                                        Kritik yc: {currentActiveResult.criticalWSE.toFixed(2)}m
+                                      </text>
+                                    </>
+                                  )}
                                   <text x={Math.min(650, lastWetX - 5)} y={waterTopY - 5} fontSize="9" textAnchor="end" fill={currentActiveResult.isOverbank ? "#b91c1c" : "#0369a1"} fontWeight="bold">
                                     Su Yüzeyi: {wl.toFixed(2)}m (h={currentActiveResult.maxDepth.toFixed(2)}m)
                                   </text>
@@ -3024,10 +3167,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </svg>
                       </div>
 
-                      <div className="pt-2 px-1 flex items-center justify-between text-[11px] text-slate-600">
-                        <span>Sol Bank: <strong>{currentActiveSection.bankLeftX.toFixed(0)}m</strong></span>
-                        <span>Taban Kotu: <strong>{currentActiveSection.minElevation.toFixed(2)}m</strong></span>
-                        <span>Sağ Bank: <strong>{currentActiveSection.bankRightX.toFixed(0)}m</strong></span>
+                      <div className="pt-2 px-1 flex items-center justify-between text-[11px] text-slate-600 font-mono tabular-nums">
+                        <span>Sol Bank: <strong>{currentActiveSection.bankLeftX.toFixed(1)}m</strong></span>
+                        <span>Kanal Tabanı: <strong>{(currentActiveSection.channelBedElevation ?? currentActiveSection.minElevation).toFixed(2)}m</strong></span>
+                        <span>Sağ Bank: <strong>{currentActiveSection.bankRightX.toFixed(1)}m</strong></span>
                       </div>
                     </div>
                   );
@@ -3161,6 +3304,19 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     <div className="absolute top-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 pointer-events-none">
                       {/* Layer Toggle Chips */}
                       <div className="flex flex-wrap items-center gap-1 bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-300 shadow-md pointer-events-auto">
+                        <button
+                          onClick={() => setShowDemFloodDepthLayer(!showDemFloodDepthLayer)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            showDemFloodDepthLayer
+                              ? 'bg-sky-700 text-white shadow-xs'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                          title="DEM hücre kotundan hesaplanan gerçek su derinliği (RAS Mapper: h = WSE - DEM > 0)"
+                        >
+                          <span>🗺️</span>
+                          <span>{isComputingDemFlood ? 'DEM Derinlik...' : 'DEM Su Derinliği'}</span>
+                        </button>
+
                         <button
                           onClick={() => setShowFloodPolygons(!showFloodPolygons)}
                           className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
@@ -3359,6 +3515,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           url={demReliefStyle === 'color' ? demOverlay.elevationImage : demOverlay.reliefImage}
                           bounds={demOverlay.wgs84Bounds}
                           opacity={demReliefStyle === 'color' ? 0.78 : 0.6}
+                        />
+                      )}
+
+                      {/* 0b. RAS Mapper Tarzı DEM Su Derinliği Katmanı (h = WSE - DEM > 0) */}
+                      {showDemFloodDepthLayer && demFloodOverlay && (
+                        <ImageOverlay
+                          url={demFloodOverlay.imageUrl}
+                          bounds={demFloodOverlay.wgs84Bounds}
+                          opacity={0.82}
                         />
                       )}
 
@@ -3793,26 +3958,42 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     </div>
 
                     {/* Floating Area & Distance Metrics Tag in Bottom-Right */}
-                    {floodMapData && (
-                      <div className="absolute bottom-3 right-3 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl text-slate-200 border border-slate-700 shadow-xl text-right">
-                        <div className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider">
-                          {clipFloodToStudyArea && studyAreaOverlap ? 'İnceleme Alanı İçi Taşkın' : 'Toplam Taşkın Alanı'}
+                    {(floodMapData || demFloodOverlay) && (() => {
+                      const usePixelArea = Boolean(showDemFloodDepthLayer && demFloodOverlay);
+                      const areaM2 = usePixelArea && demFloodOverlay
+                        ? (clipFloodToStudyArea && demFloodOverlay.studyAreaPixelFloodM2 !== undefined
+                            ? demFloodOverlay.studyAreaPixelFloodM2
+                            : demFloodOverlay.pixelFloodAreaM2)
+                        : (clipFloodToStudyArea && studyAreaOverlap
+                            ? studyAreaOverlap.insideFloodAreaM2
+                            : (floodMapData?.totalFloodAreaM2 || 0));
+                      const title = usePixelArea
+                        ? (clipFloodToStudyArea && studyAreaKml
+                            ? 'İnceleme Alanı DEM Islak Piksel Alanı'
+                            : 'DEM Tabanlı Su Yayılım Alanı (RAS Mapper)')
+                        : (clipFloodToStudyArea && studyAreaOverlap
+                            ? 'İnceleme Alanı İçi Taşkın'
+                            : 'Toplam Taşkın Alanı');
+
+                      return (
+                        <div className="absolute bottom-3 right-3 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl text-slate-200 border border-slate-700 shadow-xl text-right">
+                          <div className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider">
+                            {title}
+                          </div>
+                          <div className="text-sm font-display font-bold text-white font-mono tabular-nums">
+                            {Math.round(areaM2).toLocaleString()} m²
+                            <span className="text-[11px] text-slate-300 font-normal ml-1">
+                              ({(areaM2 / 10000).toFixed(2)} ha)
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5 font-mono tabular-nums">
+                            {floodMapData ? `Nehir Mesafesi: ${(floodMapData.totalLengthM / 1000).toFixed(2)} km | ` : ''}
+                            Q: {peakFlow} m³/s
+                            {usePixelArea && demFloodOverlay ? ` | Maks h: ${demFloodOverlay.maxPixelDepth.toFixed(2)} m` : ''}
+                          </div>
                         </div>
-                        <div className="text-sm font-display font-bold text-white font-mono tabular-nums">
-                          {clipFloodToStudyArea && studyAreaOverlap
-                            ? Math.round(studyAreaOverlap.insideFloodAreaM2).toLocaleString()
-                            : Math.round(floodMapData.totalFloodAreaM2).toLocaleString()} m²
-                          <span className="text-[11px] text-slate-300 font-normal ml-1">
-                            ({clipFloodToStudyArea && studyAreaOverlap
-                              ? (studyAreaOverlap.insideFloodAreaM2 / 10000).toFixed(2)
-                              : floodMapData.totalFloodAreaHa.toFixed(2)} ha)
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
-                          Nehir Mesafesi: {(floodMapData.totalLengthM / 1000).toFixed(2)} km | Q: {peakFlow} m³/s
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -3834,10 +4015,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
                         floodMapData && floodMapData.totalOverbankAreaM2 > 0 ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'
                       }`}>
-                        {floodMapData && floodMapData.totalOverbankAreaM2 > 0 ? 'Taşkın Var' : 'Yatak İçi Emniyetli'}
+                        {floodMapData && floodMapData.totalOverbankAreaM2 > 0 ? '▲ Taşkın Var' : '● Yatak İçi Emniyetli'}
                       </span>
                     </p>
-                    <div className="flex items-baseline gap-2 mt-1">
+                    <div className="flex items-baseline gap-2 mt-1 font-mono tabular-nums">
                       <p className="text-lg font-display font-bold text-slate-900">
                         {floodMapData ? Math.round(floodMapData.totalFloodAreaM2).toLocaleString() : '0'} m²
                       </p>
@@ -3846,9 +4027,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </p>
                     </div>
                     {floodMapData && floodMapData.totalOverbankAreaM2 > 0 && (
-                      <p className="text-[10px] text-slate-600 mt-1 border-t border-cyan-200/60 pt-1 flex justify-between">
+                      <p className="text-[10px] text-slate-600 mt-1 border-t border-cyan-200/60 pt-1 flex justify-between font-mono tabular-nums">
                         <span>Toplam Islak Yüzey (Kanal dahil):</span>
                         <strong className="text-slate-800">{Math.round(floodMapData.totalWaterAreaM2).toLocaleString()} m² ({floodMapData.totalWaterAreaHa.toFixed(2)} ha)</strong>
+                      </p>
+                    )}
+                    {demFloodOverlay && (
+                      <p className="text-[10px] text-sky-900 mt-1 border-t border-cyan-200/60 pt-1 flex justify-between font-mono tabular-nums">
+                        <span>DEM Piksel Su Alanı (RAS Mapper):</span>
+                        <strong>{Math.round(demFloodOverlay.pixelFloodAreaM2).toLocaleString()} m² ({demFloodOverlay.pixelFloodAreaHa.toFixed(2)} ha)</strong>
                       </p>
                     )}
                   </div>
@@ -3863,7 +4050,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </p>
                         <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-emerald-200/80 text-emerald-950 font-mono tabular-nums">
                           {studyAreaKml.areaM2 > 0
-                            ? `%${Math.min(100, (studyAreaOverlap.insideFloodAreaM2 / studyAreaKml.areaM2) * 100).toFixed(1)} Etkilenen`
+                            ? `%${Math.min(100, (((demFloodOverlay?.studyAreaPixelFloodM2 ?? studyAreaOverlap.insideFloodAreaM2)) / studyAreaKml.areaM2) * 100).toFixed(1)} Etkilenen`
                             : '%0.0'}
                         </span>
                       </div>
@@ -3878,18 +4065,20 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           </span>
                         </div>
                         <div className="bg-white/90 px-2 py-1.5 rounded-lg border border-emerald-200">
-                          <span className="text-[9px] text-slate-500 block">Alan İçi Taşkın / Su Yüzeyi:</span>
+                          <span className="text-[9px] text-slate-500 block">
+                            {demFloodOverlay?.studyAreaPixelFloodM2 !== undefined ? 'Alan İçi DEM Su Alanı:' : 'Alan İçi Taşkın / Su Yüzeyi:'}
+                          </span>
                           <span className="font-bold text-emerald-800 font-mono tabular-nums">
-                            {Math.round(studyAreaOverlap.insideFloodAreaM2).toLocaleString()} m²
+                            {Math.round(demFloodOverlay?.studyAreaPixelFloodM2 ?? studyAreaOverlap.insideFloodAreaM2).toLocaleString()} m²
                           </span>
                           <span className="text-[9px] text-emerald-700 block font-mono tabular-nums">
-                            ({(studyAreaOverlap.insideFloodAreaM2 / 10000).toFixed(2)} ha)
+                            ({((demFloodOverlay?.studyAreaPixelFloodM2 ?? studyAreaOverlap.insideFloodAreaM2) / 10000).toFixed(2)} ha)
                           </span>
                         </div>
                       </div>
                       {studyAreaOverlap.insideOverbankAreaM2 > 0 && (
                         <p className="text-[10px] text-emerald-900 border-t border-emerald-200/80 pt-1 flex justify-between font-mono tabular-nums">
-                          <span>Alan İçi Toplam Su (Kanal Dahil):</span>
+                          <span>Alan İçi Geometrik Poligon Alanı:</span>
                           <strong>{Math.round(studyAreaOverlap.insideWaterAreaM2).toLocaleString()} m²</strong>
                         </p>
                       )}
@@ -3898,28 +4087,28 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
                     <p className="text-[10px] font-bold text-blue-800 uppercase">Maks. Su Derinliği</p>
-                    <p className="text-base font-display font-bold text-slate-900 mt-1">
+                    <p className="text-base font-display font-bold text-slate-900 mt-1 font-mono tabular-nums">
                       {maxDepthVal.toFixed(2)} m
                     </p>
                   </div>
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
                     <p className="text-[10px] font-bold text-blue-800 uppercase">Maks. Akış Hızı</p>
-                    <p className="text-base font-display font-bold text-slate-900 mt-1">
+                    <p className="text-base font-display font-bold text-slate-900 mt-1 font-mono tabular-nums">
                       {maxVelocityVal.toFixed(2)} m/s
                     </p>
                   </div>
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
                     <p className="text-[10px] font-bold text-slate-700 uppercase">Ort. Taşkın Genişliği</p>
-                    <p className="text-base font-display font-bold text-slate-900 mt-1">
+                    <p className="text-base font-display font-bold text-slate-900 mt-1 font-mono tabular-nums">
                       {floodMapData ? floodMapData.avgWidthTotal.toFixed(1) : '0.0'} m
                     </p>
                   </div>
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
                     <p className="text-[10px] font-bold text-red-800 uppercase">Taşkın Durumu</p>
-                    <p className="text-base font-display font-bold text-red-900 mt-1">
+                    <p className="text-base font-display font-bold text-red-900 mt-1 font-mono tabular-nums">
                       %{overbankPercent.toFixed(0)} ({overbankCount}/{simResults.length})
                     </p>
                   </div>
@@ -3927,7 +4116,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl col-span-2">
                     <div className="flex items-center justify-between text-[10px] font-bold text-slate-700">
                       <span>Ortalama Froude Sayısı:</span>
-                      <span className="font-mono text-slate-900 text-xs">
+                      <span className="font-mono tabular-nums text-slate-900 text-xs">
                         {avgFroudeVal.toFixed(2)} ({avgFroudeVal < 1 ? 'Nehir Rejimi' : 'Sel Rejimi'})
                       </span>
                     </div>
@@ -3937,19 +4126,44 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 {/* Selected Section Metrics Badge */}
                 {currentActiveResult && (
                   <div className="bg-cyan-50 border border-cyan-200 p-3 rounded-xl space-y-1.5 text-xs">
-                    <p className="font-bold text-cyan-900 flex items-center gap-1.5">
-                      <CheckCircle2 size={14} className="text-cyan-700" />
-                      Seçili İstasyon: Km {(currentActiveResult.station / 1000).toFixed(3)}
+                    <p className="font-bold text-cyan-900 flex items-center justify-between gap-1.5">
+                      <span className="flex items-center gap-1.5">
+                        <CheckCircle2 size={14} className="text-cyan-700" />
+                        <span className="font-mono tabular-nums">Seçili İstasyon: Km {(currentActiveResult.station / 1000).toFixed(3)}</span>
+                      </span>
+                      {currentActiveResult.flowRegime && (
+                        <span className="text-[10px] font-bold text-cyan-900">
+                          {currentActiveResult.flowRegime === 'jump'
+                            ? '▲ Sıçrama'
+                            : currentActiveResult.flowRegime === 'supercritical'
+                              ? '▲ Süperkritik'
+                              : currentActiveResult.flowRegime === 'critical'
+                                ? '◆ Kritik'
+                                : '● Subkritik'}
+                        </span>
+                      )}
                     </p>
-                    <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
+                    <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 font-mono tabular-nums">
                       <div className="bg-white p-2 rounded-lg border border-cyan-200">
-                        <span className="text-slate-500 block text-[9px]">Islak Kesit Alanı:</span>
+                        <span className="text-slate-500 block text-[9px] font-sans">Islak Kesit Alanı:</span>
                         <span className="font-bold text-slate-800">{currentActiveResult.area.toFixed(1)} m²</span>
                       </div>
                       <div className="bg-white p-2 rounded-lg border border-cyan-200">
-                        <span className="text-slate-500 block text-[9px]">Su Yüzeyi Genişliği:</span>
+                        <span className="text-slate-500 block text-[9px] font-sans">Su Yüzeyi Genişliği:</span>
                         <span className="font-bold text-slate-800">{currentActiveResult.topWidth.toFixed(1)} m</span>
                       </div>
+                      {currentActiveResult.criticalWSE !== undefined && (
+                        <div className="bg-white p-2 rounded-lg border border-cyan-200">
+                          <span className="text-slate-500 block text-[9px] font-sans">Kritik Su Kotu (yc):</span>
+                          <span className="font-bold text-purple-800">{currentActiveResult.criticalWSE.toFixed(2)} m</span>
+                        </div>
+                      )}
+                      {currentActiveResult.alpha !== undefined && (
+                        <div className="bg-white p-2 rounded-lg border border-cyan-200">
+                          <span className="text-slate-500 block text-[9px] font-sans">Coriolis (α):</span>
+                          <span className="font-bold text-amber-800">{currentActiveResult.alpha.toFixed(2)}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -6063,8 +6277,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             })()}
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-slate-500 text-[11px]">
-                              Taban: <strong className="text-slate-800 font-mono">{currentActiveSection.minElevation.toFixed(2)}m</strong> | Tepe: {currentActiveSection.maxElevation.toFixed(2)}m
+                            <span className="text-slate-500 text-[11px] font-mono tabular-nums">
+                              Kanal Tabanı: <strong className="text-slate-800">{getChannelBedElevation(currentActiveSection).toFixed(2)}m</strong> | Tepe: {currentActiveSection.maxElevation.toFixed(2)}m
                             </span>
                             <button
                               type="button"
@@ -6705,6 +6919,101 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                     Talveg kaydırıldığında haritadaki eksen anlık güncellenir.
                                   </div>
                                 </div>
+
+                                {/* 5. Kesite Özgü Manning Pürüzlülüğü (n) */}
+                                <div className="sm:col-span-2 xl:col-span-4 bg-white border border-slate-200 p-2 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[11px] font-bold text-slate-800">
+                                      Kesit Manning Pürüzlülüğü (n):
+                                    </span>
+                                    {(sec.nLOB !== undefined || sec.nMain !== undefined || sec.nROB !== undefined) && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleUpdateSectionManning(sec.station, {
+                                            nLOB: undefined,
+                                            nMain: undefined,
+                                            nROB: undefined
+                                          })
+                                        }
+                                        className="text-[10px] font-bold text-cyan-700 hover:text-cyan-900 underline cursor-pointer"
+                                      >
+                                        Genel Değere Sıfırla
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-2 flex-1 min-w-[240px] max-w-md">
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[10px] font-semibold text-emerald-800 shrink-0">Sol n:</span>
+                                      <input
+                                        type="number"
+                                        step="0.001"
+                                        min="0.008"
+                                        max="0.5"
+                                        placeholder={manningLOB.toFixed(3)}
+                                        value={sec.nLOB ?? ''}
+                                        onChange={(e) => {
+                                          const raw = e.target.value;
+                                          if (raw === '') {
+                                            handleUpdateSectionManning(sec.station, { nLOB: undefined });
+                                          } else {
+                                            const v = Number(raw);
+                                            if (!Number.isNaN(v) && v > 0) {
+                                              handleUpdateSectionManning(sec.station, { nLOB: v });
+                                            }
+                                          }
+                                        }}
+                                        className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-slate-900 text-center focus:outline-none focus:border-cyan-600"
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[10px] font-semibold text-sky-800 shrink-0">Kanal n:</span>
+                                      <input
+                                        type="number"
+                                        step="0.001"
+                                        min="0.008"
+                                        max="0.5"
+                                        placeholder={manningMain.toFixed(3)}
+                                        value={sec.nMain ?? ''}
+                                        onChange={(e) => {
+                                          const raw = e.target.value;
+                                          if (raw === '') {
+                                            handleUpdateSectionManning(sec.station, { nMain: undefined });
+                                          } else {
+                                            const v = Number(raw);
+                                            if (!Number.isNaN(v) && v > 0) {
+                                              handleUpdateSectionManning(sec.station, { nMain: v });
+                                            }
+                                          }
+                                        }}
+                                        className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-slate-900 text-center focus:outline-none focus:border-cyan-600"
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[10px] font-semibold text-amber-800 shrink-0">Sağ n:</span>
+                                      <input
+                                        type="number"
+                                        step="0.001"
+                                        min="0.008"
+                                        max="0.5"
+                                        placeholder={manningROB.toFixed(3)}
+                                        value={sec.nROB ?? ''}
+                                        onChange={(e) => {
+                                          const raw = e.target.value;
+                                          if (raw === '') {
+                                            handleUpdateSectionManning(sec.station, { nROB: undefined });
+                                          } else {
+                                            const v = Number(raw);
+                                            if (!Number.isNaN(v) && v > 0) {
+                                              handleUpdateSectionManning(sec.station, { nROB: v });
+                                            }
+                                          }
+                                        }}
+                                        className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-slate-900 text-center focus:outline-none focus:border-cyan-600"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
                             );
                           })()}
@@ -6855,7 +7164,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         const selectedSt = Number(e.target.value);
                         const foundSec = sections.find(s => Math.abs(s.station - selectedSt) < 1);
                         if (foundSec) {
-                          const bed = Number(foundSec.minElevation.toFixed(2));
+                          const bed = Number(getChannelBedElevation(foundSec).toFixed(2));
                           const diff = editingStructure.lowChordElevation - editingStructure.invertElevation;
                           const newLow = Number((bed + (diff > 0.5 ? diff : (editingStructure.type === 'bridge' ? 3.0 : 2.0))).toFixed(2));
                           const roadDiff = editingStructure.roadElevation - editingStructure.lowChordElevation;
@@ -6875,7 +7184,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     >
                       {sections.map((sec, idx) => (
                         <option key={idx} value={sec.station}>
-                          Kesit #{idx + 1} — Km {(sec.station / 1000).toFixed(3)} ({sec.station.toFixed(0)} m) | Taban: {sec.minElevation.toFixed(2)} m
+                          Kesit #{idx + 1} — Km {(sec.station / 1000).toFixed(3)} ({sec.station.toFixed(0)} m) | Kanal Tabanı: {getChannelBedElevation(sec).toFixed(2)} m
                         </option>
                       ))}
                     </select>
@@ -7063,6 +7372,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         onRestoreSection={(station) => handleRestoreSection(station)}
         onRestoreAll={handleRestoreAllDeletedSections}
         onUpdateBankTops={handleUpdateSectionBankTops}
+        globalManning={{ nLOB: manningLOB, nMain: manningMain, nROB: manningROB }}
+        onUpdateSectionManning={handleUpdateSectionManning}
         onExportJson={handleExportCrossSectionsJSON}
         onImportJson={handleImportCrossSectionsJSON}
       />
