@@ -233,6 +233,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   sectionsRef.current = sections;
   const centerlineCoordsRef = useRef<[number, number][]>(centerlineCoords);
   centerlineCoordsRef.current = centerlineCoords;
+  const [jsonStatusMessage, setJsonStatusMessage] = useState<string | null>(null);
 
   // Cross-Section Deconfliction Settings (Açı Düzeltmesi, Boy Kısaltma Yok)
   const [autoDeconflictSections, setAutoDeconflictSections] = useState<boolean>(true);
@@ -768,6 +769,235 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       bankLeftX: newBankLeftX,
       bankRightX: newBankRightX
     });
+  };
+
+  // Export all cross-sections (plus deleted sections & calibrated geometry lines) as a .json backup
+  const handleExportCrossSectionsJSON = () => {
+    if (sections.length === 0) return;
+    const payload = {
+      format: 'hidrogis-1d-cross-sections',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      settings: {
+        crossSectionMode,
+        crossSectionInterval,
+        sectionWidth,
+        downstreamSlope
+      },
+      sections,
+      deletedSections: deletedSectionsList,
+      geometry: {
+        centerlineCoords,
+        leftBankCoords,
+        rightBankCoords
+      }
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `enkesit_yedek_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setJsonStatusMessage(`${sections.length} enkesit .json formatında yedeklendi.`);
+    setTimeout(() => setJsonStatusMessage(null), 4000);
+  };
+
+  // Import cross-sections from a .json backup file and restore map lines & hydraulic properties
+  const handleImportCrossSectionsJSON = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const rawText = await file.text();
+      const parsed = JSON.parse(rawText);
+
+      const rawActiveList: any[] = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.sections)
+          ? parsed.sections
+          : [];
+      const rawDeletedList: any[] = !Array.isArray(parsed) && Array.isArray(parsed?.deletedSections)
+        ? parsed.deletedSections
+        : [];
+
+      const normalizeSection = (item: any, idx: number): CrossSection | null => {
+        if (!item || !Array.isArray(item.profile) || item.profile.length < 2) return null;
+        const cleanProfile = item.profile
+          .filter((p: any) => p && typeof p.x === 'number' && !Number.isNaN(p.x) && typeof p.z === 'number' && !Number.isNaN(p.z))
+          .map((p: any) => ({
+            x: Number(p.x),
+            z: Number(p.z),
+            type: (p.type === 'LOB' || p.type === 'MAIN' || p.type === 'ROB' ? p.type : 'MAIN') as 'LOB' | 'MAIN' | 'ROB'
+          }))
+          .sort((a: { x: number }, b: { x: number }) => a.x - b.x);
+
+        if (cleanProfile.length < 2) return null;
+
+        const minX = cleanProfile[0].x;
+        const maxX = cleanProfile[cleanProfile.length - 1].x;
+        const zValues = cleanProfile.map((p: { z: number }) => p.z);
+        const minElevation = typeof item.minElevation === 'number' && !Number.isNaN(item.minElevation)
+          ? item.minElevation
+          : Math.min(...zValues);
+        const maxElevation = typeof item.maxElevation === 'number' && !Number.isNaN(item.maxElevation)
+          ? item.maxElevation
+          : Math.max(...zValues);
+
+        const defaultCenterX = (minX + maxX) / 2;
+        const bankLeftX = typeof item.bankLeftX === 'number' && !Number.isNaN(item.bankLeftX)
+          ? Math.max(minX, Math.min(maxX - 1, item.bankLeftX))
+          : minX + (maxX - minX) * 0.35;
+        const bankRightX = typeof item.bankRightX === 'number' && !Number.isNaN(item.bankRightX)
+          ? Math.min(maxX, Math.max(bankLeftX + 1, item.bankRightX))
+          : minX + (maxX - minX) * 0.65;
+        const centerlineX = typeof item.centerlineX === 'number' && !Number.isNaN(item.centerlineX)
+          ? item.centerlineX
+          : defaultCenterX;
+
+        let talvegX = typeof item.talvegX === 'number' && !Number.isNaN(item.talvegX)
+          ? item.talvegX
+          : centerlineX;
+        if (item.talvegX === undefined || Number.isNaN(item.talvegX)) {
+          let bestZ = Infinity;
+          for (const p of cleanProfile) {
+            if (p.x >= bankLeftX && p.x <= bankRightX && p.z < bestZ) {
+              bestZ = p.z;
+              talvegX = p.x;
+            }
+          }
+        }
+
+        const taggedProfile = cleanProfile.map((p: { x: number; z: number }) => ({
+          x: p.x,
+          z: p.z,
+          type: p.x < bankLeftX ? ('LOB' as const) : p.x > bankRightX ? ('ROB' as const) : ('MAIN' as const)
+        }));
+
+        const station = typeof item.station === 'number' && !Number.isNaN(item.station)
+          ? item.station
+          : idx * 50;
+
+        const cutLine = Array.isArray(item.cutLine) && item.cutLine.length === 2
+          ? item.cutLine as [[number, number], [number, number]]
+          : undefined;
+        const centerCoord = Array.isArray(item.centerCoord) && item.centerCoord.length === 2
+          ? item.centerCoord as [number, number]
+          : undefined;
+
+        return {
+          station,
+          profile: taggedProfile,
+          centerCoord,
+          cutLine,
+          minElevation,
+          maxElevation,
+          bankLeftX: Number(bankLeftX.toFixed(2)),
+          bankRightX: Number(bankRightX.toFixed(2)),
+          centerlineX: Number(centerlineX.toFixed(2)),
+          talvegX: Number(talvegX.toFixed(2)),
+          angleAdjustment: typeof item.angleAdjustment === 'number' ? item.angleAdjustment : undefined,
+          isTrimmed: Boolean(item.isTrimmed),
+          isIntersecting: Boolean(item.isIntersecting)
+        };
+      };
+
+      const normalizedSections = rawActiveList
+        .map((item, idx) => normalizeSection(item, idx))
+        .filter((s): s is CrossSection => s !== null);
+
+      if (normalizedSections.length === 0) {
+        alert("Seçilen JSON dosyasında geçerli enkesit verisi bulunamadı.");
+        return;
+      }
+
+      const normalizedDeleted = rawDeletedList
+        .map((item, idx) => normalizeSection(item, idx))
+        .filter((s): s is CrossSection => s !== null);
+
+      sectionsRef.current = normalizedSections;
+      setSections(normalizedSections);
+      setOriginalSections(normalizedSections);
+      setDeletedSectionsList(normalizedDeleted);
+      setSelectedSectionIdx(0);
+      setIsFileOpened(true);
+      setSimResults([]);
+      setDynamicResults(null);
+
+      // Restore or re-extract river centerline and bank lines for the map
+      const extracted = extractBankLinesFromSections(normalizedSections);
+      const geom = !Array.isArray(parsed) ? parsed?.geometry : null;
+
+      const restoredLeft = Array.isArray(geom?.leftBankCoords) && geom.leftBankCoords.length >= 2
+        ? geom.leftBankCoords
+        : extracted.leftBankCoords;
+      const restoredRight = Array.isArray(geom?.rightBankCoords) && geom.rightBankCoords.length >= 2
+        ? geom.rightBankCoords
+        : extracted.rightBankCoords;
+      const restoredCenter = Array.isArray(geom?.centerlineCoords) && geom.centerlineCoords.length >= 2
+        ? geom.centerlineCoords
+        : extracted.centerlineCoords;
+
+      if (restoredLeft.length > 0 || restoredRight.length > 0) {
+        setLeftBankCoords(restoredLeft);
+        setRightBankCoords(restoredRight);
+        setBankCoords(restoredLeft.length > 0 ? restoredLeft : restoredRight);
+        setBankLinesInfo({
+          leftName: 'Sol Şev Üstü (JSON Yedek)',
+          rightName: 'Sağ Şev Üstü (JSON Yedek)',
+          totalLines: 2,
+          totalPoints: restoredLeft.length + restoredRight.length
+        });
+      }
+
+      if (restoredCenter.length >= 2) {
+        centerlineCoordsRef.current = restoredCenter;
+        setCenterlineCoords(restoredCenter);
+        const restoredKmlFile = coordsToKMLFile(restoredCenter, 'yedek_dere_ekseni.kml');
+        setCenterlineFile(restoredKmlFile);
+        if (!originalCenterlineFile) {
+          setOriginalCenterlineFile(restoredKmlFile);
+          setOriginalCenterlineCoords(restoredCenter);
+        }
+      }
+
+      // Restore optional settings if present in backup
+      const savedSettings = !Array.isArray(parsed) ? parsed?.settings : null;
+      if (savedSettings) {
+        if (savedSettings.crossSectionMode === 'auto' || savedSettings.crossSectionMode === 'manual') {
+          setCrossSectionMode(savedSettings.crossSectionMode);
+        }
+        if (typeof savedSettings.crossSectionInterval === 'number' && savedSettings.crossSectionInterval > 0) {
+          setCrossSectionInterval(savedSettings.crossSectionInterval);
+        }
+        if (typeof savedSettings.sectionWidth === 'number' && savedSettings.sectionWidth > 0) {
+          setSectionWidth(savedSettings.sectionWidth);
+        }
+        if (typeof savedSettings.downstreamSlope === 'number' && savedSettings.downstreamSlope > 0) {
+          setDownstreamSlope(savedSettings.downstreamSlope);
+        }
+      }
+
+      if (normalizedSections.length >= 2) {
+        const slopeCalc = calculateDownstreamSlopeFromDEM(normalizedSections);
+        if (!savedSettings?.downstreamSlope) {
+          setDownstreamSlope(slopeCalc.slope);
+        }
+        setSlopeCalculationInfo(slopeCalc);
+      }
+
+      setJsonStatusMessage(`${normalizedSections.length} enkesit "${file.name}" dosyasından içeri aktarıldı.`);
+      setTimeout(() => setJsonStatusMessage(null), 4000);
+    } catch (err: any) {
+      console.error("JSON enkesit içe aktarma hatası:", err);
+      alert("JSON dosyası okunamadı veya formatı geçersiz: " + (err.message || err));
+    } finally {
+      e.target.value = '';
+    }
   };
 
   // Manual Trigger: Compute Downstream Slope from DEM Cross-Sections
@@ -4190,6 +4420,41 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     )}
                   </div>
                 )}
+
+                {/* JSON Enkesit Yedekleme & İçe Aktarma Araçları */}
+                <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleExportCrossSectionsJSON}
+                      disabled={sections.length === 0}
+                      className="py-1.5 px-2 bg-slate-100 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-400 text-slate-800 border border-slate-300 disabled:border-slate-200 rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                      title="Mevcut tüm enkesitleri ve kalibrasyonları .json olarak yedekle"
+                    >
+                      <Download size={12} className={sections.length > 0 ? 'text-emerald-700' : 'text-slate-400'} />
+                      <span>.json Yedek Al</span>
+                    </button>
+
+                    <label
+                      className="py-1.5 px-2 bg-cyan-50 hover:bg-cyan-100 text-cyan-900 border border-cyan-300 rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      title="Önceden kaydedilmiş .json enkesit yedeğini modele aktar"
+                    >
+                      <Upload size={12} className="text-cyan-700" />
+                      <span>.json İçe Aktar</span>
+                      <input
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleImportCrossSectionsJSON}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  {jsonStatusMessage && (
+                    <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-medium px-2 py-1 rounded-lg text-center">
+                      {jsonStatusMessage}
+                    </div>
+                  )}
+                </div>
               </section>
 
               {/* 5. ŞEV ÜSTÜ SEÇİMİ VE PROFİL DÜZENLEME */}
@@ -6411,6 +6676,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         onRestoreSection={(station) => handleRestoreSection(station)}
         onRestoreAll={handleRestoreAllDeletedSections}
         onUpdateBankTops={handleUpdateSectionBankTops}
+        onExportJson={handleExportCrossSectionsJSON}
+        onImportJson={handleImportCrossSectionsJSON}
       />
     </div>
   );

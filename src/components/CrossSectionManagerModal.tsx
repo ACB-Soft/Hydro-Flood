@@ -7,7 +7,9 @@ import {
   Ruler,
   Layers,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  Download,
+  Upload
 } from 'lucide-react';
 import { CrossSection } from '../utils/OneDEngine';
 
@@ -77,6 +79,8 @@ interface CrossSectionManagerModalProps {
   selectedSectionIdx: number;
   onSelectSection: (index: number) => void;
   onUpdateBankTops?: (station: number, bankLeftX: number, bankRightX: number) => void;
+  onExportJson?: () => void;
+  onImportJson?: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
 // Format utilities with null / NaN checks
@@ -103,7 +107,9 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
   onRestoreAll,
   selectedSectionIdx,
   onSelectSection,
-  onUpdateBankTops
+  onUpdateBankTops,
+  onExportJson,
+  onImportJson
 }) => {
   const [activeTab, setActiveTab] = useState<'active' | 'deleted'>('active');
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -254,14 +260,38 @@ const CrossSectionManagerModalContent: React.FC<CrossSectionManagerModalProps> =
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
-            title="Kapat"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {onExportJson && (
+              <button
+                type="button"
+                onClick={onExportJson}
+                disabled={sections.length === 0}
+                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                title="Aktif ve silinen tüm enkesitleri .json dosyası olarak yedekle"
+              >
+                <Download size={13} />
+                <span>.json Yedek Al</span>
+              </button>
+            )}
+            {onImportJson && (
+              <label
+                className="px-2.5 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Daha önce alınan .json enkesit yedeğini içeri aktar"
+              >
+                <Upload size={13} />
+                <span>.json İçe Aktar</span>
+                <input type="file" accept=".json,application/json" onChange={onImportJson} className="hidden" />
+              </label>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              title="Kapat"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Tab & Toolbar Bar */}

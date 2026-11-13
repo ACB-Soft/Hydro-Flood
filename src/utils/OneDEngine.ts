@@ -400,10 +400,23 @@ export function calibrateSectionsWithBankLines(
       return { ...p, type };
     });
 
+    // Set talvegX strictly to the lowest elevation point between Left and Right bank tops
+    let talvegX = sec.talvegX ?? (finalBankLeftX + finalBankRightX) / 2;
+    let minBedZ = Infinity;
+    for (const p of newProfile) {
+      if (p.x >= finalBankLeftX && p.x <= finalBankRightX) {
+        if (p.z < minBedZ) {
+          minBedZ = p.z;
+          talvegX = p.x;
+        }
+      }
+    }
+
     return {
       ...sec,
       bankLeftX: Number(finalBankLeftX.toFixed(2)),
       bankRightX: Number(finalBankRightX.toFixed(2)),
+      talvegX: Number(talvegX.toFixed(2)),
       profile: newProfile
     };
   });
@@ -913,6 +926,7 @@ export async function detectThalwegCenterline(
     bestOffset: number;
     minBoundOffset: number;
     maxBoundOffset: number;
+    hasExplicitBounds: boolean;
     angleLeft: number;
     angleRight: number;
     distanceAlong: number;
@@ -951,7 +965,7 @@ export async function detectThalwegCenterline(
     let stationHasExplicitBounds = false;
 
     if (leftBankGeo && rightBankGeo) {
-      const probeSpan = 150; // meters each side to locate bank lines
+      const probeSpan = 300; // meters each side to locate bank lines reliably
       const leftEnd = turf.destination(pt, probeSpan, angleLeft, { units: 'meters' });
       const rightEnd = turf.destination(pt, probeSpan, angleRight, { units: 'meters' });
       const transectLine = turf.lineString([leftEnd.geometry.coordinates, rightEnd.geometry.coordinates]);
@@ -987,24 +1001,25 @@ export async function detectThalwegCenterline(
         const rawMax = Math.max(lOff, rOff);
         const bedWidth = rawMax - rawMin;
 
-        // Sanity guard: bank width must be physically reasonable (1m .. 250m)
-        if (bedWidth >= 1.0 && bedWidth <= 250) {
-          // Slight inward margin so we don't snap to the top crest edge of the bank slope
-          const inwardMargin = bedWidth > 4.0 ? Math.min(0.5, bedWidth * 0.05) : 0;
-          minScanOffset = rawMin + inwardMargin;
-          maxScanOffset = rawMax - inwardMargin;
+        // Sanity guard: bank width must be physically reasonable (1m .. 300m)
+        if (bedWidth >= 1.0 && bedWidth <= 300) {
+          minScanOffset = rawMin;
+          maxScanOffset = rawMax;
           stationHasExplicitBounds = true;
           bankConstrainedStations++;
         }
       }
     }
 
-    // 2. Sample DEM laterally across the transect
+    // 2. Sample DEM laterally across the transect (finer resolution between explicit bank lines)
     const sampleMin = stationHasExplicitBounds ? minScanOffset : -fallbackHalfCorridor;
     const sampleMax = stationHasExplicitBounds ? maxScanOffset : fallbackHalfCorridor;
+    const scanStep = stationHasExplicitBounds
+      ? Math.min(0.5, Math.max(0.2, (sampleMax - sampleMin) / 40))
+      : lateralStep;
 
     const samples: { offset: number; x: number; z: number; lat: number; lon: number }[] = [];
-    for (let offset = sampleMin; offset <= sampleMax + 1e-4; offset += lateralStep) {
+    for (let offset = sampleMin; offset <= sampleMax + 1e-4; offset += scanStep) {
       const clampedOff = Math.min(offset, sampleMax);
       const probePt = getPointAtOffset(pt, clampedOff, angleLeft, angleRight);
       const [pLon, pLat] = probePt.geometry.coordinates;
@@ -1081,9 +1096,9 @@ export async function detectThalwegCenterline(
         }
       }
 
-      // Intersect detected bank bounds with crest barrier & tight channel limit
-      bedSearchMin = Math.max(localMinOff, leftCrestOff, -Math.min(fallbackHalfCorridor, 20));
-      bedSearchMax = Math.min(localMaxOff, rightCrestOff, Math.min(fallbackHalfCorridor, 20));
+      // Search strictly between the detected Left and Right Bank Tops (or crest barriers if narrower)
+      bedSearchMin = Math.max(localMinOff, -fallbackHalfCorridor);
+      bedSearchMax = Math.min(localMaxOff, fallbackHalfCorridor);
 
       if (bedSearchMin > bedSearchMax) {
         bedSearchMin = Math.max(leftCrestOff, -10);
@@ -1099,7 +1114,10 @@ export async function detectThalwegCenterline(
 
     for (const s of samples) {
       if (s.offset >= bedSearchMin - 1e-4 && s.offset <= bedSearchMax + 1e-4) {
-        if (s.z < lowestZ) {
+        if (
+          s.z < lowestZ - 1e-4 ||
+          (Math.abs(s.z - lowestZ) <= 1e-4 && Math.abs(s.offset - prevBestOffset) < Math.abs(bestOffset - prevBestOffset))
+        ) {
           lowestZ = s.z;
           bestLon = s.lon;
           bestLat = s.lat;
@@ -1129,18 +1147,25 @@ export async function detectThalwegCenterline(
       bestOffset,
       minBoundOffset: bedSearchMin,
       maxBoundOffset: bedSearchMax,
+      hasExplicitBounds: stationHasExplicitBounds,
       angleLeft,
       angleRight,
       distanceAlong: d
     });
   }
 
-  // Hydrodynamic line smoothing: River thalwegs do not zigzag abruptly.
-  // Apply a 5-point moving window smoothing, then clamp each vertex inside its station's stream bed bounds.
+  // When Left & Right Bank Top lines exist, preserve the exact lowest elevation point between them;
+  // otherwise apply gentle moving-window smoothing clamped within detected local bank bounds.
   const smoothedCoords: [number, number][] = [];
   const windowRadius = 2; // window of 5 points
 
   for (let i = 0; i < rawThalwegPoints.length; i++) {
+    const item = rawThalwegPoints[i];
+    if (item.hasExplicitBounds) {
+      smoothedCoords.push(item.thalwegCoord);
+      continue;
+    }
+
     let sumLat = 0;
     let sumLon = 0;
     let count = 0;
@@ -1159,7 +1184,6 @@ export async function detectThalwegCenterline(
     let sLon = sumLon / count;
 
     // Guarantee smoothed vertex never escapes the detected stream bed bounds
-    const item = rawThalwegPoints[i];
     const smoothedPt = turf.point([sLon, sLat]);
     const smoothedOffset = getSignedOffset(item.origPt, smoothedPt, item.angleRight);
     if (smoothedOffset < item.minBoundOffset || smoothedOffset > item.maxBoundOffset) {
@@ -1458,21 +1482,36 @@ export function detectBankStationsFromProfile(
     bankRightX = Math.min(maxX - 0.5, centerlineX + 5);
   }
 
+  // Recompute talveg strictly as the lowest elevation point between bankLeftX and bankRightX
+  let finalTalvegIdx = minIdx;
+  let finalTalvegZ = Infinity;
+  for (let i = 0; i < n; i++) {
+    const pt = profilePoints[i];
+    if (pt.x >= bankLeftX && pt.x <= bankRightX) {
+      if (pt.z < finalTalvegZ) {
+        finalTalvegZ = pt.z;
+        finalTalvegIdx = i;
+      }
+    }
+  }
+  const finalTalvegX = finalTalvegZ < Infinity ? profilePoints[finalTalvegIdx].x : talvegX;
+  const resolvedTalvegZ = finalTalvegZ < Infinity ? finalTalvegZ : talvegZ;
+
   const bankLeftZ = getElevAt(bankLeftX);
   const bankRightZ = getElevAt(bankRightX);
 
   // Distances relative to the Centerline and Thalweg
   const distLeftFromCenterline = Number(Math.abs(centerlineX - bankLeftX).toFixed(2));
   const distRightFromCenterline = Number(Math.abs(bankRightX - centerlineX).toFixed(2));
-  const distLeftFromTalveg = Number(Math.abs(talvegX - bankLeftX).toFixed(2));
-  const distRightFromTalveg = Number(Math.abs(bankRightX - talvegX).toFixed(2));
+  const distLeftFromTalveg = Number(Math.abs(finalTalvegX - bankLeftX).toFixed(2));
+  const distRightFromTalveg = Number(Math.abs(bankRightX - finalTalvegX).toFixed(2));
   const totalChannelWidth = Number((bankRightX - bankLeftX).toFixed(2));
 
   // Spillway Analysis: Bankfull Spill Elevation is min(bankLeftZ, bankRightZ)
   const spillElevation = Math.min(bankLeftZ, bankRightZ);
   let spillLeftX = bankLeftX;
   if (bankLeftZ > spillElevation) {
-    for (let k = minIdx; k >= 1; k--) {
+    for (let k = finalTalvegIdx; k >= 1; k--) {
       const p1 = profilePoints[k];
       const p2 = profilePoints[k - 1];
       if (p1.z <= spillElevation && p2.z >= spillElevation) {
@@ -1485,7 +1524,7 @@ export function detectBankStationsFromProfile(
 
   let spillRightX = bankRightX;
   if (bankRightZ > spillElevation) {
-    for (let k = minIdx; k < n - 1; k++) {
+    for (let k = finalTalvegIdx; k < n - 1; k++) {
       const p1 = profilePoints[k];
       const p2 = profilePoints[k + 1];
       if (p1.z <= spillElevation && p2.z >= spillElevation) {
@@ -1503,8 +1542,8 @@ export function detectBankStationsFromProfile(
     bankRightX: Number(bankRightX.toFixed(2)),
     centerlineX: Number(centerlineX.toFixed(2)),
     centerlineZ: Number(centerlineZ.toFixed(2)),
-    talvegX: Number(talvegX.toFixed(2)),
-    talvegZ: Number(talvegZ.toFixed(2)),
+    talvegX: Number(finalTalvegX.toFixed(2)),
+    talvegZ: Number(resolvedTalvegZ.toFixed(2)),
     bankLeftZ: Number(bankLeftZ.toFixed(2)),
     bankRightZ: Number(bankRightZ.toFixed(2)),
     channelWidth: totalChannelWidth,
@@ -2576,9 +2615,22 @@ export function calibrateSectionsWithCenterline(
       return { ...p, type };
     });
 
+    // Set talvegX strictly to the lowest elevation point between bankLeftX and bankRightX
+    let talvegX = centerlineX;
+    let minBedZ = Infinity;
+    for (const p of newProfile) {
+      if (p.x >= bankLeftX && p.x <= bankRightX) {
+        if (p.z < minBedZ) {
+          minBedZ = p.z;
+          talvegX = p.x;
+        }
+      }
+    }
+
     return {
       ...sec,
       centerlineX,
+      talvegX: Number(talvegX.toFixed(2)),
       bankLeftX: Number(bankLeftX.toFixed(2)),
       bankRightX: Number(bankRightX.toFixed(2)),
       profile: newProfile
