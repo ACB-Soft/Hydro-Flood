@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import {
   Activity,
@@ -200,8 +200,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isDetectingBankTops, setIsDetectingBankTops] = useState<boolean>(false);
   const [bankTopsResult, setBankTopsResult] = useState<BankTopsDetectionResult | null>(null);
   const [bankTopsCorridorWidth, setBankTopsCorridorWidth] = useState<number>(80);
-  const [bankEditSectionIdx, setBankEditSectionIdx] = useState<number>(0);
-  const [bankSaveMessage, setBankSaveMessage] = useState<string | null>(null);
+  const [draggingProfileMarker, setDraggingProfileMarker] = useState<'bankLeft' | 'centerline' | 'bankRight' | null>(null);
+  const profileSvgRef = useRef<SVGSVGElement | null>(null);
 
   // Manning Library Modal State
   const [isManningModalOpen, setIsManningModalOpen] = useState<boolean>(false);
@@ -229,6 +229,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [isSectionManagerModalOpen, setIsSectionManagerModalOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number>(0);
+  const sectionsRef = useRef<CrossSection[]>(sections);
+  sectionsRef.current = sections;
+  const centerlineCoordsRef = useRef<[number, number][]>(centerlineCoords);
+  centerlineCoordsRef.current = centerlineCoords;
 
   // Cross-Section Deconfliction Settings (Açı Düzeltmesi, Boy Kısaltma Yok)
   const [autoDeconflictSections, setAutoDeconflictSections] = useState<boolean>(true);
@@ -602,35 +606,168 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     URL.revokeObjectURL(url);
   };
 
-  // Update bank tops for a specific station or index and refresh bank lines
-  const handleUpdateSectionBankTops = (stationOrIndex: number, newBankLeftX: number, newBankRightX: number) => {
-    setSections(prevSections => {
-      const updated = prevSections.map((sec, idx) => {
-        if (sec.station === stationOrIndex || idx === stationOrIndex) {
-          const validLeftX = Math.min(newBankLeftX, newBankRightX - 0.5);
-          const validRightX = Math.max(newBankRightX, newBankLeftX + 0.5);
-          return {
-            ...sec,
-            bankLeftX: validLeftX,
-            bankRightX: validRightX
-          };
+  // Unified Cross-Section Calibration Handler: updates Sol Şev Üstü, Dere Talveg/Ekseni, Sağ Şev Üstü & syncs map polylines
+  const handleUpdateSectionGeometry = (
+    stationOrIndex: number,
+    patch: { bankLeftX?: number; centerlineX?: number; bankRightX?: number }
+  ) => {
+    const currentSections = sectionsRef.current;
+    if (!currentSections || currentSections.length === 0) return;
+
+    const targetIdx = currentSections.findIndex(
+      (sec, idx) => sec.station === stationOrIndex || idx === stationOrIndex
+    );
+    if (targetIdx < 0) return;
+
+    const prevSec = targetIdx > 0 ? currentSections[targetIdx - 1] : null;
+    const nextSec = targetIdx < currentSections.length - 1 ? currentSections[targetIdx + 1] : null;
+    const targetBefore = currentSections[targetIdx];
+
+    const minX = targetBefore.profile[0]?.x ?? 0;
+    const maxX = targetBefore.profile[targetBefore.profile.length - 1]?.x ?? 100;
+    const curCenterX =
+      targetBefore.centerlineX != null && !Number.isNaN(targetBefore.centerlineX)
+        ? targetBefore.centerlineX
+        : (targetBefore.bankLeftX + targetBefore.bankRightX) / 2;
+
+    const minGap = 0.5;
+    let nextLeft =
+      patch.bankLeftX !== undefined && !Number.isNaN(patch.bankLeftX)
+        ? patch.bankLeftX
+        : targetBefore.bankLeftX;
+    let nextRight =
+      patch.bankRightX !== undefined && !Number.isNaN(patch.bankRightX)
+        ? patch.bankRightX
+        : targetBefore.bankRightX;
+    let nextCenter =
+      patch.centerlineX !== undefined && !Number.isNaN(patch.centerlineX)
+        ? patch.centerlineX
+        : curCenterX;
+
+    // Clamp to cross-section bounds
+    nextLeft = Math.max(minX, Math.min(maxX - minGap * 2, nextLeft));
+    nextRight = Math.min(maxX, Math.max(minX + minGap * 2, nextRight));
+
+    if (patch.centerlineX !== undefined && patch.bankLeftX === undefined && patch.bankRightX === undefined) {
+      nextCenter = Math.max(nextLeft + minGap, Math.min(nextRight - minGap, nextCenter));
+    } else {
+      if (patch.bankLeftX !== undefined && patch.bankRightX === undefined) {
+        nextLeft = Math.min(nextLeft, nextCenter - minGap);
+      }
+      if (patch.bankRightX !== undefined && patch.bankLeftX === undefined) {
+        nextRight = Math.max(nextRight, nextCenter + minGap);
+      }
+      if (nextRight < nextLeft + minGap * 2) {
+        if (patch.bankLeftX !== undefined && patch.bankRightX === undefined) {
+          nextLeft = Math.max(minX, nextRight - minGap * 2);
+        } else {
+          nextRight = Math.min(maxX, nextLeft + minGap * 2);
         }
-        return sec;
-      });
+      }
+      nextCenter = Math.max(nextLeft + minGap, Math.min(nextRight - minGap, nextCenter));
+    }
 
-      setOriginalSections(updated);
+    const round2 = (v: number) => Math.round(v * 100) / 100;
+    const validLeftX = round2(nextLeft);
+    const validCenterX = round2(nextCenter);
+    const validRightX = round2(nextRight);
 
-      // Re-extract bank coordinates along section cut lines
-      const extracted = extractBankLinesFromSections(updated);
-      setLeftBankCoords(extracted.leftBankCoords);
-      setRightBankCoords(extracted.rightBankCoords);
-      setBankCoords(extracted.leftBankCoords);
+    const totalW = maxX - minX;
+    let updatedCenterCoord = targetBefore.centerCoord;
+    if (targetBefore.cutLine && targetBefore.cutLine.length >= 2 && totalW > 0) {
+      const [ptL, ptR] = targetBefore.cutLine;
+      const fracC = Math.max(0, Math.min(1, (validCenterX - minX) / totalW));
+      updatedCenterCoord = [
+        ptL[0] + fracC * (ptR[0] - ptL[0]),
+        ptL[1] + fracC * (ptR[1] - ptL[1])
+      ];
+    }
 
-      return updated;
+    const updatedSections = currentSections.map((sec, idx) => {
+      if (idx !== targetIdx) return sec;
+      const reclassifiedProfile = sec.profile.map(pt => ({
+        ...pt,
+        type:
+          pt.x < validLeftX
+            ? ('LOB' as const)
+            : pt.x > validRightX
+              ? ('ROB' as const)
+              : ('MAIN' as const)
+      }));
+      return {
+        ...sec,
+        bankLeftX: validLeftX,
+        bankRightX: validRightX,
+        centerlineX: validCenterX,
+        talvegX: validCenterX,
+        centerCoord: updatedCenterCoord,
+        profile: reclassifiedProfile
+      };
     });
 
-    setBankSaveMessage("Şev üstü konumları başarıyla kaydedildi ve haritada güncellendi.");
-    setTimeout(() => setBankSaveMessage(null), 3000);
+    sectionsRef.current = updatedSections;
+    setSections(updatedSections);
+    setOriginalSections(updatedSections);
+
+    const extracted = extractBankLinesFromSections(updatedSections);
+    setLeftBankCoords(extracted.leftBankCoords);
+    setRightBankCoords(extracted.rightBankCoords);
+    setBankCoords(extracted.leftBankCoords);
+
+    if (patch.centerlineX !== undefined) {
+      const prevCoords = centerlineCoordsRef.current;
+      const oldC = targetBefore.centerCoord || extracted.centerlineCoords[targetIdx];
+      const newC = extracted.centerlineCoords[targetIdx] || updatedCenterCoord;
+
+      let nextCoords: [number, number][];
+      if (!prevCoords || prevCoords.length <= updatedSections.length + 2 || !oldC || !newC) {
+        nextCoords = extracted.centerlineCoords;
+      } else {
+        const distM = (a: [number, number], b: [number, number]) => {
+          const dLat = (b[0] - a[0]) * 111320;
+          const dLon = (b[1] - a[1]) * 111320 * Math.cos((a[0] * Math.PI) / 180);
+          return Math.hypot(dLat, dLon);
+        };
+        let closestIdx = 0;
+        let minD = Infinity;
+        for (let k = 0; k < prevCoords.length; k++) {
+          const d = distM(prevCoords[k], oldC);
+          if (d < minD) {
+            minD = d;
+            closestIdx = k;
+          }
+        }
+        const neighborDists: number[] = [];
+        if (prevSec?.centerCoord) neighborDists.push(distM(oldC, prevSec.centerCoord));
+        if (nextSec?.centerCoord) neighborDists.push(distM(oldC, nextSec.centerCoord));
+        const minNeighborDist = neighborDists.length > 0 ? Math.min(...neighborDists) : 50;
+        const influenceRadius = Math.max(8, minNeighborDist * 0.85);
+        const dLat = newC[0] - oldC[0];
+        const dLon = newC[1] - oldC[1];
+
+        nextCoords = prevCoords.map((pt, k) => {
+          if (k === closestIdx) return [newC[0], newC[1]];
+          const d = distM(pt, oldC);
+          if (d < influenceRadius) {
+            const w = 1 - d / influenceRadius;
+            return [pt[0] + w * dLat, pt[1] + w * dLon];
+          }
+          return pt;
+        });
+      }
+
+      centerlineCoordsRef.current = nextCoords;
+      setCenterlineCoords(nextCoords);
+      setCenterlineFile(coordsToKMLFile(nextCoords, 'kalibre_dere_ekseni.kml'));
+    }
+  };
+
+  // Backwards-compatible wrapper for CrossSectionManagerModal
+  const handleUpdateSectionBankTops = (stationOrIndex: number, newBankLeftX: number, newBankRightX: number) => {
+    handleUpdateSectionGeometry(stationOrIndex, {
+      bankLeftX: newBankLeftX,
+      bankRightX: newBankRightX
+    });
   };
 
   // Manual Trigger: Compute Downstream Slope from DEM Cross-Sections
@@ -4217,180 +4354,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     </label>
                   </div>
                 )}
-
-                {/* 2. Interactive Bank Top Shifting & Saving Tool */}
-                {sections.length > 0 && (
-                  <div className="mt-3 bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-white space-y-2.5 shadow-sm">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                      <span className="font-bold text-cyan-300 text-[11px] flex items-center gap-1.5">
-                        <Edit3 size={12} className="text-cyan-400" />
-                        Enkesit Profilinde Şev Üstünü Kaydır & Kaydet
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setIsSectionManagerModalOpen(true)}
-                        className="text-[9px] font-bold text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
-                      >
-                        Tümünü Yönet Modalında Aç
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-1.5">
-                      <label className="text-[10px] text-slate-300 font-bold shrink-0">Kesit Seçin:</label>
-                      <div className="flex items-center gap-1 overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={() => setBankEditSectionIdx(Math.max(0, bankEditSectionIdx - 1))}
-                          disabled={bankEditSectionIdx === 0}
-                          className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[10px] font-bold disabled:opacity-30 cursor-pointer"
-                        >
-                          ‹ Önceki
-                        </button>
-                        <select
-                          value={bankEditSectionIdx}
-                          onChange={(e) => setBankEditSectionIdx(Number(e.target.value))}
-                          className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] font-bold text-cyan-200 truncate max-w-[140px]"
-                        >
-                          {sections.map((sec, idx) => (
-                            <option key={sec.station} value={idx}>
-                              Kesit #{idx + 1} - Km {(sec.station / 1000).toFixed(3)}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => setBankEditSectionIdx(Math.min(sections.length - 1, bankEditSectionIdx + 1))}
-                          disabled={bankEditSectionIdx >= sections.length - 1}
-                          className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[10px] font-bold disabled:opacity-30 cursor-pointer"
-                        >
-                          Sonraki ›
-                        </button>
-                      </div>
-                    </div>
-
-                    {sections[bankEditSectionIdx] && (
-                      <div className="space-y-2 bg-slate-950 p-2 rounded-lg border border-slate-800 text-[10px]">
-                        {/* Sol and Sağ Bank Top Inputs */}
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1 bg-emerald-950/40 p-1.5 rounded border border-emerald-800/60">
-                            <span className="font-bold text-emerald-400 block text-[10px]">🌿 Sol Şev Üstü Offset:</span>
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                step="0.5"
-                                value={sections[bankEditSectionIdx].bankLeftX}
-                                onChange={(e) => {
-                                  const val = Number(e.target.value);
-                                  handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, val, sections[bankEditSectionIdx].bankRightX);
-                                }}
-                                className="w-full bg-slate-900 border border-emerald-700 rounded px-1.5 py-0.5 text-xs font-bold text-emerald-200 text-center"
-                              />
-                              <span className="text-slate-400 font-mono text-[9px]">m</span>
-                            </div>
-                            <div className="flex justify-between gap-1 text-[8px] font-mono">
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX - 1, sections[bankEditSectionIdx].bankRightX)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                -1m
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX - 0.5, sections[bankEditSectionIdx].bankRightX)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                -0.5m
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX + 0.5, sections[bankEditSectionIdx].bankRightX)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                +0.5m
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX + 1, sections[bankEditSectionIdx].bankRightX)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                +1m
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="space-y-1 bg-amber-950/40 p-1.5 rounded border border-amber-800/60">
-                            <span className="font-bold text-amber-400 block text-[10px]">🌾 Sağ Şev Üstü Offset:</span>
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                step="0.5"
-                                value={sections[bankEditSectionIdx].bankRightX}
-                                onChange={(e) => {
-                                  const val = Number(e.target.value);
-                                  handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, val);
-                                }}
-                                className="w-full bg-slate-900 border border-amber-700 rounded px-1.5 py-0.5 text-xs font-bold text-amber-200 text-center"
-                              />
-                              <span className="text-slate-400 font-mono text-[9px]">m</span>
-                            </div>
-                            <div className="flex justify-between gap-1 text-[8px] font-mono">
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX - 1)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                -1m
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX - 0.5)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                -0.5m
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX + 0.5)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                +0.5m
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateSectionBankTops(sections[bankEditSectionIdx].station, sections[bankEditSectionIdx].bankLeftX, sections[bankEditSectionIdx].bankRightX + 1)}
-                                className="px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded cursor-pointer"
-                              >
-                                +1m
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Save Trigger Button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const activeSec = sections[bankEditSectionIdx];
-                            if (activeSec) {
-                              handleUpdateSectionBankTops(activeSec.station, activeSec.bankLeftX, activeSec.bankRightX);
-                            }
-                          }}
-                          className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold text-[10px] transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                        >
-                          <CheckCircle2 size={12} />
-                          <span>Şev Üstü Konumlarını Kaydet</span>
-                        </button>
-
-                        {bankSaveMessage && (
-                          <div className="bg-emerald-900/80 border border-emerald-500 text-emerald-200 text-[9px] p-1.5 rounded font-bold text-center animate-fade-in">
-                            {bankSaveMessage}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
               </section>
 
               {/* 6. PÜRÜZLÜLÜK SEÇİMİ (MANNING n) */}
@@ -4921,17 +4884,37 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                     {sections.length > 0 && rightPanelTab === 'section' && (
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <select
-                          value={selectedSectionIdx}
-                          onChange={(e) => setSelectedSectionIdx(Number(e.target.value))}
-                          className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 shadow-sm"
-                        >
-                          {sections.map((s, idx) => (
-                            <option key={idx} value={idx}>
-                              Kesit Km {(s.station / 1000).toFixed(3)} ({s.station.toFixed(0)}m)
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedSectionIdx(Math.max(0, selectedSectionIdx - 1))}
+                            disabled={selectedSectionIdx <= 0}
+                            className="px-2 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-md text-xs font-bold disabled:opacity-40 cursor-pointer transition-colors"
+                            title="Önceki enkesite geç"
+                          >
+                            ‹ Önceki
+                          </button>
+                          <select
+                            value={selectedSectionIdx}
+                            onChange={(e) => setSelectedSectionIdx(Number(e.target.value))}
+                            className="bg-white border border-slate-200 rounded-md px-2 py-1 text-xs font-bold font-mono tabular-nums text-slate-800"
+                          >
+                            {sections.map((s, idx) => (
+                              <option key={idx} value={idx}>
+                                #{idx + 1} · Km {(s.station / 1000).toFixed(3)} ({s.station.toFixed(0)}m)
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedSectionIdx(Math.min(sections.length - 1, selectedSectionIdx + 1))}
+                            disabled={selectedSectionIdx >= sections.length - 1}
+                            className="px-2 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-md text-xs font-bold disabled:opacity-40 cursor-pointer transition-colors"
+                            title="Sonraki enkesite geç"
+                          >
+                            Sonraki ›
+                          </button>
+                        </div>
                         <button
                           type="button"
                           onClick={() => handleDeleteSection(selectedSectionIdx)}
@@ -5444,224 +5427,394 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </div>
 
                         <div className="flex-1 w-full my-2 flex flex-col bg-white border border-slate-200 rounded-xl p-2 relative overflow-hidden shadow-inner gap-2">
+                          <div className="flex items-center justify-between px-1.5 text-[10px] text-slate-600 border-b border-slate-100 pb-1">
+                            <span className="flex items-center gap-1.5 font-medium">
+                              <Edit3 size={11} className="text-cyan-700 shrink-0" />
+                              <span>Grafikteki dikey tutamaçları sürükleyerek veya alttaki adımlı butonlarla <strong>Sol Şev Üstü</strong>, <strong>Dere Talveg / Ekseni</strong> ve <strong>Sağ Şev Üstü</strong> konumlarını kaydırabilirsiniz.</span>
+                            </span>
+                            {draggingProfileMarker && (
+                              <span className="font-mono tabular-nums font-bold text-cyan-800 shrink-0 ml-2">
+                                {draggingProfileMarker === 'bankLeft'
+                                  ? 'Sol Şev Sürükleniyor'
+                                  : draggingProfileMarker === 'centerline'
+                                    ? 'Dere Talveg Sürükleniyor'
+                                    : 'Sağ Şev Sürükleniyor'}
+                              </span>
+                            )}
+                          </div>
                           <div className="flex-1 w-full min-h-[220px] relative">
-                            <svg width="100%" height="100%" viewBox="0 0 700 240" preserveAspectRatio="none" className="w-full h-full">
-                              {(() => {
-                                const sec = currentActiveSection;
-                                const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - sec.station) < 50);
+                            {(() => {
+                              const sec = currentActiveSection;
+                              const matchingStruct = structures.find(s => s.isActive && Math.abs(s.station - sec.station) < 50);
 
-                                const minX = Math.min(...sec.profile.map(p => p.x));
-                                const maxX = Math.max(...sec.profile.map(p => p.x));
-                                const structTopZ = matchingStruct ? Math.max(matchingStruct.roadElevation, sec.maxElevation) : sec.maxElevation;
-                                const minZ = sec.minElevation;
-                                const maxZ = structTopZ + 2;
+                              const minX = Math.min(...sec.profile.map(p => p.x));
+                              const maxX = Math.max(...sec.profile.map(p => p.x));
+                              const structTopZ = matchingStruct ? Math.max(matchingStruct.roadElevation, sec.maxElevation) : sec.maxElevation;
+                              const minZ = sec.minElevation;
+                              const maxZ = structTopZ + 2;
 
-                                const mapX = (x: number) => 45 + ((x - minX) / (maxX - minX || 1)) * 615;
-                                const mapZ = (z: number) => 205 - ((z - minZ) / (maxZ - minZ || 1)) * 165;
+                              const mapX = (x: number) => 45 + ((x - minX) / (maxX - minX || 1)) * 615;
+                              const mapZ = (z: number) => 205 - ((z - minZ) / (maxZ - minZ || 1)) * 165;
 
-                                const groundPath = `M 45 205 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 660 205 Z`;
+                              const clientXToDataX = (clientX: number) => {
+                                const svgEl = profileSvgRef.current;
+                                if (!svgEl) return null;
+                                const rect = svgEl.getBoundingClientRect();
+                                if (rect.width <= 0) return null;
+                                const svgX = ((clientX - rect.left) / rect.width) * 700;
+                                return minX + ((svgX - 45) / 615) * (maxX - minX || 1);
+                              };
 
-                                const getElevAt = (xVal: number) => {
-                                  if (xVal <= sec.profile[0].x) return sec.profile[0].z;
-                                  if (xVal >= sec.profile[sec.profile.length - 1].x) return sec.profile[sec.profile.length - 1].z;
-                                  for (let k = 0; k < sec.profile.length - 1; k++) {
-                                    const p1 = sec.profile[k];
-                                    const p2 = sec.profile[k + 1];
-                                    if (xVal >= p1.x && xVal <= p2.x) {
-                                      const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
-                                      return p1.z + frac * (p2.z - p1.z);
-                                    }
+                              const handleSvgPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+                                if (!draggingProfileMarker) return;
+                                const rawX = clientXToDataX(e.clientX);
+                                if (rawX === null) return;
+                                const snappedX = Math.round(rawX * 10) / 10;
+                                if (draggingProfileMarker === 'bankLeft') {
+                                  handleUpdateSectionGeometry(sec.station, { bankLeftX: snappedX });
+                                } else if (draggingProfileMarker === 'centerline') {
+                                  handleUpdateSectionGeometry(sec.station, { centerlineX: snappedX });
+                                } else if (draggingProfileMarker === 'bankRight') {
+                                  handleUpdateSectionGeometry(sec.station, { bankRightX: snappedX });
+                                }
+                              };
+
+                              const endSvgDrag = (e: React.PointerEvent<SVGSVGElement>) => {
+                                if (!draggingProfileMarker) return;
+                                try {
+                                  if (profileSvgRef.current?.hasPointerCapture(e.pointerId)) {
+                                    profileSvgRef.current.releasePointerCapture(e.pointerId);
                                   }
-                                  return minZ;
-                                };
+                                } catch {
+                                  // ignore release errors
+                                }
+                                setDraggingProfileMarker(null);
+                              };
 
-                                const centerlineX = (sec.centerlineX != null && !isNaN(sec.centerlineX))
-                                  ? sec.centerlineX
-                                  : (sec.bankLeftX != null && sec.bankRightX != null)
-                                    ? (sec.bankLeftX + sec.bankRightX) / 2
-                                    : (minX + maxX) / 2;
+                              const startMarkerDrag = (
+                                marker: 'bankLeft' | 'centerline' | 'bankRight',
+                                e: React.PointerEvent<SVGGElement>
+                              ) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDraggingProfileMarker(marker);
+                                try {
+                                  profileSvgRef.current?.setPointerCapture(e.pointerId);
+                                } catch {
+                                  // ignore capture errors
+                                }
+                              };
 
-                                const centerlineZ = getElevAt(centerlineX);
-                                const centerlineSvgX = mapX(centerlineX);
-                                const centerlineSvgY = mapZ(centerlineZ);
+                              const groundPath = `M 45 205 ` + sec.profile.map(p => `L ${mapX(p.x)} ${mapZ(p.z)}`).join(' ') + ` L 660 205 Z`;
 
-                                // Local thalweg strictly inside channel
-                                let talvegPt = sec.profile[0];
-                                let minBedZ = Infinity;
+                              const getElevAt = (xVal: number) => {
+                                if (xVal <= sec.profile[0].x) return sec.profile[0].z;
+                                if (xVal >= sec.profile[sec.profile.length - 1].x) return sec.profile[sec.profile.length - 1].z;
+                                for (let k = 0; k < sec.profile.length - 1; k++) {
+                                  const p1 = sec.profile[k];
+                                  const p2 = sec.profile[k + 1];
+                                  if (xVal >= p1.x && xVal <= p2.x) {
+                                    const frac = (xVal - p1.x) / Math.max(1e-6, p2.x - p1.x);
+                                    return p1.z + frac * (p2.z - p1.z);
+                                  }
+                                }
+                                return minZ;
+                              };
+
+                              const centerlineX = (sec.centerlineX != null && !isNaN(sec.centerlineX))
+                                ? sec.centerlineX
+                                : (sec.bankLeftX != null && sec.bankRightX != null)
+                                  ? (sec.bankLeftX + sec.bankRightX) / 2
+                                  : (minX + maxX) / 2;
+
+                              const centerlineZ = getElevAt(centerlineX);
+                              const centerlineSvgX = mapX(centerlineX);
+                              const centerlineSvgY = mapZ(centerlineZ);
+
+                              // Local thalweg strictly inside channel for spillway intersection
+                              let talvegPt = sec.profile[0];
+                              let minBedZ = Infinity;
+                              for (const pt of sec.profile) {
+                                if (pt.x >= sec.bankLeftX && pt.x <= sec.bankRightX) {
+                                  if (pt.z < minBedZ) {
+                                    minBedZ = pt.z;
+                                    talvegPt = pt;
+                                  }
+                                }
+                              }
+                              if (minBedZ === Infinity) {
+                                let closestD = Infinity;
                                 for (const pt of sec.profile) {
-                                  if (pt.x >= sec.bankLeftX && pt.x <= sec.bankRightX) {
-                                    if (pt.z < minBedZ) {
-                                      minBedZ = pt.z;
-                                      talvegPt = pt;
-                                    }
+                                  const d = Math.abs(pt.x - centerlineX);
+                                  if (d < closestD) {
+                                    closestD = d;
+                                    talvegPt = pt;
                                   }
                                 }
-                                if (minBedZ === Infinity) {
-                                  let closestD = Infinity;
-                                  for (const pt of sec.profile) {
-                                    const d = Math.abs(pt.x - centerlineX);
-                                    if (d < closestD) {
-                                      closestD = d;
-                                      talvegPt = pt;
-                                    }
+                              }
+
+                              const bLeftZ = getElevAt(sec.bankLeftX);
+                              const bRightZ = getElevAt(sec.bankRightX);
+
+                              const bLeftSvgX = mapX(sec.bankLeftX);
+                              const bRightSvgX = mapX(sec.bankRightX);
+                              const bLeftSvgY = mapZ(bLeftZ);
+                              const bRightSvgY = mapZ(bRightZ);
+
+                              const spillElevation = Math.min(bLeftZ, bRightZ);
+                              let spillLeftX = sec.bankLeftX;
+                              const talvegIdx = sec.profile.indexOf(talvegPt) >= 0 ? sec.profile.indexOf(talvegPt) : Math.floor(sec.profile.length / 2);
+                              if (bLeftZ > spillElevation) {
+                                for (let k = talvegIdx; k >= 1; k--) {
+                                  const p1 = sec.profile[k];
+                                  const p2 = sec.profile[k - 1];
+                                  if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                    const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                    spillLeftX = p1.x + frac * (p2.x - p1.x);
+                                    break;
                                   }
                                 }
-
-                                const bLeftZ = getElevAt(sec.bankLeftX);
-                                const bRightZ = getElevAt(sec.bankRightX);
-
-                                const bLeftSvgX = mapX(sec.bankLeftX);
-                                const bRightSvgX = mapX(sec.bankRightX);
-                                const bLeftSvgY = mapZ(bLeftZ);
-                                const bRightSvgY = mapZ(bRightZ);
-
-                                const distLFromCenterline = Math.abs(centerlineX - sec.bankLeftX);
-                                const distRFromCenterline = Math.abs(sec.bankRightX - centerlineX);
-                                const totalChannelWidth = Math.abs(sec.bankRightX - sec.bankLeftX);
-
-                                const spillElevation = Math.min(bLeftZ, bRightZ);
-                                let spillLeftX = sec.bankLeftX;
-                                const talvegIdx = sec.profile.indexOf(talvegPt) >= 0 ? sec.profile.indexOf(talvegPt) : Math.floor(sec.profile.length / 2);
-                                if (bLeftZ > spillElevation) {
-                                  for (let k = talvegIdx; k >= 1; k--) {
-                                    const p1 = sec.profile[k];
-                                    const p2 = sec.profile[k - 1];
-                                    if (p1.z <= spillElevation && p2.z >= spillElevation) {
-                                      const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
-                                      spillLeftX = p1.x + frac * (p2.x - p1.x);
-                                      break;
-                                    }
+                              }
+                              let spillRightX = sec.bankRightX;
+                              if (bRightZ > spillElevation) {
+                                for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
+                                  const p1 = sec.profile[k];
+                                  const p2 = sec.profile[k + 1];
+                                  if (p1.z <= spillElevation && p2.z >= spillElevation) {
+                                    const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
+                                    spillRightX = p1.x + frac * (p2.x - p1.x);
+                                    break;
                                   }
                                 }
-                                let spillRightX = sec.bankRightX;
-                                if (bRightZ > spillElevation) {
-                                  for (let k = talvegIdx; k < sec.profile.length - 1; k++) {
-                                    const p1 = sec.profile[k];
-                                    const p2 = sec.profile[k + 1];
-                                    if (p1.z <= spillElevation && p2.z >= spillElevation) {
-                                      const frac = (spillElevation - p1.z) / Math.max(1e-6, p2.z - p1.z);
-                                      spillRightX = p1.x + frac * (p2.x - p1.x);
-                                      break;
-                                    }
-                                  }
-                                }
-                                const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
-                                const spillSvgL = mapX(spillLeftX);
-                                const spillSvgR = mapX(spillRightX);
-                                const spillSvgY = mapZ(spillElevation);
+                              }
+                              const spillSvgL = mapX(spillLeftX);
+                              const spillSvgR = mapX(spillRightX);
+                              const spillSvgY = mapZ(spillElevation);
 
-                                // Y-Axis Elevation Ticks (4 Ticks)
-                                const zRange = Math.max(1, maxZ - minZ);
-                                const yTicks = [0, 0.33, 0.66, 1].map(ratio => {
-                                  const zVal = minZ + ratio * zRange;
-                                  return { zVal, yPos: mapZ(zVal) };
-                                });
+                              const zRange = Math.max(1, maxZ - minZ);
+                              const yTicks = [0, 0.33, 0.66, 1].map(ratio => {
+                                const zVal = minZ + ratio * zRange;
+                                return { zVal, yPos: mapZ(zVal) };
+                              });
 
-                                // X-Axis Distance Ticks (5 Ticks)
-                                const xRange = Math.max(1, maxX - minX);
-                                const xTicks = [0, 0.25, 0.5, 0.75, 1].map(ratio => {
-                                  const xVal = minX + ratio * xRange;
-                                  return { xVal, xPos: mapX(xVal) };
-                                });
+                              const xRange = Math.max(1, maxX - minX);
+                              const xTicks = [0, 0.25, 0.5, 0.75, 1].map(ratio => {
+                                const xVal = minX + ratio * xRange;
+                                return { xVal, xPos: mapX(xVal) };
+                              });
 
-                                return (
-                                  <>
-                                    <defs>
-                                      <linearGradient id="groundGradPanel" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.9" />
-                                        <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0.7" />
-                                      </linearGradient>
-                                    </defs>
+                              return (
+                                <svg
+                                  ref={profileSvgRef}
+                                  width="100%"
+                                  height="100%"
+                                  viewBox="0 0 700 240"
+                                  preserveAspectRatio="none"
+                                  className={`w-full h-full select-none touch-none ${draggingProfileMarker ? 'cursor-ew-resize' : ''}`}
+                                  onPointerMove={handleSvgPointerMove}
+                                  onPointerUp={endSvgDrag}
+                                  onPointerCancel={endSvgDrag}
+                                >
+                                  <defs>
+                                    <linearGradient id="groundGradPanel" x1="0" y1="0" x2="0" y2="1">
+                                      <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.9" />
+                                      <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0.7" />
+                                    </linearGradient>
+                                  </defs>
 
-                                    {/* Shaded Flow Zones */}
-                                    <rect x={45} y={20} width={Math.max(0, bLeftSvgX - 45)} height={185} fill="#f0fdf4" fillOpacity="0.3" />
-                                    <rect x={bLeftSvgX} y={20} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={185} fill="#ecfeff" fillOpacity="0.45" />
-                                    <rect x={bRightSvgX} y={20} width={Math.max(0, 660 - bRightSvgX)} height={185} fill="#fffbeb" fillOpacity="0.3" />
+                                  {/* Shaded Flow Zones */}
+                                  <rect x={45} y={20} width={Math.max(0, bLeftSvgX - 45)} height={185} fill="#f0fdf4" fillOpacity="0.35" />
+                                  <rect x={bLeftSvgX} y={20} width={Math.max(0, bRightSvgX - bLeftSvgX)} height={185} fill="#ecfeff" fillOpacity="0.5" />
+                                  <rect x={bRightSvgX} y={20} width={Math.max(0, 660 - bRightSvgX)} height={185} fill="#fffbeb" fillOpacity="0.35" />
 
-                                    {/* Background Grid Lines & Y-Axis Scale */}
-                                    {yTicks.map((t, i) => (
-                                      <g key={`y-grid-${i}`}>
-                                        <line x1={40} y1={t.yPos} x2={660} y2={t.yPos} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="2 2" />
-                                        <text x={38} y={t.yPos + 3} fontSize="8" textAnchor="end" fill="#64748b" fontFamily="monospace">
-                                          {t.zVal.toFixed(1)}m
-                                        </text>
-                                      </g>
-                                    ))}
+                                  {/* Background Grid Lines & Y-Axis Scale */}
+                                  {yTicks.map((t, i) => (
+                                    <g key={`y-grid-${i}`}>
+                                      <line x1={40} y1={t.yPos} x2={660} y2={t.yPos} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="2 2" />
+                                      <text x={38} y={t.yPos + 3} fontSize="8" textAnchor="end" fill="#64748b" fontFamily="monospace">
+                                        {t.zVal.toFixed(1)}m
+                                      </text>
+                                    </g>
+                                  ))}
 
-                                    {/* X-Axis Grid Lines & Scale */}
-                                    <line x1={45} y1={205} x2={660} y2={205} stroke="#94a3b8" strokeWidth="1.2" />
-                                    <line x1={45} y1={20} x2={45} y2={205} stroke="#94a3b8" strokeWidth="1.2" />
+                                  {/* X-Axis Grid Lines & Scale */}
+                                  <line x1={45} y1={205} x2={660} y2={205} stroke="#94a3b8" strokeWidth="1.2" />
+                                  <line x1={45} y1={20} x2={45} y2={205} stroke="#94a3b8" strokeWidth="1.2" />
 
-                                    {xTicks.map((t, i) => (
-                                      <g key={`x-grid-${i}`}>
-                                        <line x1={t.xPos} y1={205} x2={t.xPos} y2={210} stroke="#64748b" strokeWidth="1" />
-                                        <text x={t.xPos} y={222} fontSize="8" textAnchor="middle" fill="#64748b" fontFamily="monospace">
-                                          {t.xVal.toFixed(0)}m
-                                        </text>
-                                      </g>
-                                    ))}
+                                  {xTicks.map((t, i) => (
+                                    <g key={`x-grid-${i}`}>
+                                      <line x1={t.xPos} y1={205} x2={t.xPos} y2={210} stroke="#64748b" strokeWidth="1" />
+                                      <text x={t.xPos} y={222} fontSize="8" textAnchor="middle" fill="#64748b" fontFamily="monospace">
+                                        {t.xVal.toFixed(0)}m
+                                      </text>
+                                    </g>
+                                  ))}
 
-                                    {/* Zone Clean Header Titles (No background rects) */}
-                                    <text x={(45 + bLeftSvgX) / 2} y={15} fontSize="9" textAnchor="middle" fill="#047857" fontWeight="bold">
-                                      LOB (Sol Taşkın)
-                                    </text>
-                                    <text x={(bLeftSvgX + bRightSvgX) / 2} y={15} fontSize="9.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
-                                      ANA KANAL
-                                    </text>
-                                    <text x={(bRightSvgX + 660) / 2} y={15} fontSize="9" textAnchor="middle" fill="#b45309" fontWeight="bold">
-                                      ROB (Sağ Taşkın)
-                                    </text>
+                                  {/* Zone Header Titles */}
+                                  <text x={(45 + bLeftSvgX) / 2} y={13} fontSize="9" textAnchor="middle" fill="#047857" fontWeight="bold">
+                                    LOB (Sol Taşkın)
+                                  </text>
+                                  <text x={(bLeftSvgX + bRightSvgX) / 2} y={13} fontSize="9.5" textAnchor="middle" fill="#0369a1" fontWeight="bold">
+                                    ANA KANAL
+                                  </text>
+                                  <text x={(bRightSvgX + 660) / 2} y={13} fontSize="9" textAnchor="middle" fill="#b45309" fontWeight="bold">
+                                    ROB (Sağ Taşkın)
+                                  </text>
 
-                                    {/* Ground Profile Line */}
-                                    <path d={groundPath} fill="url(#groundGradPanel)" stroke="#0f172a" strokeWidth="2.5" strokeLinejoin="round" />
+                                  {/* Ground Profile Line */}
+                                  <path d={groundPath} fill="url(#groundGradPanel)" stroke="#0f172a" strokeWidth="2.5" strokeLinejoin="round" />
 
-                                    {/* 1. Sol Şev Üstü Indicator */}
-                                    <line x1={bLeftSvgX} y1="20" x2={bLeftSvgX} y2="205" stroke="#059669" strokeWidth="1.8" strokeDasharray="4 3" />
-                                    <circle cx={bLeftSvgX} cy={bLeftSvgY} r="4.5" fill="#10b981" stroke="#064e3b" strokeWidth="1.8" />
+                                  {/* Bankfull Spillway Line */}
+                                  {spillSvgR - spillSvgL > 15 && (
+                                    <line x1={spillSvgL} y1={spillSvgY} x2={spillSvgR} y2={spillSvgY} stroke="#ea580c" strokeWidth="1.2" strokeDasharray="4 2" />
+                                  )}
 
-                                    {/* 2. Yüklenen Dere Ekseni (Ana Kanal Ekseni) Indicator */}
-                                    <line x1={centerlineSvgX} y1="20" x2={centerlineSvgX} y2="205" stroke="#0284c7" strokeWidth="2" strokeDasharray="5 3" />
-                                    <circle cx={centerlineSvgX} cy={centerlineSvgY} r="5" fill="#0284c7" stroke="#0c4a6e" strokeWidth="2" />
+                                  {/* Structure Overlay if present */}
+                                  {matchingStruct && (
+                                    <g>
+                                      <rect
+                                        x={mapX(sec.bankLeftX)}
+                                        y={Math.min(mapZ(matchingStruct.roadElevation), mapZ(matchingStruct.lowChordElevation))}
+                                        width={Math.max(10, mapX(sec.bankRightX) - mapX(sec.bankLeftX))}
+                                        height={Math.max(6, Math.abs(mapZ(matchingStruct.roadElevation) - mapZ(matchingStruct.lowChordElevation)))}
+                                        fill="#475569"
+                                        stroke="#1e293b"
+                                        strokeWidth="1.5"
+                                        rx="2"
+                                        opacity="0.9"
+                                      />
+                                      <text
+                                        x={(mapX(sec.bankLeftX) + mapX(sec.bankRightX)) / 2}
+                                        y={mapZ(matchingStruct.roadElevation) - 4}
+                                        fontSize="9"
+                                        fill="#0f172a"
+                                        fontWeight="bold"
+                                        textAnchor="middle"
+                                      >
+                                        {matchingStruct.type === 'bridge' ? 'Köprü' : 'Menfez'} (Tabliye: {matchingStruct.roadElevation.toFixed(2)}m)
+                                      </text>
+                                    </g>
+                                  )}
 
-                                    {/* 3. Sağ Şev Üstü Indicator */}
-                                    <line x1={bRightSvgX} y1="20" x2={bRightSvgX} y2="205" stroke="#d97706" strokeWidth="1.8" strokeDasharray="4 3" />
-                                    <circle cx={bRightSvgX} cy={bRightSvgY} r="4.5" fill="#f59e0b" stroke="#78350f" strokeWidth="1.8" />
-
-                                    {/* 4. Bankfull Spillway Line */}
-                                    {spillSvgR - spillSvgL > 15 && (
-                                      <line x1={spillSvgL} y1={spillSvgY} x2={spillSvgR} y2={spillSvgY} stroke="#ea580c" strokeWidth="1.2" strokeDasharray="4 2" />
-                                    )}
-
-                                    {/* Structure Overlay if present */}
-                                    {matchingStruct && (
+                                  {/* 1. Interactive Sol Şev Üstü Drag Handle */}
+                                  <g
+                                    onPointerDown={(e) => startMarkerDrag('bankLeft', e)}
+                                    style={{ cursor: 'ew-resize' }}
+                                  >
+                                    <rect x={bLeftSvgX - 10} y="16" width="20" height="190" fill="transparent" />
+                                    <line
+                                      x1={bLeftSvgX}
+                                      y1="20"
+                                      x2={bLeftSvgX}
+                                      y2="205"
+                                      stroke="#059669"
+                                      strokeWidth={draggingProfileMarker === 'bankLeft' ? 2.6 : 1.8}
+                                      strokeDasharray="4 3"
+                                    />
+                                    <polygon
+                                      points={`${bLeftSvgX - 6},20 ${bLeftSvgX + 6},20 ${bLeftSvgX},29`}
+                                      fill="#059669"
+                                      stroke="#ffffff"
+                                      strokeWidth="1"
+                                    />
+                                    <circle
+                                      cx={bLeftSvgX}
+                                      cy={bLeftSvgY}
+                                      r={draggingProfileMarker === 'bankLeft' ? 6.5 : 5}
+                                      fill="#10b981"
+                                      stroke="#064e3b"
+                                      strokeWidth="2"
+                                    />
+                                    {draggingProfileMarker === 'bankLeft' && (
                                       <g>
-                                        <rect
-                                          x={mapX(sec.bankLeftX)}
-                                          y={Math.min(mapZ(matchingStruct.roadElevation), mapZ(matchingStruct.lowChordElevation))}
-                                          width={Math.max(10, mapX(sec.bankRightX) - mapX(sec.bankLeftX))}
-                                          height={Math.max(6, Math.abs(mapZ(matchingStruct.roadElevation) - mapZ(matchingStruct.lowChordElevation)))}
-                                          fill="#475569"
-                                          stroke="#1e293b"
-                                          strokeWidth="1.5"
-                                          rx="2"
-                                          opacity="0.9"
-                                        />
-                                        <text
-                                          x={(mapX(sec.bankLeftX) + mapX(sec.bankRightX)) / 2}
-                                          y={mapZ(matchingStruct.roadElevation) - 4}
-                                          fontSize="9"
-                                          fill="#0f172a"
-                                          fontWeight="bold"
-                                          textAnchor="middle"
-                                        >
-                                          {matchingStruct.type === 'bridge' ? '🌉 Köprü' : '🔲 Menfez'} (Tabliye: {matchingStruct.roadElevation.toFixed(2)}m)
+                                        <rect x={Math.min(585, Math.max(48, bLeftSvgX - 42))} y={32} width="84" height="18" rx="3" fill="#064e3b" />
+                                        <text x={Math.min(627, Math.max(90, bLeftSvgX))} y={44} fontSize="8.5" fill="#ffffff" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
+                                          Sol: {sec.bankLeftX.toFixed(1)}m
                                         </text>
                                       </g>
                                     )}
-                                  </>
-                                );
-                              })()}
-                            </svg>
+                                  </g>
+
+                                  {/* 2. Interactive Dere Talveg / Ekseni Drag Handle */}
+                                  <g
+                                    onPointerDown={(e) => startMarkerDrag('centerline', e)}
+                                    style={{ cursor: 'ew-resize' }}
+                                  >
+                                    <rect x={centerlineSvgX - 10} y="16" width="20" height="190" fill="transparent" />
+                                    <line
+                                      x1={centerlineSvgX}
+                                      y1="20"
+                                      x2={centerlineSvgX}
+                                      y2="205"
+                                      stroke="#0284c7"
+                                      strokeWidth={draggingProfileMarker === 'centerline' ? 2.8 : 2}
+                                      strokeDasharray="5 3"
+                                    />
+                                    <polygon
+                                      points={`${centerlineSvgX - 7},20 ${centerlineSvgX + 7},20 ${centerlineSvgX},30`}
+                                      fill="#0284c7"
+                                      stroke="#ffffff"
+                                      strokeWidth="1"
+                                    />
+                                    <circle
+                                      cx={centerlineSvgX}
+                                      cy={centerlineSvgY}
+                                      r={draggingProfileMarker === 'centerline' ? 7 : 5.5}
+                                      fill="#0284c7"
+                                      stroke="#0c4a6e"
+                                      strokeWidth="2"
+                                    />
+                                    {draggingProfileMarker === 'centerline' && (
+                                      <g>
+                                        <rect x={Math.min(575, Math.max(48, centerlineSvgX - 48))} y={32} width="96" height="18" rx="3" fill="#0c4a6e" />
+                                        <text x={Math.min(623, Math.max(96, centerlineSvgX))} y={44} fontSize="8.5" fill="#ffffff" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
+                                          Talveg: {centerlineX.toFixed(1)}m
+                                        </text>
+                                      </g>
+                                    )}
+                                  </g>
+
+                                  {/* 3. Interactive Sağ Şev Üstü Drag Handle */}
+                                  <g
+                                    onPointerDown={(e) => startMarkerDrag('bankRight', e)}
+                                    style={{ cursor: 'ew-resize' }}
+                                  >
+                                    <rect x={bRightSvgX - 10} y="16" width="20" height="190" fill="transparent" />
+                                    <line
+                                      x1={bRightSvgX}
+                                      y1="20"
+                                      x2={bRightSvgX}
+                                      y2="205"
+                                      stroke="#d97706"
+                                      strokeWidth={draggingProfileMarker === 'bankRight' ? 2.6 : 1.8}
+                                      strokeDasharray="4 3"
+                                    />
+                                    <polygon
+                                      points={`${bRightSvgX - 6},20 ${bRightSvgX + 6},20 ${bRightSvgX},29`}
+                                      fill="#d97706"
+                                      stroke="#ffffff"
+                                      strokeWidth="1"
+                                    />
+                                    <circle
+                                      cx={bRightSvgX}
+                                      cy={bRightSvgY}
+                                      r={draggingProfileMarker === 'bankRight' ? 6.5 : 5}
+                                      fill="#f59e0b"
+                                      stroke="#78350f"
+                                      strokeWidth="2"
+                                    />
+                                    {draggingProfileMarker === 'bankRight' && (
+                                      <g>
+                                        <rect x={Math.min(585, Math.max(48, bRightSvgX - 42))} y={32} width="84" height="18" rx="3" fill="#78350f" />
+                                        <text x={Math.min(627, Math.max(90, bRightSvgX))} y={44} fontSize="8.5" fill="#ffffff" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
+                                          Sağ: {sec.bankRightX.toFixed(1)}m
+                                        </text>
+                                      </g>
+                                    )}
+                                  </g>
+                                </svg>
+                              );
+                            })()}
                           </div>
 
                           {/* Dedicated Cross-Section Elevation & Distance Information Panel (OUTSIDE THE PLOT) */}
@@ -5747,70 +5900,157 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             const bankfullWidth = Math.max(0.5, spillRightX - spillLeftX);
 
                             return (
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs">
-                                {/* Sol Şev Üstü */}
-                                <div className="bg-emerald-50/80 border border-emerald-200 p-2 rounded-lg space-y-0.5">
-                                  <div className="flex items-center justify-between font-bold text-emerald-900 text-[11px]">
-                                    <span className="flex items-center gap-1">🌿 Sol Şev Üstü</span>
-                                    <span className="font-mono text-emerald-700">{bLeftZ.toFixed(2)} m</span>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 text-xs">
+                                {/* 1. Sol Şev Üstü (Düzenlenebilir) */}
+                                <div className="bg-emerald-50/70 border border-emerald-200 p-2 rounded-lg flex flex-col justify-between gap-1.5">
+                                  <div>
+                                    <div className="flex items-center justify-between font-bold text-emerald-900 text-[11px]">
+                                      <span>Sol Şev Üstü</span>
+                                      <span className="font-mono tabular-nums text-emerald-700">{bLeftZ.toFixed(2)} m</span>
+                                    </div>
+                                    <div className="text-[10px] text-emerald-800 flex justify-between pt-0.5 mt-0.5 border-t border-emerald-200/70">
+                                      <span>Eksene Mesafe:</span>
+                                      <strong className="font-mono tabular-nums">-{distLFromCenterline.toFixed(1)} m</strong>
+                                    </div>
                                   </div>
-                                  <div className="text-[10px] text-emerald-800 flex justify-between pt-0.5 border-t border-emerald-200/60">
-                                    <span>Eksene Mesafe:</span>
-                                    <strong className="font-mono">-{distLFromCenterline.toFixed(1)} m</strong>
-                                  </div>
-                                  <div className="text-[10px] text-emerald-800 flex justify-between">
-                                    <span>Sol İstasyon:</span>
-                                    <strong className="font-mono">{sec.bankLeftX.toFixed(1)} m</strong>
-                                  </div>
-                                </div>
-
-                                {/* Ana Kanal (Dere Ekseni) */}
-                                <div className="bg-sky-50/80 border border-sky-200 p-2 rounded-lg space-y-0.5">
-                                  <div className="flex items-center justify-between font-bold text-sky-900 text-[11px]">
-                                    <span className="flex items-center gap-1">🌊 Dere Ekseni</span>
-                                    <span className="font-mono text-sky-700">{cZ.toFixed(2)} m</span>
-                                  </div>
-                                  <div className="text-[10px] text-sky-800 flex justify-between pt-0.5 border-t border-sky-200/60">
-                                    <span>Eksen Konumu (X):</span>
-                                    <strong className="font-mono">{cX.toFixed(1)} m</strong>
-                                  </div>
-                                  <div className="text-[10px] text-sky-800 flex justify-between">
-                                    <span>Kanal Genişliği:</span>
-                                    <strong className="font-mono">{totalChannelWidth.toFixed(1)} m</strong>
-                                  </div>
-                                </div>
-
-                                {/* Sağ Şev Üstü */}
-                                <div className="bg-amber-50/80 border border-amber-200 p-2 rounded-lg space-y-0.5">
-                                  <div className="flex items-center justify-between font-bold text-amber-900 text-[11px]">
-                                    <span className="flex items-center gap-1">🌾 Sağ Şev Üstü</span>
-                                    <span className="font-mono text-amber-700">{bRightZ.toFixed(2)} m</span>
-                                  </div>
-                                  <div className="text-[10px] text-amber-800 flex justify-between pt-0.5 border-t border-amber-200/60">
-                                    <span>Eksene Mesafe:</span>
-                                    <strong className="font-mono">+{distRFromCenterline.toFixed(1)} m</strong>
-                                  </div>
-                                  <div className="text-[10px] text-amber-800 flex justify-between">
-                                    <span>Sağ İstasyon:</span>
-                                    <strong className="font-mono">{sec.bankRightX.toFixed(1)} m</strong>
+                                  <div className="space-y-1 pt-0.5 border-t border-emerald-200/60">
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[10px] font-bold text-emerald-900 shrink-0">X:</span>
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        value={Number(sec.bankLeftX.toFixed(2))}
+                                        onChange={(e) => {
+                                          const val = Number(e.target.value);
+                                          if (!Number.isNaN(val)) {
+                                            handleUpdateSectionGeometry(sec.station, { bankLeftX: val });
+                                          }
+                                        }}
+                                        className="w-full bg-white border border-emerald-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-emerald-950 text-center focus:outline-none focus:border-emerald-600"
+                                      />
+                                      <span className="text-[10px] font-mono text-emerald-700">m</span>
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-1 text-[10px] font-mono tabular-nums">
+                                      {[-1, -0.5, 0.5, 1].map(step => (
+                                        <button
+                                          key={`bl-${step}`}
+                                          type="button"
+                                          onClick={() => handleUpdateSectionGeometry(sec.station, { bankLeftX: sec.bankLeftX + step })}
+                                          className="py-0.5 bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-200 rounded font-bold cursor-pointer transition-colors"
+                                        >
+                                          {step > 0 ? `+${step}` : step}m
+                                        </button>
+                                      ))}
+                                    </div>
                                   </div>
                                 </div>
 
-                                {/* Taşma & Sanat Yapısı */}
-                                <div className="bg-slate-100 border border-slate-200 p-2 rounded-lg space-y-0.5">
+                                {/* 2. Dere Talveg / Ekseni (Düzenlenebilir + Harita Eksen Senkronlu) */}
+                                <div className="bg-sky-50/70 border border-sky-200 p-2 rounded-lg flex flex-col justify-between gap-1.5">
+                                  <div>
+                                    <div className="flex items-center justify-between font-bold text-sky-900 text-[11px]">
+                                      <span>Dere Talveg / Ekseni</span>
+                                      <span className="font-mono tabular-nums text-sky-700">{cZ.toFixed(2)} m</span>
+                                    </div>
+                                    <div className="text-[10px] text-sky-800 flex justify-between pt-0.5 mt-0.5 border-t border-sky-200/70">
+                                      <span>Kanal Genişliği:</span>
+                                      <strong className="font-mono tabular-nums">{totalChannelWidth.toFixed(1)} m</strong>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1 pt-0.5 border-t border-sky-200/60">
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[10px] font-bold text-sky-900 shrink-0">X:</span>
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        value={Number(cX.toFixed(2))}
+                                        onChange={(e) => {
+                                          const val = Number(e.target.value);
+                                          if (!Number.isNaN(val)) {
+                                            handleUpdateSectionGeometry(sec.station, { centerlineX: val });
+                                          }
+                                        }}
+                                        className="w-full bg-white border border-sky-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-sky-950 text-center focus:outline-none focus:border-sky-600"
+                                      />
+                                      <span className="text-[10px] font-mono text-sky-700">m</span>
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-1 text-[10px] font-mono tabular-nums">
+                                      {[-1, -0.5, 0.5, 1].map(step => (
+                                        <button
+                                          key={`cl-${step}`}
+                                          type="button"
+                                          onClick={() => handleUpdateSectionGeometry(sec.station, { centerlineX: cX + step })}
+                                          className="py-0.5 bg-white hover:bg-sky-100 text-sky-900 border border-sky-200 rounded font-bold cursor-pointer transition-colors"
+                                        >
+                                          {step > 0 ? `+${step}` : step}m
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* 3. Sağ Şev Üstü (Düzenlenebilir) */}
+                                <div className="bg-amber-50/70 border border-amber-200 p-2 rounded-lg flex flex-col justify-between gap-1.5">
+                                  <div>
+                                    <div className="flex items-center justify-between font-bold text-amber-900 text-[11px]">
+                                      <span>Sağ Şev Üstü</span>
+                                      <span className="font-mono tabular-nums text-amber-700">{bRightZ.toFixed(2)} m</span>
+                                    </div>
+                                    <div className="text-[10px] text-amber-800 flex justify-between pt-0.5 mt-0.5 border-t border-amber-200/70">
+                                      <span>Eksene Mesafe:</span>
+                                      <strong className="font-mono tabular-nums">+{distRFromCenterline.toFixed(1)} m</strong>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1 pt-0.5 border-t border-amber-200/60">
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[10px] font-bold text-amber-900 shrink-0">X:</span>
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        value={Number(sec.bankRightX.toFixed(2))}
+                                        onChange={(e) => {
+                                          const val = Number(e.target.value);
+                                          if (!Number.isNaN(val)) {
+                                            handleUpdateSectionGeometry(sec.station, { bankRightX: val });
+                                          }
+                                        }}
+                                        className="w-full bg-white border border-amber-300 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold text-amber-950 text-center focus:outline-none focus:border-amber-600"
+                                      />
+                                      <span className="text-[10px] font-mono text-amber-700">m</span>
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-1 text-[10px] font-mono tabular-nums">
+                                      {[-1, -0.5, 0.5, 1].map(step => (
+                                        <button
+                                          key={`br-${step}`}
+                                          type="button"
+                                          onClick={() => handleUpdateSectionGeometry(sec.station, { bankRightX: sec.bankRightX + step })}
+                                          className="py-0.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-200 rounded font-bold cursor-pointer transition-colors"
+                                        >
+                                          {step > 0 ? `+${step}` : step}m
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* 4. Taşma & Sanat Yapısı (Canlı Özet) */}
+                                <div className="bg-white border border-slate-200 p-2 rounded-lg flex flex-col justify-between gap-1">
                                   <div className="flex items-center justify-between font-bold text-slate-800 text-[11px]">
-                                    <span>📐 Taşma Kapasitesi</span>
-                                    <span className="font-mono text-slate-700">{bankfullWidth.toFixed(1)} m</span>
+                                    <span>Taşma Kapasitesi</span>
+                                    <span className="font-mono tabular-nums text-slate-700">{bankfullWidth.toFixed(1)} m</span>
                                   </div>
-                                  <div className="text-[10px] text-slate-600 flex justify-between pt-0.5 border-t border-slate-200">
+                                  <div className="text-[10px] text-slate-600 flex justify-between pt-0.5 border-t border-slate-100">
                                     <span>Taşma Eşik Kotu:</span>
-                                    <strong className="font-mono">{spillElevation.toFixed(2)} m</strong>
+                                    <strong className="font-mono tabular-nums text-slate-900">{spillElevation.toFixed(2)} m</strong>
                                   </div>
                                   <div className="text-[10px] text-slate-600 flex justify-between">
                                     <span>Sanat Yapısı:</span>
                                     <strong className="font-medium text-cyan-800">
                                       {matchingStruct ? `${matchingStruct.type === 'bridge' ? 'Köprü' : 'Menfez'}` : 'Yok'}
                                     </strong>
+                                  </div>
+                                  <div className="text-[9px] text-slate-500 pt-0.5 border-t border-slate-100">
+                                    Talveg kaydırıldığında haritadaki eksen anlık güncellenir.
                                   </div>
                                 </div>
                               </div>
