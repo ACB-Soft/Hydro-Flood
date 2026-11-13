@@ -323,6 +323,200 @@ export async function parseKMLBankLines(
   };
 }
 
+export interface StudyAreaKMLData {
+  name: string;
+  polygons: [number, number][][]; // Array of outer boundary rings in [lat, lon] Leaflet format
+  areaM2: number;
+  areaHa: number;
+}
+
+/**
+ * Parses a KML file containing one or more Polygon / outerBoundaryIs rings
+ * representing the investigation/study area (İnceleme Alanı).
+ */
+export async function parseStudyAreaKML(file: File): Promise<StudyAreaKMLData> {
+  const text = await file.text();
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(text, 'text/xml');
+
+  const parseCoordsText = (raw: string | null): [number, number][] => {
+    if (!raw) return [];
+    const pts: [number, number][] = [];
+    const tokens = raw.trim().split(/\s+/);
+    for (const token of tokens) {
+      const parts = token.split(',');
+      const lon = Number(parts[0]);
+      const lat = Number(parts[1]);
+      if (!Number.isNaN(lon) && !Number.isNaN(lat)) {
+        pts.push([lat, lon]);
+      }
+    }
+    return pts;
+  };
+
+  const polygons: [number, number][][] = [];
+
+  // Prefer explicit <Polygon> -> <outerBoundaryIs> rings first
+  const polygonNodes = Array.from(xml.getElementsByTagName('Polygon'));
+  for (const polyNode of polygonNodes) {
+    const outerNode = polyNode.getElementsByTagName('outerBoundaryIs')[0] || polyNode;
+    const coordNode = outerNode.getElementsByTagName('coordinates')[0];
+    const pts = parseCoordsText(coordNode?.textContent ?? null);
+    if (pts.length >= 3) {
+      polygons.push(pts);
+    }
+  }
+
+  // Fallback to any <coordinates> nodes with >= 3 points if no <Polygon> tags existed
+  if (polygons.length === 0) {
+    const coordNodes = Array.from(xml.getElementsByTagName('coordinates'));
+    for (const cn of coordNodes) {
+      const pts = parseCoordsText(cn.textContent);
+      if (pts.length >= 3) {
+        polygons.push(pts);
+      }
+    }
+  }
+
+  let totalAreaM2 = 0;
+  for (const ring of polygons) {
+    try {
+      const lonLat = ring.map(([lat, lon]) => [lon, lat]);
+      const first = lonLat[0];
+      const last = lonLat[lonLat.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        lonLat.push([...first]);
+      }
+      if (lonLat.length >= 4) {
+        totalAreaM2 += turf.area(turf.polygon([lonLat]));
+      }
+    } catch {
+      // ignore invalid ring area
+    }
+  }
+
+  return {
+    name: file.name,
+    polygons,
+    areaM2: totalAreaM2,
+    areaHa: totalAreaM2 / 10000
+  };
+}
+
+export interface StudyAreaClippedReach<T> {
+  source: T;
+  coords: [number, number][];
+  areaM2: number;
+}
+
+/**
+ * Intersects 1D reach flood polygons against uploaded study area polygon(s)
+ * to calculate inundated area inside the study boundary and optionally clip map polygons.
+ */
+export function computeStudyAreaFloodOverlap<
+  T extends { coords: [number, number][]; isOverbank: boolean }
+>(
+  reachPolygons: T[],
+  studyAreaPolygons: [number, number][][]
+): {
+  clippedReaches: StudyAreaClippedReach<T>[];
+  insideFloodAreaM2: number;
+  insideOverbankAreaM2: number;
+  insideWaterAreaM2: number;
+} {
+  if (reachPolygons.length === 0 || studyAreaPolygons.length === 0) {
+    return {
+      clippedReaches: [],
+      insideFloodAreaM2: 0,
+      insideOverbankAreaM2: 0,
+      insideWaterAreaM2: 0
+    };
+  }
+
+  const toClosedTurfPoly = (ring: [number, number][]) => {
+    const lonLat = ring.map(([lat, lon]) => [lon, lat]);
+    if (lonLat.length < 3) return null;
+    const first = lonLat[0];
+    const last = lonLat[lonLat.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) {
+      lonLat.push([...first]);
+    }
+    if (lonLat.length < 4) return null;
+    return turf.polygon([lonLat]);
+  };
+
+  const studyTurfPolys = studyAreaPolygons
+    .map(toClosedTurfPoly)
+    .filter((p): p is NonNullable<typeof p> => p !== null);
+
+  if (studyTurfPolys.length === 0) {
+    return {
+      clippedReaches: [],
+      insideFloodAreaM2: 0,
+      insideOverbankAreaM2: 0,
+      insideWaterAreaM2: 0
+    };
+  }
+
+  const clippedReaches: StudyAreaClippedReach<T>[] = [];
+  let insideWaterAreaM2 = 0;
+  let insideOverbankAreaM2 = 0;
+
+  for (const reach of reachPolygons) {
+    const reachPoly = toClosedTurfPoly(reach.coords);
+    if (!reachPoly) continue;
+
+    for (const studyPoly of studyTurfPolys) {
+      try {
+        const intersected = turf.intersect(turf.featureCollection([reachPoly, studyPoly]));
+        if (!intersected || !intersected.geometry) continue;
+
+        const geom = intersected.geometry;
+        const extractOuterRings = (rings: number[][][]) => {
+          if (!rings || rings.length === 0 || rings[0].length < 3) return;
+          const coordsLatLon: [number, number][] = rings[0].map(([lon, lat]) => [lat, lon]);
+          let partAreaM2 = 0;
+          try {
+            partAreaM2 = turf.area(turf.polygon([rings[0]]));
+          } catch {
+            partAreaM2 = 0;
+          }
+          if (partAreaM2 > 0.1) {
+            insideWaterAreaM2 += partAreaM2;
+            if (reach.isOverbank) {
+              insideOverbankAreaM2 += partAreaM2;
+            }
+            clippedReaches.push({
+              source: reach,
+              coords: coordsLatLon,
+              areaM2: partAreaM2
+            });
+          }
+        };
+
+        if (geom.type === 'Polygon') {
+          extractOuterRings(geom.coordinates);
+        } else if (geom.type === 'MultiPolygon') {
+          for (const polyCoords of geom.coordinates) {
+            extractOuterRings(polyCoords);
+          }
+        }
+      } catch {
+        // Skip invalid self-intersecting sliver geometry gracefully
+      }
+    }
+  }
+
+  const insideFloodAreaM2 = insideOverbankAreaM2 > 0 ? insideOverbankAreaM2 : insideWaterAreaM2;
+
+  return {
+    clippedReaches,
+    insideFloodAreaM2,
+    insideOverbankAreaM2,
+    insideWaterAreaM2
+  };
+}
+
 export function calibrateSectionsWithBankLines(
   sections: CrossSection[],
   leftBankCoords?: [number, number][],

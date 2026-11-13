@@ -43,7 +43,9 @@ import {
   Navigation,
   Wand2,
   ListFilter,
-  RotateCcw
+  RotateCcw,
+  MapPin,
+  Scissors
 } from 'lucide-react';
 import { MapContainer, TileLayer, ImageOverlay, Polyline, Polygon, CircleMarker, Popup, Tooltip, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -82,7 +84,10 @@ import {
   checkCrossSectionIntersections,
   deconflictExistingCrossSections,
   DeconflictReport,
-  IntersectionCheckResult
+  IntersectionCheckResult,
+  StudyAreaKMLData,
+  parseStudyAreaKML,
+  computeStudyAreaFloodOverlap
 } from '../utils/OneDEngine';
 import { CRS_LIST, CRSItem } from '../utils/crsList';
 import { MapAutoCenter } from './MapHelpers';
@@ -168,6 +173,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [showCenterlineLayer, setShowCenterlineLayer] = useState<boolean>(true);
   const [showTransectLines, setShowTransectLines] = useState<boolean>(false);
   const [showStructuresLayer, setShowStructuresLayer] = useState<boolean>(true);
+  const [showStudyAreaLayer, setShowStudyAreaLayer] = useState<boolean>(true);
+  const [clipFloodToStudyArea, setClipFloodToStudyArea] = useState<boolean>(false);
 
   // Coordinate System (CRS) Selection (defaults to TUREF / TM36 (3°) EPSG:5256)
   const [selectedCRS, setSelectedCRS] = useState<CRSItem>(
@@ -186,6 +193,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [useDetectedThalweg, setUseDetectedThalweg] = useState<boolean>(false);
   const [showOriginalCenterline, setShowOriginalCenterline] = useState<boolean>(true);
   const [banksFile, setBanksFile] = useState<File | null>(null);
+  const [studyAreaKml, setStudyAreaKml] = useState<StudyAreaKMLData | null>(null);
+  const [studyAreaError, setStudyAreaError] = useState<string | null>(null);
   const [centerlineCoords, setCenterlineCoords] = useState<[number, number][]>([]);
   const [bankCoords, setBankCoords] = useState<[number, number][]>([]);
   const [leftBankCoords, setLeftBankCoords] = useState<[number, number][]>([]);
@@ -334,6 +343,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         allPoints.push(s.coordinates);
       }
     });
+    if (detectedThalwegCoords.length > 0) {
+      allPoints.push(...detectedThalwegCoords);
+    }
+    if (studyAreaKml && studyAreaKml.polygons.length > 0) {
+      studyAreaKml.polygons.forEach(ring => {
+        allPoints.push(...ring);
+      });
+    }
     if (allPoints.length === 0) {
       return demOverlay?.wgs84Bounds || null;
     }
@@ -347,14 +364,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       if (lon > maxLon) maxLon = lon;
     });
 
-    if (detectedThalwegCoords.length > 0) {
-      allPoints.push(...detectedThalwegCoords);
-    }
     return [
       [minLat - 0.002, minLon - 0.002],
       [maxLat + 0.002, maxLon + 0.002]
     ];
-  }, [centerlineCoords, detectedThalwegCoords, leftBankCoords, rightBankCoords, sections, structures, demOverlay]);
+  }, [centerlineCoords, detectedThalwegCoords, leftBankCoords, rightBankCoords, sections, structures, demOverlay, studyAreaKml]);
 
   // Handle Centerline KML Upload
   const handleCenterlineUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -378,6 +392,36 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         console.error("KML koordinatları okunamadı:", err);
       }
     }
+  };
+
+  // Handle Study Area (İnceleme Alanı) KML Upload
+  const handleStudyAreaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const inputEl = e.target;
+    if (inputEl.files && inputEl.files[0]) {
+      const file = inputEl.files[0];
+      setStudyAreaError(null);
+      try {
+        const parsed = await parseStudyAreaKML(file);
+        if (parsed.polygons.length === 0) {
+          setStudyAreaError("KML dosyasında geçerli bir inceleme alanı poligonu bulunamadı.");
+          return;
+        }
+        setStudyAreaKml(parsed);
+        setShowStudyAreaLayer(true);
+        setIsFileOpened(true);
+      } catch (err) {
+        console.error("İnceleme alanı KML dosyası okunamadı:", err);
+        setStudyAreaError("İnceleme alanı KML dosyası okunurken hata oluştu.");
+      } finally {
+        inputEl.value = '';
+      }
+    }
+  };
+
+  const handleClearStudyArea = () => {
+    setStudyAreaKml(null);
+    setStudyAreaError(null);
+    setClipFloodToStudyArea(false);
   };
 
   // Detect True River Thalweg (Yatak Tabanı) from DEM strictly within detected stream bed
@@ -1867,6 +1911,12 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     };
   }, [sections, simResults]);
 
+  // Exact intersection & overlap metrics inside uploaded Study Area (İnceleme Alanı)
+  const studyAreaOverlap = useMemo(() => {
+    if (!studyAreaKml || studyAreaKml.polygons.length === 0 || !floodMapData) return null;
+    return computeStudyAreaFloodOverlap(floodMapData.reachPolygons, studyAreaKml.polygons);
+  }, [studyAreaKml, floodMapData]);
+
   // Export Results to CSV
   const exportToCSV = () => {
     if (simResults.length === 0) return;
@@ -1920,32 +1970,86 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       }
     });
 
-    // 2. Individual Reach Polygons with Depth Categories
-    floodMapData.reachPolygons.forEach((reach) => {
-      features.push({
-        type: "Feature",
-        properties: {
-          reachId: reach.id + 1,
-          stationFrom: reach.stationFrom,
-          stationTo: reach.stationTo,
-          avgDepth: Number(reach.avgDepth.toFixed(2)),
-          avgWSE: Number(reach.avgWse.toFixed(2)),
-          avgWidth: Number(reach.avgWidth.toFixed(1)),
-          avgVelocity: Number(reach.avgVelocity.toFixed(2)),
-          areaM2: Math.round(reach.areaM2),
-          depthCategory: reach.depthLabel
-        },
-        geometry: {
-          type: "Polygon",
-          coordinates: [
-            [
-              ...reach.coords.map(([lat, lon]) => [lon, lat]),
-              [reach.coords[0][1], reach.coords[0][0]]
+    // 2. Individual Reach Polygons with Depth Categories (clipped if active)
+    if (clipFloodToStudyArea && studyAreaOverlap) {
+      studyAreaOverlap.clippedReaches.forEach((clipped, idx) => {
+        const reach = clipped.source;
+        features.push({
+          type: "Feature",
+          properties: {
+            reachId: idx + 1,
+            stationFrom: reach.stationFrom,
+            stationTo: reach.stationTo,
+            avgDepth: Number(reach.avgDepth.toFixed(2)),
+            avgWSE: Number(reach.avgWse.toFixed(2)),
+            avgWidth: Number(reach.avgWidth.toFixed(1)),
+            avgVelocity: Number(reach.avgVelocity.toFixed(2)),
+            areaM2: Math.round(clipped.areaM2),
+            depthCategory: reach.depthLabel,
+            clippedToStudyArea: true
+          },
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                ...clipped.coords.map(([lat, lon]) => [lon, lat]),
+                [clipped.coords[0][1], clipped.coords[0][0]]
+              ]
             ]
-          ]
-        }
+          }
+        });
       });
-    });
+    } else {
+      floodMapData.reachPolygons.forEach((reach) => {
+        features.push({
+          type: "Feature",
+          properties: {
+            reachId: reach.id + 1,
+            stationFrom: reach.stationFrom,
+            stationTo: reach.stationTo,
+            avgDepth: Number(reach.avgDepth.toFixed(2)),
+            avgWSE: Number(reach.avgWse.toFixed(2)),
+            avgWidth: Number(reach.avgWidth.toFixed(1)),
+            avgVelocity: Number(reach.avgVelocity.toFixed(2)),
+            areaM2: Math.round(reach.areaM2),
+            depthCategory: reach.depthLabel
+          },
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                ...reach.coords.map(([lat, lon]) => [lon, lat]),
+                [reach.coords[0][1], reach.coords[0][0]]
+              ]
+            ]
+          }
+        });
+      });
+    }
+
+    // 3. Study Area Boundary Polygon(s) if loaded
+    if (studyAreaKml && studyAreaKml.polygons.length > 0) {
+      studyAreaKml.polygons.forEach((ring, idx) => {
+        features.push({
+          type: "Feature",
+          properties: {
+            layerType: "study_area",
+            name: studyAreaKml.polygons.length > 1 ? `${studyAreaKml.name} (#${idx + 1})` : studyAreaKml.name,
+            totalStudyAreaM2: Math.round(studyAreaKml.areaM2),
+            totalStudyAreaHa: Number(studyAreaKml.areaHa.toFixed(2))
+          },
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                ...ring.map(([lat, lon]) => [lon, lat]),
+                [ring[0][1], ring[0][0]]
+              ]
+            ]
+          }
+        });
+      });
+    }
 
     const geojson = {
       type: "FeatureCollection",
@@ -1996,6 +2100,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     </Style>
     <Style id="transectFlood">
       <LineStyle><color>ff0055ff</color><width>3</width></LineStyle>
+    </Style>
+    <Style id="studyAreaPoly">
+      <LineStyle><color>ff81b910</color><width>3</width></LineStyle>
+      <PolyStyle><color>3381b910</color><fill>1</fill><outline>1</outline></PolyStyle>
     </Style>`;
 
     // Add Centerline
@@ -2022,7 +2130,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     <Folder>
       <name>1B Taşkın Yayılım Alanı (Derinlik Bazlı Su Örtüsü)</name>`;
       
-      floodMapData.reachPolygons.forEach((reach) => {
+      const exportReaches = (clipFloodToStudyArea && studyAreaOverlap)
+        ? studyAreaOverlap.clippedReaches.map(cr => ({ ...cr.source, coords: cr.coords, areaM2: cr.areaM2 }))
+        : floodMapData.reachPolygons;
+
+      exportReaches.forEach((reach) => {
         let styleId = '#floodPolyShallow';
         if (reach.avgDepth >= 3.0) styleId = '#floodPolyCritical';
         else if (reach.avgDepth >= 1.5) styleId = '#floodPolyDeep';
@@ -2101,7 +2213,35 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       </Placemark>`;
     });
     kmlContent += `
-    </Folder>
+    </Folder>`;
+
+    // Add Study Area Polygon(s) if loaded
+    if (studyAreaKml && studyAreaKml.polygons.length > 0) {
+      kmlContent += `
+    <Folder>
+      <name>İnceleme Alanı Sınırı (${studyAreaKml.name})</name>`;
+      studyAreaKml.polygons.forEach((ring, rIdx) => {
+        kmlContent += `
+      <Placemark>
+        <name>İnceleme Alanı #${rIdx + 1} (${studyAreaKml.areaHa.toFixed(2)} ha)</name>
+        <styleUrl>#studyAreaPoly</styleUrl>
+        <Polygon>
+          <tessellate>1</tessellate>
+          <outerBoundaryIs>
+            <LinearRing>
+              <coordinates>
+                ${ring.map(([lat, lon]) => `${lon},${lat},0`).join(' ')} ${ring[0][1]},${ring[0][0]},0
+              </coordinates>
+            </LinearRing>
+          </outerBoundaryIs>
+        </Polygon>
+      </Placemark>`;
+      });
+      kmlContent += `
+    </Folder>`;
+    }
+
+    kmlContent += `
   </Document>
 </kml>`;
 
@@ -3155,6 +3295,35 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             <span>Sanat Yapıları ({structures.length})</span>
                           </button>
                         )}
+
+                        {studyAreaKml && (
+                          <>
+                            <button
+                              onClick={() => setShowStudyAreaLayer(!showStudyAreaLayer)}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                showStudyAreaLayer
+                                  ? 'bg-emerald-600 text-white shadow-xs'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
+                              title="Yüklenen inceleme alanı (KML) poligon sınırını haritada göster/gizle"
+                            >
+                              <MapPin size={11} />
+                              <span>İnceleme Alanı</span>
+                            </button>
+                            <button
+                              onClick={() => setClipFloodToStudyArea(!clipFloodToStudyArea)}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                clipFloodToStudyArea
+                                  ? 'bg-teal-700 text-white shadow-xs'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+                              }`}
+                              title="Taşkın yayılım poligonlarını yalnızca inceleme alanı içine kırpar"
+                            >
+                              <Scissors size={11} />
+                              <span>Alana Kırp</span>
+                            </button>
+                          </>
+                        )}
                       </div>
 
                       {/* Basemap Selector Pill */}
@@ -3193,57 +3362,99 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         />
                       )}
 
-                      {/* 1. Flood Inundation Polygons (Derinlik bazlı renk gradyanı ile) */}
-                      {showFloodPolygons && floodMapData?.reachPolygons.map((reach) => (
+                      {/* 1. Flood Inundation Polygons (Derinlik bazlı renk gradyanı ile, opsiyonel İnceleme Alanına kırpılmış) */}
+                      {showFloodPolygons && (
+                        (clipFloodToStudyArea && studyAreaOverlap)
+                          ? studyAreaOverlap.clippedReaches.map((clipped, cIdx) => {
+                              const reach = clipped.source;
+                              return (
+                                <Polygon
+                                  key={`clipped-reach-poly-${reach.id}-${cIdx}`}
+                                  positions={clipped.coords}
+                                  pathOptions={{
+                                    fillColor: reach.fillColor,
+                                    fillOpacity: 0.76,
+                                    color: reach.strokeColor,
+                                    weight: 1.2
+                                  }}
+                                >
+                                  <Tooltip direction="top" opacity={0.95}>
+                                    <div className="text-xs font-sans">
+                                      <p className="font-bold text-slate-900">İnceleme Alanı Dilimi: Km {(reach.stationFrom / 1000).toFixed(3)} - {(reach.stationTo / 1000).toFixed(3)}</p>
+                                      <p className="text-cyan-800 font-semibold">{reach.depthLabel}</p>
+                                      <p className="text-slate-600 text-[11px]">Ort. Derinlik: {reach.avgDepth.toFixed(2)} m | Alan: {Math.round(clipped.areaM2).toLocaleString()} m²</p>
+                                    </div>
+                                  </Tooltip>
+                                </Polygon>
+                              );
+                            })
+                          : floodMapData?.reachPolygons.map((reach) => (
+                              <Polygon
+                                key={`reach-poly-${reach.id}`}
+                                positions={reach.coords}
+                                pathOptions={{
+                                  fillColor: reach.fillColor,
+                                  fillOpacity: 0.72,
+                                  color: reach.strokeColor,
+                                  weight: 1.2
+                                }}
+                              >
+                                <Tooltip direction="top" opacity={0.95}>
+                                  <div className="text-xs font-sans">
+                                    <p className="font-bold text-slate-900">Taşkın Dilimi: Km {(reach.stationFrom / 1000).toFixed(3)} - {(reach.stationTo / 1000).toFixed(3)}</p>
+                                    <p className="text-cyan-800 font-semibold">{reach.depthLabel}</p>
+                                    <p className="text-slate-600 text-[11px]">Ort. Derinlik: {reach.avgDepth.toFixed(2)} m | Genişlik: {reach.avgWidth.toFixed(1)} m</p>
+                                  </div>
+                                </Tooltip>
+                                <Popup>
+                                  <div className="text-xs space-y-1.5 min-w-[220px]">
+                                    <div className="font-bold text-slate-900 border-b pb-1 flex items-center justify-between">
+                                      <span>🌊 1B Taşkın Yayılım Dilimi</span>
+                                      <span className="text-[10px] bg-cyan-100 text-cyan-900 px-1.5 py-0.5 rounded font-bold">
+                                        Km {(reach.stationFrom / 1000).toFixed(3)} - {(reach.stationTo / 1000).toFixed(3)}
+                                      </span>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-1.5 text-[11px] pt-0.5">
+                                      <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                        <span className="text-slate-500 block text-[9px]">Ortalama Su Kotu:</span>
+                                        <span className="font-bold text-slate-800">{reach.avgWse.toFixed(2)} m</span>
+                                      </div>
+                                      <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                        <span className="text-slate-500 block text-[9px]">Ortalama Derinlik:</span>
+                                        <span className="font-bold text-blue-700">{reach.avgDepth.toFixed(2)} m</span>
+                                      </div>
+                                      <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                        <span className="text-slate-500 block text-[9px]">Taşkın Genişliği:</span>
+                                        <span className="font-bold text-slate-800">{reach.avgWidth.toFixed(1)} m</span>
+                                      </div>
+                                      <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                        <span className="text-slate-500 block text-[9px]">Akış Hızı:</span>
+                                        <span className="font-bold text-slate-800">{reach.avgVelocity.toFixed(2)} m/s</span>
+                                      </div>
+                                    </div>
+                                    <div className="bg-cyan-50 text-cyan-900 p-1.5 rounded text-[10px] font-semibold border border-cyan-200">
+                                      Bu dilimdeki su alanı: {Math.round(reach.areaM2).toLocaleString()} m² ({(reach.areaM2 / 10000).toFixed(3)} ha)
+                                    </div>
+                                  </div>
+                                </Popup>
+                              </Polygon>
+                            ))
+                      )}
+
+                      {/* 1b. Study Area Boundary Polygon (İnceleme Alanı) */}
+                      {showStudyAreaLayer && studyAreaKml && studyAreaKml.polygons.map((ring, idx) => (
                         <Polygon
-                          key={`reach-poly-${reach.id}`}
-                          positions={reach.coords}
+                          key={`res-study-area-${idx}`}
+                          positions={ring}
+                          interactive={false}
                           pathOptions={{
-                            fillColor: reach.fillColor,
-                            fillOpacity: 0.72,
-                            color: reach.strokeColor,
-                            weight: 1.2
+                            color: '#10b981',
+                            fillColor: '#10b981',
+                            fillOpacity: 0.08,
+                            weight: 3,
+                            dashArray: '6, 4'
                           }}
-                        >
-                          <Tooltip direction="top" opacity={0.95}>
-                            <div className="text-xs font-sans">
-                              <p className="font-bold text-slate-900">Taşkın Dilimi: Km {(reach.stationFrom / 1000).toFixed(3)} - {(reach.stationTo / 1000).toFixed(3)}</p>
-                              <p className="text-cyan-800 font-semibold">{reach.depthLabel}</p>
-                              <p className="text-slate-600 text-[11px]">Ort. Derinlik: {reach.avgDepth.toFixed(2)} m | Genişlik: {reach.avgWidth.toFixed(1)} m</p>
-                            </div>
-                          </Tooltip>
-                          <Popup>
-                            <div className="text-xs space-y-1.5 min-w-[220px]">
-                              <div className="font-bold text-slate-900 border-b pb-1 flex items-center justify-between">
-                                <span>🌊 1B Taşkın Yayılım Dilimi</span>
-                                <span className="text-[10px] bg-cyan-100 text-cyan-900 px-1.5 py-0.5 rounded font-bold">
-                                  Km {(reach.stationFrom / 1000).toFixed(3)} - {(reach.stationTo / 1000).toFixed(3)}
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-2 gap-1.5 text-[11px] pt-0.5">
-                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
-                                  <span className="text-slate-500 block text-[9px]">Ortalama Su Kotu:</span>
-                                  <span className="font-bold text-slate-800">{reach.avgWse.toFixed(2)} m</span>
-                                </div>
-                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
-                                  <span className="text-slate-500 block text-[9px]">Ortalama Derinlik:</span>
-                                  <span className="font-bold text-blue-700">{reach.avgDepth.toFixed(2)} m</span>
-                                </div>
-                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
-                                  <span className="text-slate-500 block text-[9px]">Taşkın Genişliği:</span>
-                                  <span className="font-bold text-slate-800">{reach.avgWidth.toFixed(1)} m</span>
-                                </div>
-                                <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
-                                  <span className="text-slate-500 block text-[9px]">Akış Hızı:</span>
-                                  <span className="font-bold text-slate-800">{reach.avgVelocity.toFixed(2)} m/s</span>
-                                </div>
-                              </div>
-                              <div className="bg-cyan-50 text-cyan-900 p-1.5 rounded text-[10px] font-semibold border border-cyan-200">
-                                Bu dilimdeki su alanı: {Math.round(reach.areaM2).toLocaleString()} m² ({(reach.areaM2 / 10000).toFixed(3)} ha)
-                              </div>
-                            </div>
-                          </Popup>
-                        </Polygon>
+                        />
                       ))}
 
                       {/* 2. Flood Inundation Boundary Hazard Lines (Kırmızı kesikli tehlike hattı) */}
@@ -3572,17 +3783,29 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           <span className="w-3.5 h-0.5 bg-cyan-500 inline-block"></span>
                           <span>Su Genişliği</span>
                         </div>
+                        {studyAreaKml && (
+                          <div className="flex items-center gap-1.5 col-span-2">
+                            <span className="w-3.5 h-2.5 border-2 border-dashed border-emerald-500 bg-emerald-500/20 inline-block rounded-xs"></span>
+                            <span className="text-emerald-700 font-semibold">İnceleme Alanı ({studyAreaKml.areaHa.toFixed(2)} ha)</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     {/* Floating Area & Distance Metrics Tag in Bottom-Right */}
                     {floodMapData && (
                       <div className="absolute bottom-3 right-3 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl text-slate-200 border border-slate-700 shadow-xl text-right">
-                        <div className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider">Toplam Taşkın Alanı</div>
-                        <div className="text-sm font-display font-bold text-white">
-                          {Math.round(floodMapData.totalFloodAreaM2).toLocaleString()} m²
+                        <div className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider">
+                          {clipFloodToStudyArea && studyAreaOverlap ? 'İnceleme Alanı İçi Taşkın' : 'Toplam Taşkın Alanı'}
+                        </div>
+                        <div className="text-sm font-display font-bold text-white font-mono tabular-nums">
+                          {clipFloodToStudyArea && studyAreaOverlap
+                            ? Math.round(studyAreaOverlap.insideFloodAreaM2).toLocaleString()
+                            : Math.round(floodMapData.totalFloodAreaM2).toLocaleString()} m²
                           <span className="text-[11px] text-slate-300 font-normal ml-1">
-                            ({floodMapData.totalFloodAreaHa.toFixed(2)} ha)
+                            ({clipFloodToStudyArea && studyAreaOverlap
+                              ? (studyAreaOverlap.insideFloodAreaM2 / 10000).toFixed(2)
+                              : floodMapData.totalFloodAreaHa.toFixed(2)} ha)
                           </span>
                         </div>
                         <div className="text-[10px] text-slate-400 mt-0.5">
@@ -3629,6 +3852,49 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </p>
                     )}
                   </div>
+
+                  {/* Study Area (İnceleme Alanı) Overlap Card */}
+                  {studyAreaKml && studyAreaOverlap && (
+                    <div className="bg-emerald-50/85 border border-emerald-300 p-3 rounded-xl col-span-2 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[10px] font-bold text-emerald-900 uppercase flex items-center gap-1">
+                          <MapPin size={12} className="text-emerald-700" />
+                          <span>İnceleme Alanı Taşkın Analizi</span>
+                        </p>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-emerald-200/80 text-emerald-950 font-mono tabular-nums">
+                          {studyAreaKml.areaM2 > 0
+                            ? `%${Math.min(100, (studyAreaOverlap.insideFloodAreaM2 / studyAreaKml.areaM2) * 100).toFixed(1)} Etkilenen`
+                            : '%0.0'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px]">
+                        <div className="bg-white/90 px-2 py-1.5 rounded-lg border border-emerald-200">
+                          <span className="text-[9px] text-slate-500 block">İnceleme Alanı Toplamı:</span>
+                          <span className="font-bold text-slate-900 font-mono tabular-nums">
+                            {studyAreaKml.areaHa.toFixed(2)} ha
+                          </span>
+                          <span className="text-[9px] text-slate-500 block font-mono tabular-nums">
+                            ({Math.round(studyAreaKml.areaM2).toLocaleString()} m²)
+                          </span>
+                        </div>
+                        <div className="bg-white/90 px-2 py-1.5 rounded-lg border border-emerald-200">
+                          <span className="text-[9px] text-slate-500 block">Alan İçi Taşkın / Su Yüzeyi:</span>
+                          <span className="font-bold text-emerald-800 font-mono tabular-nums">
+                            {Math.round(studyAreaOverlap.insideFloodAreaM2).toLocaleString()} m²
+                          </span>
+                          <span className="text-[9px] text-emerald-700 block font-mono tabular-nums">
+                            ({(studyAreaOverlap.insideFloodAreaM2 / 10000).toFixed(2)} ha)
+                          </span>
+                        </div>
+                      </div>
+                      {studyAreaOverlap.insideOverbankAreaM2 > 0 && (
+                        <p className="text-[10px] text-emerald-900 border-t border-emerald-200/80 pt-1 flex justify-between font-mono tabular-nums">
+                          <span>Alan İçi Toplam Su (Kanal Dahil):</span>
+                          <strong>{Math.round(studyAreaOverlap.insideWaterAreaM2).toLocaleString()} m²</strong>
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
                     <p className="text-[10px] font-bold text-blue-800 uppercase">Maks. Su Derinliği</p>
@@ -3929,19 +4195,27 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </div>
               </section>
 
-              {/* 3. DERE EKSENİ SEÇİMİ */}
-              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2 shrink-0">
+              {/* 3. DERE EKSENİ & İNCELEME ALANI SEÇİMİ */}
+              <section className="bg-white rounded-2xl p-3 border border-slate-300 shadow-sm space-y-2.5 shrink-0">
                 <div className="pb-1.5 border-b border-slate-200 flex items-center justify-between">
                   <h2 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                     <SplitSquareVertical size={14} className="text-cyan-700" />
-                    <span>3. Dere Ekseni Seçimi</span>
+                    <span>3. Dere Ekseni & İnceleme Alanı</span>
                   </h2>
-                  {centerlineFile && (
-                    <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-0.5">
-                      <CheckCircle2 size={10} />
-                      {centerlineCoords.length} Nokta
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {centerlineFile && (
+                      <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-0.5">
+                        <CheckCircle2 size={10} />
+                        {centerlineCoords.length} Nokta
+                      </span>
+                    )}
+                    {studyAreaKml && (
+                      <span className="text-[9px] font-bold bg-teal-100 text-teal-800 px-1.5 py-0.5 rounded-full border border-teal-300 flex items-center gap-0.5 font-mono tabular-nums">
+                        <MapPin size={9} />
+                        {studyAreaKml.areaHa.toFixed(1)} ha
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* River Centerline KML Input */}
@@ -4111,6 +4385,68 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </span>
                       <input type="file" accept=".kml" onChange={handleCenterlineUpload} className="hidden" />
                     </label>
+                  )}
+                </div>
+
+                {/* Study Area (İnceleme Alanı) KML Input */}
+                <div className="pt-2 border-t border-slate-200/80">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] font-bold text-slate-700 flex items-center gap-1">
+                      <MapPin size={11} className="text-emerald-700" />
+                      <span>İnceleme Alanı Sınırı (KML - Opsiyonel):</span>
+                    </label>
+                  </div>
+
+                  {studyAreaKml ? (
+                    <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="space-y-0.5 overflow-hidden">
+                          <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                            <span className="font-bold text-slate-900 text-xs truncate">
+                              {studyAreaKml.name}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-emerald-800 truncate font-mono tabular-nums">
+                            {studyAreaKml.polygons.length} Poligon • {studyAreaKml.areaHa.toFixed(2)} ha ({Math.round(studyAreaKml.areaM2).toLocaleString()} m²)
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <label className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 transition-all shadow-sm">
+                            Değiştir
+                            <input type="file" accept=".kml" onChange={handleStudyAreaUpload} className="hidden" />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={handleClearStudyArea}
+                            className="p-1 bg-white hover:bg-red-50 text-red-600 rounded-lg border border-red-200 cursor-pointer transition-colors"
+                            title="İnceleme alanını kaldır"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-between gap-2 p-2 border border-dashed border-emerald-300 rounded-xl hover:bg-emerald-50/70 transition-all cursor-pointer bg-slate-50 group">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <div className="p-1 bg-emerald-100 text-emerald-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
+                          <MapPin size={14} />
+                        </div>
+                        <span className="font-bold text-xs text-slate-800 truncate">İnceleme Alanı KML Yükle</span>
+                      </div>
+                      <span className="px-2 py-0.5 bg-emerald-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
+                        Gözat
+                      </span>
+                      <input type="file" accept=".kml" onChange={handleStudyAreaUpload} className="hidden" />
+                    </label>
+                  )}
+
+                  {studyAreaError && (
+                    <div className="mt-1.5 text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1 flex items-center gap-1">
+                      <AlertCircle size={11} className="shrink-0" />
+                      <span>{studyAreaError}</span>
+                    </div>
                   )}
                 </div>
               </section>
@@ -5242,7 +5578,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 {/* Content View: Map or Cross Section Profile or Hydrograph */}
                 <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner">
                   {rightPanelTab === 'map' ? (
-                    !isFileOpened && centerlineCoords.length === 0 && sections.length === 0 ? (
+                    !isFileOpened && centerlineCoords.length === 0 && sections.length === 0 && !studyAreaKml ? (
                       /* Empty Blueprint State matching Analysis.tsx */
                       <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-3.5 p-6 text-center bg-slate-100 relative select-none">
                         <div
@@ -5288,22 +5624,39 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </div>
                     ) : (
                       <>
-                        {demOverlay && (
+                        {(demOverlay || studyAreaKml) && (
                           <div className="absolute top-2.5 right-2.5 z-[400] flex items-center gap-1.5 bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-300 shadow-md">
-                            <button
-                              type="button"
-                              onClick={() => setShowDemReliefLayer(!showDemReliefLayer)}
-                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
-                                showDemReliefLayer
-                                  ? 'bg-emerald-700 text-white shadow-xs'
-                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                              }`}
-                              title="DEM verisini kabartma (hillshade) olarak haritada göster/gizle"
-                            >
-                              <span>🏔️</span>
-                              <span>DEM Kabartma</span>
-                            </button>
-                            {showDemReliefLayer && (
+                            {studyAreaKml && (
+                              <button
+                                type="button"
+                                onClick={() => setShowStudyAreaLayer(!showStudyAreaLayer)}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                  showStudyAreaLayer
+                                    ? 'bg-emerald-600 text-white shadow-xs'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                                title="İnceleme alanı sınır poligonunu haritada göster/gizle"
+                              >
+                                <MapPin size={11} />
+                                <span>İnceleme Alanı</span>
+                              </button>
+                            )}
+                            {demOverlay && (
+                              <button
+                                type="button"
+                                onClick={() => setShowDemReliefLayer(!showDemReliefLayer)}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                  showDemReliefLayer
+                                    ? 'bg-emerald-700 text-white shadow-xs'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                                title="DEM verisini kabartma (hillshade) olarak haritada göster/gizle"
+                              >
+                                <span>🏔️</span>
+                                <span>DEM Kabartma</span>
+                              </button>
+                            )}
+                            {demOverlay && showDemReliefLayer && (
                               <button
                                 type="button"
                                 onClick={() => setDemReliefStyle(prev => prev === 'color' ? 'relief' : 'color')}
@@ -5319,6 +5672,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           center={
                             centerlineCoords[0] ||
                             sections[0]?.centerCoord ||
+                            studyAreaKml?.polygons[0]?.[0] ||
                             (demOverlay
                               ? [
                                   (demOverlay.wgs84Bounds[0][0] + demOverlay.wgs84Bounds[1][0]) / 2,
@@ -5338,6 +5692,25 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               opacity={demReliefStyle === 'color' ? 0.85 : 0.6}
                             />
                           )}
+                          {showStudyAreaLayer && studyAreaKml && studyAreaKml.polygons.map((ring, idx) => (
+                            <Polygon
+                              key={`editor-study-area-${idx}`}
+                              positions={ring}
+                              pathOptions={{
+                                color: '#10b981',
+                                fillColor: '#10b981',
+                                fillOpacity: 0.14,
+                                weight: 2.5,
+                                dashArray: '6, 4'
+                              }}
+                            >
+                              <Tooltip sticky>
+                                <div className="text-[10px] font-bold text-emerald-800">
+                                  📍 İnceleme Alanı: {studyAreaKml.name} ({studyAreaKml.areaHa.toFixed(2)} ha)
+                                </div>
+                              </Tooltip>
+                            </Polygon>
+                          ))}
                           {centerlineCoords.length > 0 && (
                             <Polyline positions={centerlineCoords} color="#0284c7" weight={4} opacity={0.9}>
                               <Tooltip sticky>Nehir Merkez Ekseni (Thalweg)</Tooltip>
@@ -5593,6 +5966,15 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                                 </span>
                               </>
                             )}
+                            {studyAreaKml && (
+                              <>
+                                <span className="text-slate-600">|</span>
+                                <span className="flex items-center gap-1 font-semibold text-emerald-300">
+                                  <span className="w-2.5 h-2 border border-dashed border-emerald-400 bg-emerald-400/20 inline-block rounded-xs"></span>
+                                  <span>İnceleme Alanı</span>
+                                </span>
+                              </>
+                            )}
                           </div>
                         )}
 
@@ -5615,6 +5997,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             {deletedSectionsList.length > 0 && (
                               <span>
                                 <strong className="text-red-400">Silinen:</strong> {deletedSectionsList.length} Adet
+                              </span>
+                            )}
+                            {studyAreaKml && (
+                              <span className="font-mono tabular-nums">
+                                <strong className="text-emerald-400">İnceleme Alanı:</strong> {studyAreaKml.areaHa.toFixed(2)} ha
                               </span>
                             )}
                           </div>
