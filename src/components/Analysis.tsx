@@ -484,6 +484,12 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                   )}
                 </div>
 
+                {stats && stats.floodedCells === 0 && (
+                  <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-[11px] text-amber-900 leading-relaxed">
+                    <strong>Bağlantılı taşkın alanı oluşmadı:</strong> Hedef su kotu kaynak noktası zemin kotundan en az <span className="font-mono font-bold">0.01 m</span> yüksek olmalıdır.
+                  </div>
+                )}
+
                 {areaKml && (
                   <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl space-y-2">
                     <p className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">

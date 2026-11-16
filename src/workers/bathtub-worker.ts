@@ -1,24 +1,35 @@
 /**
  * Bathtub Flood Simulation Web Worker
- * Handles static water level calculations strictly within valid DEM data boundaries.
+ * Handles static water level calculations strictly within valid DEM data boundaries,
+ * using a unified minimum depth threshold and guaranteed 4-neighbor source connectivity.
  */
 
+import { MIN_FLOOD_DEPTH, enforceSourceConnectedFloodMask } from '../utils/floodMask';
+
 self.onmessage = function(e) {
-  const { dem, width, height, areaMask, params } = e.data;
+  const { dem, width, height, params } = e.data;
   const { sourceX, sourceY, waterLevel, levelMode, targetElevation: explicitTargetElev } = params;
-  
-  const bathtubDepth = new Float32Array(width * height).fill(0);
-  const visited = new Uint8Array(width * height);
-  
-  const startIdx = sourceY * width + sourceX;
-  if (startIdx < 0 || startIdx >= width * height) {
-    self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
+
+  const size = width * height;
+  const bathtubDepth = new Float32Array(size);
+  const visited = new Uint8Array(size);
+
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    sourceX < 0 ||
+    sourceX >= width ||
+    sourceY < 0 ||
+    sourceY >= height
+  ) {
+    self.postMessage({ type: 'complete', waterDepth: bathtubDepth, sourceX, sourceY, floodedCount: 0 });
     return;
   }
 
+  const startIdx = sourceY * width + sourceX;
   const sourceElev = dem[startIdx];
   if (isNaN(sourceElev) || sourceElev <= -9000) {
-    self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
+    self.postMessage({ type: 'complete', waterDepth: bathtubDepth, sourceX, sourceY, floodedCount: 0 });
     return;
   }
 
@@ -31,54 +42,105 @@ self.onmessage = function(e) {
   } else {
     targetElevation = sourceElev + (typeof waterLevel === 'number' ? waterLevel : 2.0);
   }
-  
-  const queue = [startIdx];
-  visited[startIdx] = 1;
-  
+
+  // Propagate only through cells that strictly exceed MIN_FLOOD_DEPTH so shallow (0..1cm)
+  // invisible bridge cells cannot carry water into visually disconnected pockets.
+  const sourceDepth = targetElevation - sourceElev;
+  if (!(sourceDepth > MIN_FLOOD_DEPTH)) {
+    self.postMessage({ type: 'complete', waterDepth: bathtubDepth, sourceX, sourceY, floodedCount: 0 });
+    return;
+  }
+
+  const queue = new Int32Array(size);
   let head = 0;
-  while (head < queue.length) {
+  let tail = 0;
+
+  queue[tail++] = startIdx;
+  visited[startIdx] = 1;
+
+  while (head < tail) {
     const idx = queue[head++];
     const x = idx % width;
-    const y = Math.floor(idx / width);
+    const y = (idx - x) / width;
 
     const cellElev = dem[idx];
     if (isNaN(cellElev) || cellElev <= -9000) continue;
-    
-    // Calculate water depth for current cell
-    bathtubDepth[idx] = Math.max(0, targetElevation - cellElev);
-    
-  // 4 neighbors
-  const neighbors = [
-    { nx: x + 1, ny: y },
-    { nx: x - 1, ny: y },
-    { nx: x, ny: y + 1 },
-    { nx: x, ny: y - 1 }
-  ];
-  
-  for (const { nx, ny } of neighbors) {
-    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-      const nIdx = ny * width + nx;
 
-      // Strict boundary validation:
-      // 1. Must not be visited
-      // 2. Must be a valid DEM cell (not NoData, NaN, or <= -9000)
-      // 3. Terrain elevation must be <= targetElevation
-      const nElev = dem[nIdx];
-      const isValidCell = !isNaN(nElev) && nElev > -9000;
+    const cellDepth = targetElevation - cellElev;
+    if (!(cellDepth > MIN_FLOOD_DEPTH)) continue;
 
-      if (!visited[nIdx] && isValidCell && nElev <= targetElevation) {
-        visited[nIdx] = 1;
-        queue.push(nIdx);
+    bathtubDepth[idx] = cellDepth;
+
+    // 4 edge-adjacent neighbors (N/S/E/W)
+    if (x + 1 < width) {
+      const nIdx = idx + 1;
+      if (visited[nIdx] === 0) {
+        const nElev = dem[nIdx];
+        if (!isNaN(nElev) && nElev > -9000 && targetElevation - nElev > MIN_FLOOD_DEPTH) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
+        }
       }
     }
-  }
-  
-  // Periodic progress for very large areas
-  if (head % 10000 === 0) {
-    self.postMessage({ type: 'progress', step: head, total: width * height });
-  }
-}
 
-self.postMessage({ type: 'complete', waterDepth: bathtubDepth });
+    if (x > 0) {
+      const nIdx = idx - 1;
+      if (visited[nIdx] === 0) {
+        const nElev = dem[nIdx];
+        if (!isNaN(nElev) && nElev > -9000 && targetElevation - nElev > MIN_FLOOD_DEPTH) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
+        }
+      }
+    }
+
+    if (y + 1 < height) {
+      const nIdx = idx + width;
+      if (visited[nIdx] === 0) {
+        const nElev = dem[nIdx];
+        if (!isNaN(nElev) && nElev > -9000 && targetElevation - nElev > MIN_FLOOD_DEPTH) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
+        }
+      }
+    }
+
+    if (y > 0) {
+      const nIdx = idx - width;
+      if (visited[nIdx] === 0) {
+        const nElev = dem[nIdx];
+        if (!isNaN(nElev) && nElev > -9000 && targetElevation - nElev > MIN_FLOOD_DEPTH) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
+        }
+      }
+    }
+
+    // Periodic progress for very large areas
+    if (head % 10000 === 0) {
+      self.postMessage({ type: 'progress', step: head, total: size });
+    }
+  }
+
+  // Deterministic connected-component verification anchored at (sourceX, sourceY)
+  const connectedMask = enforceSourceConnectedFloodMask(
+    bathtubDepth,
+    dem,
+    width,
+    height,
+    sourceX,
+    sourceY,
+    MIN_FLOOD_DEPTH
+  );
+
+  let floodedCount = 0;
+  for (let i = 0; i < size; i++) {
+    if (connectedMask[i] === 1) {
+      floodedCount++;
+    } else {
+      bathtubDepth[i] = 0;
+    }
+  }
+
+  self.postMessage({ type: 'complete', waterDepth: bathtubDepth, sourceX, sourceY, floodedCount });
 };
-

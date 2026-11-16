@@ -9,6 +9,11 @@ export interface DEMInfo {
   cellSizeY?: number;
 }
 
+export interface ReprojectOptions {
+  maxOutputDim?: number;
+  preserveOpaqueFeatures?: boolean;
+}
+
 /**
  * Reprojects a source raster canvas (rendered in DEM's native projected CRS)
  * into an exact WGS84 (EPSG:4326) image aligned with Leaflet's ImageOverlay bounds.
@@ -20,7 +25,8 @@ export function reprojectCanvasToWgs84(
   sourceCanvas: HTMLCanvasElement,
   dem: DEMInfo,
   crsDef: string | undefined,
-  wgs84Bounds: [[number, number], [number, number]] | null
+  wgs84Bounds: [[number, number], [number, number]] | null,
+  options?: ReprojectOptions
 ): string {
   if (!wgs84Bounds || !crsDef || crsDef.includes('+proj=longlat')) {
     return sourceCanvas.toDataURL();
@@ -36,10 +42,19 @@ export function reprojectCanvasToWgs84(
   const srcHeight = sourceCanvas.height;
   const srcData = srcCtx.getImageData(0, 0, srcWidth, srcHeight).data;
 
+  const maxDim = options?.maxOutputDim ?? 2048;
+  const preserveOpaque = options?.preserveOpaqueFeatures ?? false;
+
   // Determine output resolution:
-  // Matches native grid resolution, clamped between 512 and 1280 for fast rendering and crisp detail
-  const outW = Math.min(Math.max(srcWidth, 512), 1280);
-  const outH = Math.min(Math.max(srcHeight, 512), 1280);
+  // Matches native grid resolution up to maxDim (default 2048) for crisp detail and continuous thin channels
+  const outW = Math.min(Math.max(srcWidth, 512), maxDim);
+  const outH = Math.min(Math.max(srcHeight, 512), maxDim);
+
+  const scaleX = srcWidth / outW;
+  const scaleY = srcHeight / outH;
+  const needsFootprintScan = preserveOpaque && (scaleX > 1.0 || scaleY > 1.0);
+  const radiusX = needsFootprintScan ? Math.min(3, Math.ceil(scaleX * 0.6)) : 0;
+  const radiusY = needsFootprintScan ? Math.min(3, Math.ceil(scaleY * 0.6)) : 0;
 
   const outCanvas = document.createElement('canvas');
   outCanvas.width = outW;
@@ -126,10 +141,44 @@ export function reprojectCanvasToWgs84(
 
           if (sX >= 0 && sX < srcWidth && sY >= 0 && sY < srcHeight) {
             const sIdx = (sY * srcWidth + sX) * 4;
-            outData[outIdx] = srcData[sIdx];
-            outData[outIdx + 1] = srcData[sIdx + 1];
-            outData[outIdx + 2] = srcData[sIdx + 2];
-            outData[outIdx + 3] = srcData[sIdx + 3];
+            const centerAlpha = srcData[sIdx + 3];
+
+            if (centerAlpha > 0 || !needsFootprintScan) {
+              outData[outIdx] = srcData[sIdx];
+              outData[outIdx + 1] = srcData[sIdx + 1];
+              outData[outIdx + 2] = srcData[sIdx + 2];
+              outData[outIdx + 3] = centerAlpha;
+            } else {
+              // When downsampling sparse/thin wet masks, check the pixel's source footprint
+              // so narrow 1-2 cell flood channels do not break into disconnected dots.
+              let bestAlpha = 0;
+              let bestIdx = -1;
+              const minSx = Math.max(0, sX - radiusX);
+              const maxSx = Math.min(srcWidth - 1, sX + radiusX);
+              const minSy = Math.max(0, sY - radiusY);
+              const maxSy = Math.min(srcHeight - 1, sY + radiusY);
+
+              for (let fy = minSy; fy <= maxSy; fy++) {
+                const rowBase = fy * srcWidth;
+                for (let fx = minSx; fx <= maxSx; fx++) {
+                  const fIdx = (rowBase + fx) * 4;
+                  const a = srcData[fIdx + 3];
+                  if (a > bestAlpha) {
+                    bestAlpha = a;
+                    bestIdx = fIdx;
+                  }
+                }
+              }
+
+              if (bestIdx >= 0) {
+                outData[outIdx] = srcData[bestIdx];
+                outData[outIdx + 1] = srcData[bestIdx + 1];
+                outData[outIdx + 2] = srcData[bestIdx + 2];
+                outData[outIdx + 3] = bestAlpha;
+              } else {
+                outData[outIdx + 3] = 0;
+              }
+            }
           } else {
             outData[outIdx + 3] = 0; // Transparent outside DEM footprint
           }

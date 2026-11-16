@@ -24,6 +24,7 @@ import Settings from './components/Settings';
 import ITwinWorkspace from './components/ITwinWorkspace';
 import { extractDemBoundaryPolygons } from './utils/demBoundary';
 import { reprojectCanvasToWgs84 } from './utils/geoReproject';
+import { MIN_FLOOD_DEPTH, enforceSourceConnectedFloodMask } from './utils/floodMask';
 
 // Common Turkish and International Coordinate Systems with EPSG Codes
 const CRS_LIST = [
@@ -163,8 +164,24 @@ export default function App() {
   const [sourceWgs, setSourceWgs] = useState<[number, number] | null>(null);
   const [areaKml, setAreaKml] = useState<{ name: string; coords: [number, number][] } | null>(null);
   const [areaMask, setAreaMask] = useState<Uint8Array | null>(null);
+  const [simSourceCell, setSimSourceCell] = useState<{ x: number; y: number } | null>(null);
 
   const workerRef = useRef<Worker | null>(null);
+
+  const connectedFloodMask = React.useMemo(() => {
+    if (!waterDepth || !dem) return null;
+    const sx = simSourceCell ? simSourceCell.x : params.sourceX;
+    const sy = simSourceCell ? simSourceCell.y : params.sourceY;
+    return enforceSourceConnectedFloodMask(
+      waterDepth,
+      dem.data,
+      dem.width,
+      dem.height,
+      sx,
+      sy,
+      MIN_FLOOD_DEPTH
+    );
+  }, [waterDepth, dem, simSourceCell]);
 
   useEffect(() => {
     return () => {
@@ -397,51 +414,59 @@ export default function App() {
           }
         }
         ctx.putImageData(imageData, 0, 0);
-        const warpedStream = reprojectCanvasToWgs84(canvas, dem, selectedCRS.def, wgs84Bounds);
+        const warpedStream = reprojectCanvasToWgs84(canvas, dem, selectedCRS.def, wgs84Bounds, {
+          maxOutputDim: 2048,
+          preserveOpaqueFeatures: true,
+        });
         setStreamImage(warpedStream);
       }
     }
   }, [dem, flowAcc, flowThreshold, selectedCRS.def, wgs84Bounds]);
 
   useEffect(() => {
-    if (waterDepth && dem) {
-      const canvas = document.createElement('canvas');
-      canvas.width = dem.width;
-      canvas.height = dem.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        const imageData = ctx.createImageData(dem.width, dem.height);
-        const d = imageData.data;
-        for (let i = 0; i < waterDepth.length; i++) {
-          const idx = i * 4;
-          const isDemValid = !isNaN(dem.data[i]) && dem.data[i] > -9000;
-          if (waterDepth[i] > 0.01 && isDemValid) {
-            const isRiskArea = Boolean(areaMask && areaMask[i] === 1);
-            const wVal = Math.min(1, waterDepth[i] / 2);
-            
-            if (isRiskArea) {
-              // Kırmızı renkli çalışma alanıyla kesişimi olan riskli alan
-              d[idx] = 239; // R
-              d[idx + 1] = Math.round(68 * (1 - wVal)); // G
-              d[idx + 2] = Math.round(68 * (1 - wVal)); // B
-              d[idx + 3] = 210; // Alpha ~82%
-            } else {
-              // Mavi renkli genel taşkın alanı
-              d[idx] = 14; // R
-              d[idx + 1] = Math.round(116 + 80 * (1 - wVal)); // G
-              d[idx + 2] = 244; // B
-              d[idx + 3] = 180; // Alpha ~70%
-            }
-          } else {
-            d[idx + 3] = 0;
-          }
-        }
-        ctx.putImageData(imageData, 0, 0);
-        const warpedFlood = reprojectCanvasToWgs84(canvas, dem, selectedCRS.def, wgs84Bounds);
-        setFloodImage(warpedFlood);
-      }
+    if (!waterDepth || !dem || !connectedFloodMask) {
+      setFloodImage(null);
+      return;
     }
-  }, [waterDepth, dem, areaMask, selectedCRS.def, wgs84Bounds]);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = dem.width;
+    canvas.height = dem.height;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const imageData = ctx.createImageData(dem.width, dem.height);
+      const d = imageData.data;
+      for (let i = 0; i < waterDepth.length; i++) {
+        const idx = i * 4;
+        if (connectedFloodMask[i] === 1) {
+          const isRiskArea = Boolean(areaMask && areaMask[i] === 1);
+          const wVal = Math.min(1, waterDepth[i] / 2);
+
+          if (isRiskArea) {
+            // Kırmızı renkli çalışma alanıyla kesişimi olan riskli alan
+            d[idx] = 239; // R
+            d[idx + 1] = Math.round(68 * (1 - wVal)); // G
+            d[idx + 2] = Math.round(68 * (1 - wVal)); // B
+            d[idx + 3] = 210; // Alpha ~82%
+          } else {
+            // Mavi renkli genel taşkın alanı
+            d[idx] = 14; // R
+            d[idx + 1] = Math.round(116 + 80 * (1 - wVal)); // G
+            d[idx + 2] = 244; // B
+            d[idx + 3] = 180; // Alpha ~70%
+          }
+        } else {
+          d[idx + 3] = 0;
+        }
+      }
+      ctx.putImageData(imageData, 0, 0);
+      const warpedFlood = reprojectCanvasToWgs84(canvas, dem, selectedCRS.def, wgs84Bounds, {
+        maxOutputDim: 2048,
+        preserveOpaqueFeatures: true,
+      });
+      setFloodImage(warpedFlood);
+    }
+  }, [waterDepth, dem, connectedFloodMask, areaMask, selectedCRS.def, wgs84Bounds]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!dem || !canvasRef.current) return;
@@ -703,8 +728,8 @@ export default function App() {
         r = g = b = 0;
       }
       
-      // Overlay water depth
-      if (waterDepth && waterDepth[i] > 0.01) {
+      // Overlay water depth using unified connected flood mask
+      if (waterDepth && connectedFloodMask && connectedFloodMask[i] === 1) {
         const wVal = Math.min(1, waterDepth[i] / 2);
         r = r * (1 - wVal);
         g = g * (1 - wVal);
@@ -736,7 +761,7 @@ export default function App() {
       ctx.strokeStyle = "rgba(59, 130, 246, 0.5)";
       ctx.stroke();
     }
-  }, [dem, viewMode, flowAcc, waterDepth]);
+  }, [dem, viewMode, flowAcc, waterDepth, connectedFloodMask]);
 
   const [validationReport, setValidationReport] = useState<{
     minHeight: number;
@@ -957,6 +982,9 @@ export default function App() {
       });
 
       setParams(prev => ({ ...prev, sourceX: Math.floor(width / 2), sourceY: Math.floor(height / 2) }));
+      setWaterDepth(null);
+      setFloodImage(null);
+      setSimSourceCell(null);
 
       setDemUploadProgress(100);
       setDemLoadingStatus('Tamamlandı');
@@ -1100,6 +1128,9 @@ export default function App() {
 
       setCoords({ lat: yll, lon: xll, cellSize });
       setParams(prev => ({ ...prev, sourceX: Math.floor(width / 2), sourceY: Math.floor(height / 2) }));
+      setWaterDepth(null);
+      setFloodImage(null);
+      setSimSourceCell(null);
 
       setDemUploadProgress(100);
       setDemLoadingStatus('Tamamlandı');
@@ -1157,6 +1188,9 @@ export default function App() {
         } else if (e.data.type === 'complete') {
           clearInterval(progressInterval);
           setProgress(100);
+          if (typeof e.data.sourceX === 'number' && typeof e.data.sourceY === 'number') {
+            setSimSourceCell({ x: e.data.sourceX, y: e.data.sourceY });
+          }
           setWaterDepth(e.data.waterDepth);
           // Small visual delay for the "100%" complete state to be seen satisfyingly
           setTimeout(() => {
@@ -1229,9 +1263,7 @@ export default function App() {
   };
 
   const exportToKml = () => {
-    if (!dem || !waterDepth) return;
-
-    const minDepth = 0.01; // Match visible flood threshold
+    if (!dem || !waterDepth || !connectedFloodMask) return;
     
     let kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
@@ -1402,8 +1434,8 @@ export default function App() {
       return rects;
     };
 
-    // Generate total flood area merged rectangles
-    const floodRects = getMergedRectangles((idx) => waterDepth[idx] >= minDepth);
+    // Generate total flood area merged rectangles using the exact shared connected mask
+    const floodRects = getMergedRectangles((idx) => connectedFloodMask[idx] === 1);
     const floodPolygons = floodRects.map(r => `          <Polygon>
             <outerBoundaryIs><LinearRing><coordinates>
               ${r.p1[0]},${r.p1[1]},0 ${r.p2[0]},${r.p2[1]},0 ${r.p3[0]},${r.p3[1]},0 ${r.p4[0]},${r.p4[1]},0 ${r.p1[0]},${r.p1[1]},0
@@ -1413,7 +1445,7 @@ export default function App() {
     // Generate Risk Area Polygons (Fast scanline grid mask intersection instead of 50k Turf vector calls)
     let riskRects: FloodRect[] = [];
     if (areaMask) {
-      riskRects = getMergedRectangles((idx) => waterDepth[idx] >= minDepth && areaMask[idx] === 1);
+      riskRects = getMergedRectangles((idx) => connectedFloodMask[idx] === 1 && areaMask[idx] === 1);
     } else {
       riskRects = floodRects;
     }
@@ -1523,7 +1555,7 @@ ${floodPolygons.join('\n')}
   };
 
   const calculateStats = () => {
-    if (!waterDepth) return null;
+    if (!waterDepth || !connectedFloodMask) return null;
     
     let maxDepth = 0;
     let floodedCells = 0;
@@ -1544,11 +1576,11 @@ ${floodPolygons.join('\n')}
     const cellAreaM2 = effectiveCellSize * effectiveCellSize;
 
     for (let i = 0; i < waterDepth.length; i++) {
-      const d = waterDepth[i];
-      if (d > maxDepth) maxDepth = d;
-      
-      const isFlooded = d > 0.01;
+      const isFlooded = connectedFloodMask[i] === 1;
+      const d = isFlooded ? waterDepth[i] : 0;
+
       if (isFlooded) {
+        if (d > maxDepth) maxDepth = d;
         floodedCells++;
         totalVolume += d * cellAreaM2;
       }
@@ -1576,7 +1608,7 @@ ${floodPolygons.join('\n')}
     };
   };
 
-  const stats = React.useMemo(() => calculateStats(), [waterDepth, coords.cellSize, coords.lat, areaMask]);
+  const stats = React.useMemo(() => calculateStats(), [waterDepth, connectedFloodMask, coords.cellSize, coords.lat, areaMask]);
 
   const isStandaloneITwin = window.location.search.includes('itwin=true');
   if (isStandaloneITwin) {
