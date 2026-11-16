@@ -276,6 +276,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [simDuration, setSimDuration] = useState<number>(24); // hours
   const [hydrographData, setHydrographData] = useState<HydrographPoint[]>([]);
   const [hydrographFileName, setHydrographFileName] = useState<string | null>(null);
+  const [hydroPasteOpen, setHydroPasteOpen] = useState<boolean>(false);
+  const [hydroPasteText, setHydroPasteText] = useState<string>('');
+  const [hydroPasteError, setHydroPasteError] = useState<string | null>(null);
 
   // Computed topographic bed slope from cross sections (uses main channel bed)
   const detectedBedSlope = useMemo(() => {
@@ -1498,13 +1501,114 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         // Calculate peak flow and duration
         const maxQ = Math.max(...parsedPoints.map(p => p.flow));
         const maxT = Math.max(...parsedPoints.map(p => p.time));
-        setPeakFlow(Math.round(maxQ));
-        setSimDuration(Math.round(maxT));
+        setPeakFlow(Number(maxQ.toFixed(2)));
+        setSimDuration(Number(maxT.toFixed(2)));
       } catch (err: any) {
         console.error("Hidrograf okuma hatası:", err);
         alert("Hidrograf dosyası ayrıştırılamadı: " + err.message);
       }
     }
+  };
+
+  // Sync peak flow & duration metrics whenever manual hydrograph points change
+  const applyHydrographPoints = (nextPoints: HydrographPoint[], customLabel?: string) => {
+    setHydrographData(nextPoints);
+    if (customLabel) {
+      setHydrographFileName(customLabel);
+    } else if (!hydrographFileName || hydrographFileName === 'Sentetik Taşkın Hidrografı') {
+      setHydrographFileName('Manuel Hidrograf');
+    }
+    const valid = nextPoints.filter(p => Number.isFinite(p.time) && Number.isFinite(p.flow));
+    if (valid.length > 0) {
+      const maxQ = Math.max(...valid.map(p => p.flow));
+      const maxT = Math.max(...valid.map(p => p.time));
+      setPeakFlow(Number(maxQ.toFixed(2)));
+      if (maxT > 0) {
+        setSimDuration(Number(maxT.toFixed(2)));
+      }
+    }
+  };
+
+  const handleUpdateHydrographPoint = (idx: number, field: 'time' | 'flow', rawVal: string) => {
+    const val = Number(rawVal);
+    if (Number.isNaN(val) || val < 0) return;
+    const next = hydrographData.map((pt, i) => (i === idx ? { ...pt, [field]: val } : pt));
+    applyHydrographPoints(next);
+  };
+
+  const handleAddHydrographRow = () => {
+    let nextTime = 0;
+    let nextFlow = 15;
+    if (hydrographData.length >= 2) {
+      const last = hydrographData[hydrographData.length - 1];
+      const prev = hydrographData[hydrographData.length - 2];
+      const step = Math.max(0.5, Number((last.time - prev.time).toFixed(2)));
+      nextTime = Number((last.time + step).toFixed(2));
+      nextFlow = last.flow;
+    } else if (hydrographData.length === 1) {
+      nextTime = Number((hydrographData[0].time + 2).toFixed(2));
+      nextFlow = hydrographData[0].flow;
+    }
+    applyHydrographPoints([...hydrographData, { time: nextTime, flow: nextFlow }]);
+  };
+
+  const handleDeleteHydrographRow = (idx: number) => {
+    const next = hydrographData.filter((_, i) => i !== idx);
+    applyHydrographPoints(next);
+  };
+
+  const handleSortHydrograph = () => {
+    const sorted = [...hydrographData].sort((a, b) => a.time - b.time);
+    applyHydrographPoints(sorted);
+  };
+
+  const handleResetManualHydrograph = () => {
+    const tMid = Math.max(1, Number((simDuration * 0.35).toFixed(1)));
+    const tEnd = Math.max(tMid + 2, simDuration || 24);
+    const baseQ = Math.max(5, Math.round(peakFlow * 0.1));
+    const starter: HydrographPoint[] = [
+      { time: 0, flow: baseQ },
+      { time: Number((tMid * 0.5).toFixed(1)), flow: Math.round(peakFlow * 0.45) },
+      { time: tMid, flow: peakFlow },
+      { time: Number(((tMid + tEnd) * 0.5).toFixed(1)), flow: Math.round(peakFlow * 0.4) },
+      { time: tEnd, flow: baseQ }
+    ];
+    applyHydrographPoints(starter, 'Manuel Hidrograf');
+  };
+
+  const handleApplyHydrographPaste = () => {
+    setHydroPasteError(null);
+    const lines = hydroPasteText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const parsed: HydrographPoint[] = [];
+
+    for (const line of lines) {
+      let cols: string[];
+      if (line.includes('\t') || line.includes(';')) {
+        cols = line.split(/[\t;]+/).map(c => c.trim().replace(',', '.'));
+      } else if (/\s+/.test(line)) {
+        cols = line.split(/\s+/).map(c => c.trim().replace(',', '.'));
+      } else if (line.includes(',')) {
+        cols = line.split(',').map(c => c.trim());
+      } else {
+        continue;
+      }
+      if (cols.length < 2) continue;
+      const t = parseFloat(cols[0]);
+      const q = parseFloat(cols[1]);
+      if (Number.isFinite(t) && Number.isFinite(q) && t >= 0 && q >= 0) {
+        parsed.push({ time: t, flow: q });
+      }
+    }
+
+    if (parsed.length < 2) {
+      setHydroPasteError('En az 2 geçerli "Saat  Debi" satırı giriniz (örn: 0  15).');
+      return;
+    }
+
+    parsed.sort((a, b) => a.time - b.time);
+    applyHydrographPoints(parsed, 'Yapıştırılan Hidrograf');
+    setHydroPasteText('');
+    setHydroPasteOpen(false);
   };
 
   // Handle Point-type KML Upload for Hydraulic Structures (Köprü & Menfez)
@@ -5461,24 +5565,44 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 </div>
 
                 {flowMode === 'steady' ? (
-                  <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-[10px] font-bold text-slate-700">Pik Debi (Q):</span>
-                      <span className="text-xs font-extrabold text-cyan-800">{peakFlow} m³/s</span>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center gap-2">
+                      <label htmlFor="steady-peak-flow-input" className="text-[10px] font-bold text-slate-700 shrink-0">
+                        Sabit / Pik Debi (Q):
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <input
+                          id="steady-peak-flow-input"
+                          type="number"
+                          step="0.5"
+                          min="0.1"
+                          max="50000"
+                          value={peakFlow}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!Number.isNaN(val) && val >= 0) {
+                              setPeakFlow(val);
+                            }
+                          }}
+                          className="w-24 bg-white border border-cyan-400 rounded-lg px-2 py-1 text-xs font-mono tabular-nums font-extrabold text-cyan-900 text-right focus:outline-none focus:ring-1 focus:ring-cyan-600 shadow-2xs"
+                        />
+                        <span className="text-[11px] font-bold text-slate-600">m³/s</span>
+                      </div>
                     </div>
                     <input
                       type="range"
-                      min="5"
-                      max="1500"
-                      step="5"
-                      value={peakFlow}
+                      min="1"
+                      max={Math.max(1500, Math.ceil(peakFlow / 100) * 100)}
+                      step="1"
+                      value={Math.min(Math.max(1, peakFlow), Math.max(1500, Math.ceil(peakFlow / 100) * 100))}
                       onChange={(e) => setPeakFlow(Number(e.target.value))}
                       className="w-full h-1.5 bg-slate-300 rounded-full appearance-none cursor-pointer accent-cyan-700"
                     />
-                    <div className="grid grid-cols-5 gap-1 pt-1">
-                      {[50, 100, 250, 500, 1000].map((val) => (
+                    <div className="grid grid-cols-6 gap-1 pt-0.5 font-mono tabular-nums">
+                      {[25, 50, 100, 250, 500, 1000].map((val) => (
                         <button
                           key={val}
+                          type="button"
                           onClick={() => setPeakFlow(val)}
                           className={`py-0.5 rounded text-[9px] font-bold border transition-all text-center cursor-pointer ${
                             peakFlow === val
@@ -5486,72 +5610,255 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
                           }`}
                         >
-                          {val} m³
+                          {val}
                         </button>
                       ))}
                     </div>
                   </div>
                 ) : (
-                  /* Akım Hidrografı (Excel / CSV) Yükleme ve Şablon */
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] font-bold text-slate-700">Debi Hidrografı Verisi:</span>
-                      <div className="flex items-center gap-1.5">
+                  /* Akım Hidrografı (Manuel Tablo + Yapıştır + Sentetik + Excel/CSV) */
+                  <div className="space-y-2">
+                    {/* Quick Synthetic Generator Row using exact Peak Q & Duration */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1.5">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="text-[10px] font-bold text-slate-700">Sentetik Şablon Üretici:</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const synth = generateSyntheticHydrograph(Math.max(1, peakFlow), Math.max(1, simDuration));
+                              setHydrographData(synth);
+                              setHydrographFileName('Sentetik Taşkın Hidrografı');
+                            }}
+                            className="px-2 py-0.5 bg-cyan-700 hover:bg-cyan-800 text-white rounded-md text-[10px] font-bold cursor-pointer shadow-2xs"
+                            title="Girilen Pik Debi ve Hesap Süresine göre sentetik hidrograf oluştur"
+                          >
+                            Sentetik Üret
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleResetManualHydrograph}
+                            className="px-2 py-0.5 bg-white hover:bg-slate-100 text-slate-700 rounded-md text-[10px] font-bold border border-slate-300 cursor-pointer"
+                            title="5 noktalı sade manuel hidrograf başlat"
+                          >
+                            5 Nokta
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                        <div className="flex items-center justify-between bg-white border border-slate-300 rounded-lg px-2 py-1">
+                          <span className="text-slate-600 font-semibold">Pik Q:</span>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              step="1"
+                              min="1"
+                              max="50000"
+                              value={peakFlow}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isNaN(v) && v >= 0) setPeakFlow(v);
+                              }}
+                              className="w-16 text-right font-mono tabular-nums font-bold text-cyan-900 focus:outline-none"
+                            />
+                            <span className="text-slate-500">m³/s</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between bg-white border border-slate-300 rounded-lg px-2 py-1">
+                          <span className="text-slate-600 font-semibold">Süre:</span>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              step="1"
+                              min="1"
+                              max="168"
+                              value={simDuration}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isNaN(v) && v >= 1) setSimDuration(v);
+                              }}
+                              className="w-14 text-right font-mono tabular-nums font-bold text-slate-900 focus:outline-none"
+                            />
+                            <span className="text-slate-500">sa</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Toolbar: Add Row, Paste, Sort, Open Full Editor, Upload/Template */}
+                    <div className="flex flex-wrap items-center justify-between gap-1">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={handleAddHydrographRow}
+                          className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                        >
+                          <Plus size={11} />
+                          <span>Satır Ekle</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
-                            const synth = generateSyntheticHydrograph(peakFlow, simDuration);
-                            setHydrographData(synth);
-                            setHydrographFileName('Sentetik Taşkın Hidrografı');
+                            setHydroPasteOpen(!hydroPasteOpen);
+                            setHydroPasteError(null);
                           }}
-                          className="px-1.5 py-0.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 rounded text-[9px] font-bold border border-cyan-300 cursor-pointer"
-                          title="Mevcut pik debi ve süreye göre sentetik hidrograf oluştur"
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold border cursor-pointer transition-colors ${
+                            hydroPasteOpen
+                              ? 'bg-cyan-700 text-white border-cyan-700'
+                              : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300'
+                          }`}
+                          title="Excel veya metinden Saat-Debi sütunlarını yapıştır"
                         >
-                          Otomatik Hidrograf
+                          Excel/Metin Yapıştır
                         </button>
                         <button
-                          onClick={downloadHydrographTemplate}
-                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 border border-slate-300 shadow-sm cursor-pointer"
-                          title="Örnek Excel formatını indirin"
+                          type="button"
+                          onClick={handleSortHydrograph}
+                          disabled={hydrographData.length < 2}
+                          className="px-2 py-1 bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 border border-slate-300 rounded-lg text-[10px] font-bold cursor-pointer"
+                          title="Satırları zamana göre küçükten büyüğe sırala"
                         >
-                          <Download size={11} className="text-cyan-700" />
-                          <span>Şablon (.xlsx)</span>
+                          Sırala
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRightPanelTab('hydrograph');
+                            setMobileTab('preview');
+                          }}
+                          className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                          title="Sağ panelde büyük grafik ve tam tablo görünümünü aç"
+                        >
+                          <TrendingUp size={11} />
+                          <span>Büyük Editör</span>
                         </button>
                       </div>
                     </div>
 
-                    {hydrographFileName && hydrographData.length > 0 ? (
-                      <div className="bg-blue-50 border border-blue-200 p-2.5 rounded-xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            <CheckCircle2 size={14} className="text-blue-600 shrink-0" />
-                            <span className="font-bold text-slate-900 text-xs truncate max-w-[150px]">
-                              {hydrographFileName}
-                            </span>
-                          </div>
-                          <label className="px-2 py-0.5 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-[10px] font-bold cursor-pointer border border-slate-300 shadow-sm">
-                            Değiştir
-                            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleHydrographUpload} className="hidden" />
-                          </label>
+                    {/* Collapsible Bulk Paste Drawer */}
+                    {hydroPasteOpen && (
+                      <div className="bg-cyan-50/80 border border-cyan-300 rounded-xl p-2 space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-cyan-950">
+                          <span>Saat ve Debi Verisini Yapıştır (Excel / CSV):</span>
+                          <button
+                            type="button"
+                            onClick={() => setHydroPasteOpen(false)}
+                            className="text-slate-500 hover:text-slate-800 cursor-pointer"
+                          >
+                            <X size={12} />
+                          </button>
                         </div>
+                        <textarea
+                          rows={4}
+                          value={hydroPasteText}
+                          onChange={(e) => setHydroPasteText(e.target.value)}
+                          placeholder={"0\t15\n2\t65\n4\t180\n6\t95\n10\t20"}
+                          className="w-full bg-white border border-cyan-300 rounded-lg p-1.5 text-[11px] font-mono tabular-nums text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                        {hydroPasteError && (
+                          <p className="text-[10px] text-red-700 font-semibold">{hydroPasteError}</p>
+                        )}
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setHydroPasteOpen(false)}
+                            className="px-2 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-bold text-slate-700 cursor-pointer"
+                          >
+                            İptal
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleApplyHydrographPaste}
+                            className="px-2.5 py-0.5 bg-cyan-700 hover:bg-cyan-800 text-white rounded text-[10px] font-bold cursor-pointer"
+                          >
+                            Tabloya Aktar
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
-                        {/* Mini Hydrograph Plot */}
-                        <div className="w-full h-20 bg-white border border-blue-200 rounded-lg p-1">
+                    {/* Inline Manual Editable Table + Mini Chart */}
+                    <div className="bg-blue-50/70 border border-blue-200 p-2 rounded-xl space-y-2">
+                      {/* Inline Editable Time-Flow Rows */}
+                      <div className="bg-white border border-blue-200 rounded-lg overflow-hidden">
+                        <div className="max-h-40 overflow-y-auto custom-scrollbar">
+                          <table className="w-full text-[11px] border-collapse">
+                            <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0 z-10 border-b border-slate-200">
+                              <tr>
+                                <th className="py-1 px-2 text-center w-7">#</th>
+                                <th className="py-1 px-2 text-left">Saat (sa)</th>
+                                <th className="py-1 px-2 text-left">Debi (m³/s)</th>
+                                <th className="py-1 px-1.5 text-right w-8">Sil</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
+                              {hydrographData.map((pt, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50">
+                                  <td className="py-1 px-2 text-center text-[10px] text-slate-400">{idx + 1}</td>
+                                  <td className="py-1 px-1.5">
+                                    <input
+                                      type="number"
+                                      step="0.5"
+                                      min="0"
+                                      value={pt.time}
+                                      onChange={(e) => handleUpdateHydrographPoint(idx, 'time', e.target.value)}
+                                      className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-bold text-slate-900 focus:outline-none focus:border-cyan-600"
+                                    />
+                                  </td>
+                                  <td className="py-1 px-1.5">
+                                    <input
+                                      type="number"
+                                      step="0.5"
+                                      min="0"
+                                      value={pt.flow}
+                                      onChange={(e) => handleUpdateHydrographPoint(idx, 'flow', e.target.value)}
+                                      className="w-full bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-bold text-cyan-900 focus:outline-none focus:border-cyan-600"
+                                    />
+                                  </td>
+                                  <td className="py-1 px-1.5 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteHydrographRow(idx)}
+                                      className="p-1 text-red-600 hover:bg-red-50 rounded cursor-pointer"
+                                      title="Satırı sil"
+                                    >
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {hydrographData.length < 2 && (
+                        <p className="text-[10px] text-amber-800 font-semibold">
+                          Dinamik analiz için en az 2 zaman-debi noktası ekleyiniz.
+                        </p>
+                      )}
+
+                      {/* Mini Hydrograph Plot */}
+                      {hydrographData.length >= 2 && (
+                        <div className="w-full h-16 bg-white border border-blue-200 rounded-lg p-1">
                           <svg width="100%" height="100%" viewBox="0 0 300 70" preserveAspectRatio="none" className="w-full h-full">
                             {(() => {
-                              const maxT = Math.max(...hydrographData.map(d => d.time));
-                              const maxQ = Math.max(...hydrographData.map(d => d.flow));
-                              const mapX = (t: number) => 10 + (t / (maxT || 1)) * 280;
-                              const mapY = (q: number) => 65 - (q / (maxQ || 1)) * 55;
+                              const sorted = [...hydrographData].sort((a, b) => a.time - b.time);
+                              const maxT = Math.max(...sorted.map(d => d.time), 1);
+                              const maxQ = Math.max(...sorted.map(d => d.flow), 1);
+                              const mapX = (t: number) => 10 + (t / maxT) * 280;
+                              const mapY = (q: number) => 65 - (q / maxQ) * 55;
 
-                              const polyPoints = `10,65 ` + hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ') + ` 290,65`;
-                              const linePoints = hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
+                              const polyPoints = `10,65 ` + sorted.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ') + ` ${mapX(maxT)},65`;
+                              const linePoints = sorted.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
 
                               return (
                                 <>
                                   <polygon points={polyPoints} fill="#38bdf8" fillOpacity="0.3" />
                                   <polyline points={linePoints} fill="none" stroke="#0284c7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                  {hydrographData.map((d, idx) => (
+                                  {sorted.map((d, idx) => (
                                     <circle key={idx} cx={mapX(d.time)} cy={mapY(d.flow)} r="2" fill="#0369a1" />
                                   ))}
                                 </>
@@ -5559,29 +5866,31 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             })()}
                           </svg>
                         </div>
+                      )}
 
-                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-700 pt-0.5">
-                          <span>Pik Debi: <strong className="text-cyan-800">{peakFlow} m³/s</strong></span>
-                          <span>Süre: <strong className="text-slate-900">{simDuration} Saat</strong></span>
+                      {/* Footer: File import/template + live stats */}
+                      <div className="flex items-center justify-between text-[10px] text-slate-700 pt-0.5 flex-wrap gap-1.5">
+                        <span className="font-mono tabular-nums">
+                          Pik: <strong className="text-cyan-900">{peakFlow} m³/s</strong> · <strong className="text-slate-900">{simDuration} sa</strong>
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={downloadHydrographTemplate}
+                            className="px-1.5 py-0.5 bg-white hover:bg-slate-100 text-slate-700 rounded text-[9px] font-bold border border-slate-300 cursor-pointer flex items-center gap-0.5"
+                            title="Örnek Excel şablonunu indir"
+                          >
+                            <Download size={10} />
+                            <span>Şablon</span>
+                          </button>
+                          <label className="px-1.5 py-0.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-[9px] font-bold cursor-pointer flex items-center gap-0.5">
+                            <Upload size={10} />
+                            <span>Excel/CSV</span>
+                            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleHydrographUpload} className="hidden" />
+                          </label>
                         </div>
                       </div>
-                    ) : (
-                      <label className="flex items-center justify-between gap-2 p-2.5 border border-dashed border-slate-300 rounded-xl hover:bg-slate-100 transition-all cursor-pointer bg-slate-50 group">
-                        <div className="flex items-center gap-2 overflow-hidden">
-                          <div className="p-1.5 bg-blue-100 text-blue-800 rounded-lg group-hover:scale-105 transition-transform shrink-0">
-                            <FileSpreadsheet size={16} />
-                          </div>
-                          <div className="overflow-hidden">
-                            <span className="font-bold text-xs text-slate-800 block truncate">Excel / CSV Hidrograf Yükle</span>
-                            <span className="text-[10px] text-slate-500 block truncate">Saat ve Debi sütunları içeren dosya</span>
-                          </div>
-                        </div>
-                        <span className="px-2 py-1 bg-blue-700 text-white rounded-lg text-[10px] font-bold shrink-0 shadow-sm">
-                          Yükle
-                        </span>
-                        <input type="file" accept=".xlsx,.xls,.csv" onChange={handleHydrographUpload} className="hidden" />
-                      </label>
-                    )}
+                    </div>
                   </div>
                 )}
 
@@ -5829,7 +6138,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         <SplitSquareVertical size={13} />
                         <span>Enkesit Profili (X-Z)</span>
                       </button>
-                      {hydrographData.length > 0 && (
+                      {(flowMode === 'hydrograph' || hydrographData.length > 0) && (
                         <button
                           onClick={() => setRightPanelTab('hydrograph')}
                           className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
@@ -7201,55 +7510,216 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </div>
                     )
                   ) : (
-                    /* Hydrograph Full Chart View */
-                    <div className="w-full h-full bg-slate-50 p-4 flex flex-col justify-between">
-                      <div className="flex items-center justify-between text-xs font-bold text-slate-800 pb-2 border-b border-slate-200">
-                        <span className="flex items-center gap-1.5 text-cyan-800">
-                          <TrendingUp size={15} />
-                          Dinamik Akım Hidrografı (Zaman Serisi)
-                        </span>
-                        <span className="text-slate-500">
-                          Pik Debi: <strong>{peakFlow} m³/s</strong> | Süre: <strong>{simDuration} Saat</strong>
-                        </span>
+                    /* Hydrograph Interactive Chart + Manual Table Editor */
+                    <div className="w-full h-full bg-slate-50 p-3.5 flex flex-col gap-2.5 overflow-hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200 shrink-0">
+                        <div className="flex items-center gap-2">
+                          <TrendingUp size={15} className="text-cyan-800" />
+                          <span className="text-xs font-bold text-slate-900">
+                            Dinamik Akım Hidrografı (Manuel Düzenleme & Grafik)
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={handleAddHydrographRow}
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                          >
+                            <Plus size={12} />
+                            <span>Satır Ekle</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleSortHydrograph}
+                            disabled={hydrographData.length < 2}
+                            className="px-2.5 py-1 bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-800 border border-slate-300 rounded-lg text-[11px] font-bold cursor-pointer"
+                          >
+                            Zamana Göre Sırala
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const synth = generateSyntheticHydrograph(Math.max(1, peakFlow), Math.max(1, simDuration));
+                              setHydrographData(synth);
+                              setHydrographFileName('Sentetik Taşkın Hidrografı');
+                            }}
+                            className="px-2.5 py-1 bg-cyan-700 hover:bg-cyan-800 text-white rounded-lg text-[11px] font-bold cursor-pointer"
+                          >
+                            Sentetik Üret
+                          </button>
+                          <label className="px-2.5 py-1 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1">
+                            <Upload size={12} />
+                            <span>Excel / CSV Yükle</span>
+                            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleHydrographUpload} className="hidden" />
+                          </label>
+                        </div>
                       </div>
 
-                      <div className="flex-1 w-full my-3 flex items-center justify-center relative">
-                        <svg width="100%" height="100%" viewBox="0 0 700 240" preserveAspectRatio="none" className="w-full h-full">
-                          {(() => {
-                            const maxT = Math.max(...hydrographData.map(d => d.time));
-                            const maxQ = Math.max(...hydrographData.map(d => d.flow));
+                      {/* Live SVG Hydrograph Plot */}
+                      <div className="h-[46%] min-h-[160px] w-full bg-white border border-slate-200 rounded-xl p-2 flex items-center justify-center relative shrink-0">
+                        {hydrographData.length >= 2 ? (
+                          <svg width="100%" height="100%" viewBox="0 0 700 220" preserveAspectRatio="none" className="w-full h-full">
+                            {(() => {
+                              const sorted = [...hydrographData].sort((a, b) => a.time - b.time);
+                              const maxT = Math.max(...sorted.map(d => d.time), 1);
+                              const maxQ = Math.max(...sorted.map(d => d.flow), 1);
 
-                            const mapX = (t: number) => 50 + (t / (maxT || 1)) * 620;
-                            const mapY = (q: number) => 210 - (q / (maxQ || 1)) * 180;
+                              const mapX = (t: number) => 55 + (t / maxT) * 620;
+                              const mapY = (q: number) => 190 - (q / maxQ) * 160;
 
-                            const polyPoints = `50,210 ` + hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ') + ` ${mapX(maxT)},210`;
-                            const linePoints = hydrographData.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
+                              const polyPoints = `55,190 ` + sorted.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ') + ` ${mapX(maxT)},190`;
+                              const linePoints = sorted.map(d => `${mapX(d.time)},${mapY(d.flow)}`).join(' ');
 
-                            return (
-                              <>
-                                {/* Grid lines */}
-                                <line x1="50" y1="30" x2="670" y2="30" stroke="#e2e8f0" strokeDasharray="3 3" />
-                                <line x1="50" y1="90" x2="670" y2="90" stroke="#e2e8f0" strokeDasharray="3 3" />
-                                <line x1="50" y1="150" x2="670" y2="150" stroke="#e2e8f0" strokeDasharray="3 3" />
-                                <line x1="50" y1="210" x2="670" y2="210" stroke="#cbd5e1" strokeWidth="1.5" />
+                              const yTicks = [0, 0.33, 0.66, 1].map(r => ({
+                                val: maxQ * r,
+                                y: mapY(maxQ * r)
+                              }));
+                              const xTicks = [0, 0.25, 0.5, 0.75, 1].map(r => ({
+                                val: maxT * r,
+                                x: mapX(maxT * r)
+                              }));
 
-                                {/* Flow Area & Line */}
-                                <polygon points={polyPoints} fill="#0284c7" fillOpacity="0.25" />
-                                <polyline points={linePoints} fill="none" stroke="#0284c7" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                              return (
+                                <>
+                                  {yTicks.map((tk, i) => (
+                                    <g key={`hy-${i}`}>
+                                      <line x1="55" y1={tk.y} x2="675" y2={tk.y} stroke="#e2e8f0" strokeDasharray="3 3" />
+                                      <text x="50" y={tk.y + 3} fontSize="9" textAnchor="end" fill="#64748b" fontFamily="monospace">
+                                        {tk.val.toFixed(0)}
+                                      </text>
+                                    </g>
+                                  ))}
+                                  <line x1="55" y1="190" x2="675" y2="190" stroke="#94a3b8" strokeWidth="1.2" />
+                                  <line x1="55" y1="30" x2="55" y2="190" stroke="#94a3b8" strokeWidth="1.2" />
+                                  {xTicks.map((tk, i) => (
+                                    <text key={`hx-${i}`} x={tk.x} y="206" fontSize="9" textAnchor="middle" fill="#64748b" fontFamily="monospace">
+                                      {tk.val.toFixed(1)}s
+                                    </text>
+                                  ))}
 
-                                {hydrographData.map((d, idx) => (
-                                  <circle key={idx} cx={mapX(d.time)} cy={mapY(d.flow)} r="4" fill="#0284c7" stroke="#fff" strokeWidth="2" />
+                                  <polygon points={polyPoints} fill="#0284c7" fillOpacity="0.22" />
+                                  <polyline points={linePoints} fill="none" stroke="#0284c7" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" />
+
+                                  {sorted.map((d, idx) => (
+                                    <circle key={idx} cx={mapX(d.time)} cy={mapY(d.flow)} r="4" fill="#0284c7" stroke="#fff" strokeWidth="2">
+                                      <title>{`Zaman: ${d.time} saat | Debi: ${d.flow} m³/s`}</title>
+                                    </circle>
+                                  ))}
+                                </>
+                              );
+                            })()}
+                          </svg>
+                        ) : (
+                          <div className="text-center text-xs text-slate-500 space-y-2">
+                            <p>Grafik oluşturmak için aşağıdan en az 2 zaman-debi noktası ekleyin veya Excel'den yapıştırın.</p>
+                            <button
+                              type="button"
+                              onClick={handleResetManualHydrograph}
+                              className="px-3 py-1 bg-cyan-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                            >
+                              Örnek 5 Nokta Oluştur
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Lower Half: Full Interactive Editable Table + Excel Paste Box */}
+                      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-2.5 min-h-0 overflow-hidden">
+                        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl flex flex-col min-h-0 overflow-hidden">
+                          <div className="px-3 py-1.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-[11px] font-bold text-slate-800 shrink-0">
+                            <span>Zaman – Debi Veri Tablosu ({hydrographData.length} Nokta)</span>
+                            <span className="font-mono tabular-nums text-cyan-900">
+                              Pik: {peakFlow} m³/s | Süre: {simDuration} sa
+                            </span>
+                          </div>
+                          <div className="flex-1 overflow-y-auto custom-scrollbar">
+                            <table className="w-full text-xs border-collapse">
+                              <thead className="bg-slate-50 text-slate-600 font-bold sticky top-0 z-10 border-b border-slate-200">
+                                <tr>
+                                  <th className="py-1.5 px-2.5 text-center w-10">#</th>
+                                  <th className="py-1.5 px-2.5 text-left">Zaman (Saat)</th>
+                                  <th className="py-1.5 px-2.5 text-left">Debi (m³/s)</th>
+                                  <th className="py-1.5 px-2.5 text-right w-14">İşlem</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
+                                {hydrographData.map((pt, idx) => (
+                                  <tr key={idx} className="hover:bg-slate-50">
+                                    <td className="py-1.5 px-2.5 text-center text-slate-400 text-[11px]">{idx + 1}</td>
+                                    <td className="py-1 px-2">
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        min="0"
+                                        value={pt.time}
+                                        onChange={(e) => handleUpdateHydrographPoint(idx, 'time', e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-300 rounded-md px-2 py-1 text-xs font-bold text-slate-900 focus:outline-none focus:border-cyan-600"
+                                      />
+                                    </td>
+                                    <td className="py-1 px-2">
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        min="0"
+                                        value={pt.flow}
+                                        onChange={(e) => handleUpdateHydrographPoint(idx, 'flow', e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-300 rounded-md px-2 py-1 text-xs font-bold text-cyan-900 focus:outline-none focus:border-cyan-600"
+                                      />
+                                    </td>
+                                    <td className="py-1 px-2.5 text-right">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteHydrographRow(idx)}
+                                        className="p-1 text-red-600 hover:bg-red-50 rounded cursor-pointer"
+                                        title="Bu noktayı sil"
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    </td>
+                                  </tr>
                                 ))}
-                              </>
-                            );
-                          })()}
-                        </svg>
-                      </div>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
 
-                      <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-600">
-                        <span>Başlangıç Debisi: {hydrographData[0]?.flow} m³/s</span>
-                        <span className="text-cyan-800 font-bold">Pik Debi: {peakFlow} m³/s</span>
-                        <span>Bitiş Debisi: {hydrographData[hydrographData.length - 1]?.flow} m³/s</span>
+                        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-2.5 flex flex-col justify-between gap-2 min-h-0">
+                          <div className="space-y-1 flex-1 flex flex-col min-h-0">
+                            <span className="text-[11px] font-bold text-slate-800 block">
+                              Excel / Metinden Toplu Yapıştır
+                            </span>
+                            <p className="text-[10px] text-slate-500 leading-tight">
+                              Excel'den iki sütun (Saat ve Debi) kopyalayıp doğrudan aşağıya yapıştırabilirsiniz.
+                            </p>
+                            <textarea
+                              value={hydroPasteText}
+                              onChange={(e) => setHydroPasteText(e.target.value)}
+                              placeholder={"0\t15\n2\t65\n4\t180\n8\t90\n12\t20"}
+                              className="flex-1 w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs font-mono tabular-nums text-slate-800 focus:outline-none focus:border-cyan-600 resize-none"
+                            />
+                            {hydroPasteError && (
+                              <p className="text-[10px] text-red-700 font-semibold">{hydroPasteError}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={downloadHydrographTemplate}
+                              className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Download size={12} />
+                              <span>Şablon (.xlsx)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleApplyHydrographPaste}
+                              disabled={!hydroPasteText.trim()}
+                              className="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-800 disabled:bg-slate-300 text-white rounded-lg text-[11px] font-bold cursor-pointer"
+                            >
+                              Verileri Tabloya Aktar
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
