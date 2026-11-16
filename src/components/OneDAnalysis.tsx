@@ -76,6 +76,8 @@ import {
   DEMReliefOverlays,
   buildDEMFloodDepthOverlay,
   DEMFloodDepthOverlay,
+  DEMFloodPolygonPart,
+  clipDEMFloodPolygonsToStudyArea,
   computeChannelBedElevation,
   getChannelBedElevation,
   BankLineItem,
@@ -2112,6 +2114,60 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       });
     }
 
+    // 2b. Single depth-independent RAS Mapper DEM Flood Polygon Feature
+    if (demFloodOverlay?.floodPolygonParts && demFloodOverlay.floodPolygonParts.length > 0) {
+      const rasParts = (clipFloodToStudyArea && studyAreaKml && studyAreaKml.polygons.length > 0)
+        ? clipDEMFloodPolygonsToStudyArea(demFloodOverlay.floodPolygonParts, studyAreaKml.polygons)
+        : demFloodOverlay.floodPolygonParts;
+
+      if (rasParts.length === 1) {
+        const p = rasParts[0];
+        features.push({
+          type: "Feature",
+          properties: {
+            layerType: "ras_mapper_single_polygon",
+            name: `RAS Mapper DEM Taşkın Poligonu (Q=${peakFlow} m³/s)`,
+            pixelFloodAreaM2: Math.round(
+              (clipFloodToStudyArea && demFloodOverlay.studyAreaPixelFloodM2 !== undefined)
+                ? demFloodOverlay.studyAreaPixelFloodM2
+                : demFloodOverlay.pixelFloodAreaM2
+            ),
+            maxPixelDepth: demFloodOverlay.maxPixelDepth,
+            clippedToStudyArea: Boolean(clipFloodToStudyArea && studyAreaKml)
+          },
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              p.outer.map(([lat, lon]) => [lon, lat]),
+              ...p.holes.map(hr => hr.map(([lat, lon]) => [lon, lat]))
+            ]
+          }
+        });
+      } else if (rasParts.length > 1) {
+        features.push({
+          type: "Feature",
+          properties: {
+            layerType: "ras_mapper_single_polygon",
+            name: `RAS Mapper DEM Taşkın Poligonu (Q=${peakFlow} m³/s)`,
+            pixelFloodAreaM2: Math.round(
+              (clipFloodToStudyArea && demFloodOverlay.studyAreaPixelFloodM2 !== undefined)
+                ? demFloodOverlay.studyAreaPixelFloodM2
+                : demFloodOverlay.pixelFloodAreaM2
+            ),
+            maxPixelDepth: demFloodOverlay.maxPixelDepth,
+            clippedToStudyArea: Boolean(clipFloodToStudyArea && studyAreaKml)
+          },
+          geometry: {
+            type: "MultiPolygon",
+            coordinates: rasParts.map(p => [
+              p.outer.map(([lat, lon]) => [lon, lat]),
+              ...p.holes.map(hr => hr.map(([lat, lon]) => [lon, lat]))
+            ])
+          }
+        });
+      }
+    }
+
     // 3. Study Area Boundary Polygon(s) if loaded
     if (studyAreaKml && studyAreaKml.polygons.length > 0) {
       studyAreaKml.polygons.forEach((ring, idx) => {
@@ -2149,6 +2205,89 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Build KML Polygon / MultiGeometry XML markup for RAS Mapper depth-independent flood parts
+  const buildRasMapperKMLGeometry = (parts: DEMFloodPolygonPart[]): string => {
+    const renderPoly = (part: DEMFloodPolygonPart) => `
+          <Polygon>
+            <tessellate>1</tessellate>
+            <outerBoundaryIs>
+              <LinearRing>
+                <coordinates>
+                  ${part.outer.map(([lat, lon]) => `${lon.toFixed(7)},${lat.toFixed(7)},0`).join(' ')}
+                </coordinates>
+              </LinearRing>
+            </outerBoundaryIs>${part.holes
+              .map(
+                (hole) => `
+            <innerBoundaryIs>
+              <LinearRing>
+                <coordinates>
+                  ${hole.map(([lat, lon]) => `${lon.toFixed(7)},${lat.toFixed(7)},0`).join(' ')}
+                </coordinates>
+              </LinearRing>
+            </innerBoundaryIs>`
+              )
+              .join('')}
+          </Polygon>`;
+
+    if (parts.length === 1) {
+      return renderPoly(parts[0]);
+    }
+    return `
+        <MultiGeometry>${parts.map(renderPoly).join('')}
+        </MultiGeometry>`;
+  };
+
+  // Export standalone depth-independent RAS Mapper Flood Polygon as KML
+  const exportRASMapperKML = () => {
+    const rawParts = demFloodOverlay?.floodPolygonParts;
+    if (!demFloodOverlay || !rawParts || rawParts.length === 0) {
+      alert("Dışa aktarılacak RAS Mapper DEM su yayılım poligonu bulunamadı.");
+      return;
+    }
+
+    const activeParts = (clipFloodToStudyArea && studyAreaKml && studyAreaKml.polygons.length > 0)
+      ? clipDEMFloodPolygonsToStudyArea(rawParts, studyAreaKml.polygons)
+      : rawParts;
+
+    if (activeParts.length === 0) {
+      alert("Seçilen inceleme alanı içinde RAS Mapper taşkın poligonu kesişimi bulunamadı.");
+      return;
+    }
+
+    const areaM2 = (clipFloodToStudyArea && demFloodOverlay.studyAreaPixelFloodM2 !== undefined)
+      ? demFloodOverlay.studyAreaPixelFloodM2
+      : demFloodOverlay.pixelFloodAreaM2;
+    const areaHa = areaM2 / 10000;
+
+    const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>RAS Mapper Taşkın Sınırı (Tek Poligon - Q=${peakFlow} m³/s)</name>
+    <Style id="rasMapperSinglePoly">
+      <LineStyle><color>ffff8402</color><width>2.5</width></LineStyle>
+      <PolyStyle><color>80e9a50e</color><fill>1</fill><outline>1</outline></PolyStyle>
+    </Style>
+    <Placemark>
+      <name>RAS Mapper Taşkın Poligonu (Q=${peakFlow} m³/s)</name>
+      <description><![CDATA[Derinlikten Bağımsız DEM Su Yayılım Sınırı | Alan: ${Math.round(areaM2).toLocaleString()} m² (${areaHa.toFixed(2)} ha) | Maks. Piksel Derinliği: ${demFloodOverlay.maxPixelDepth.toFixed(2)} m]]></description>
+      <styleUrl>#rasMapperSinglePoly</styleUrl>${buildRasMapperKMLGeometry(activeParts)}
+    </Placemark>
+  </Document>
+</kml>`;
+
+    const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `RAS_Mapper_Taskin_Poligonu_Q${peakFlow}.kml`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Export Results to KML (Google Earth 3B Poligonları ve Enkesitler)
@@ -2160,6 +2299,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     <name>1B Hidrodinamik Taşkın Yayılım Haritası (Q=${peakFlow} m³/s)</name>
     <Style id="riverLine">
       <LineStyle><color>ffffaa00</color><width>4</width></LineStyle>
+    </Style>
+    <Style id="rasMapperSinglePoly">
+      <LineStyle><color>ffff8402</color><width>2.5</width></LineStyle>
+      <PolyStyle><color>80e9a50e</color><fill>1</fill><outline>1</outline></PolyStyle>
     </Style>
     <Style id="floodPolyShallow">
       <LineStyle><color>ffc78402</color><width>1</width></LineStyle>
@@ -2190,6 +2333,28 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       <LineStyle><color>ff81b910</color><width>3</width></LineStyle>
       <PolyStyle><color>3381b910</color><fill>1</fill><outline>1</outline></PolyStyle>
     </Style>`;
+
+    // Add Depth-Independent RAS Mapper Single Polygon (if computed)
+    if (demFloodOverlay?.floodPolygonParts && demFloodOverlay.floodPolygonParts.length > 0) {
+      const rasParts = (clipFloodToStudyArea && studyAreaKml && studyAreaKml.polygons.length > 0)
+        ? clipDEMFloodPolygonsToStudyArea(demFloodOverlay.floodPolygonParts, studyAreaKml.polygons)
+        : demFloodOverlay.floodPolygonParts;
+
+      if (rasParts.length > 0) {
+        const rasAreaM2 = (clipFloodToStudyArea && demFloodOverlay.studyAreaPixelFloodM2 !== undefined)
+          ? demFloodOverlay.studyAreaPixelFloodM2
+          : demFloodOverlay.pixelFloodAreaM2;
+        kmlContent += `
+    <Folder>
+      <name>RAS Mapper DEM Taşkın Poligonu (Tek Poligon)</name>
+      <Placemark>
+        <name>RAS Mapper Taşkın Sınırı (Q=${peakFlow} m³/s)</name>
+        <description><![CDATA[Derinlikten Bağımsız DEM Su Yayılım Poligonu | Alan: ${Math.round(rasAreaM2).toLocaleString()} m² (${(rasAreaM2 / 10000).toFixed(2)} ha) | Maks. Piksel Derinliği: ${demFloodOverlay.maxPixelDepth.toFixed(2)} m]]></description>
+        <styleUrl>#rasMapperSinglePoly</styleUrl>${buildRasMapperKMLGeometry(rasParts)}
+      </Placemark>
+    </Folder>`;
+      }
+    }
 
     // Add Centerline
     if (centerlineCoords.length > 0) {
@@ -4218,6 +4383,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     <MapIcon size={15} />
                     Taşkın Yayılım Haritasını KML İndir
                   </button>
+
+                  {demFloodOverlay?.floodPolygonParts && demFloodOverlay.floodPolygonParts.length > 0 && (
+                    <button
+                      onClick={exportRASMapperKML}
+                      className="w-full py-2 px-3 bg-sky-700 hover:bg-sky-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                      title="Derinlikten bağımsız tek DEM taşkın sınırı poligonu"
+                    >
+                      <LayersIcon size={14} />
+                      RAS Mapper Taşkın Poligonunu KML İndir (Tek Poligon)
+                    </button>
+                  )}
 
                   <button
                     onClick={exportToGeoJSON}

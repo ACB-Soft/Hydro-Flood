@@ -4698,6 +4698,11 @@ export function runDynamicRouting(
   };
 }
 
+export interface DEMFloodPolygonPart {
+  outer: [number, number][]; // [lat, lon] closed ring
+  holes: [number, number][][]; // dry island inner rings [lat, lon]
+}
+
 export interface DEMFloodDepthOverlay {
   imageUrl: string;
   wgs84Bounds: [[number, number], [number, number]];
@@ -4707,6 +4712,7 @@ export interface DEMFloodDepthOverlay {
   studyAreaPixelFloodHa?: number;
   maxPixelDepth: number;
   wetPixelCount: number;
+  floodPolygonParts?: DEMFloodPolygonPart[];
 }
 
 /**
@@ -5033,6 +5039,24 @@ export async function buildDEMFloodDepthOverlay(
   const pixelFloodAreaM2 = wetPixelCount * cellAreaM2;
   const studyAreaPixelFloodM2 = studyRingsGrid.length > 0 ? studyWetPixelCount * cellAreaM2 : undefined;
 
+  const gridToWgs84 = (gx: number, gy: number): [number, number] => {
+    const px = xll + (gx / width) * spanX;
+    const py = yur - (gy / height) * spanY;
+    if (isGeographicBbox) {
+      return [py, px];
+    }
+    try {
+      const [lon, lat] = proj4(effectiveCrsDef, 'EPSG:4326', [px, py]);
+      return [lat, lon];
+    } catch {
+      return [py, px];
+    }
+  };
+
+  const floodPolygonParts = wetPixelCount > 0
+    ? extractWetMaskPolygons(connectedWet, width, height, gridToWgs84)
+    : [];
+
   return {
     imageUrl: warpedUrl,
     wgs84Bounds,
@@ -5043,6 +5067,289 @@ export async function buildDEMFloodDepthOverlay(
       studyAreaPixelFloodHa: studyAreaPixelFloodM2 / 10000
     } : {}),
     maxPixelDepth: Number(maxPixelDepth.toFixed(2)),
-    wetPixelCount
+    wetPixelCount,
+    floodPolygonParts
   };
 }
+
+/**
+ * Extracts depth-independent outer flood boundary polygon(s) and inner dry holes
+ * from the binary 8-connected wet mask via Marching Squares + collinear & Douglas-Peucker simplification.
+ */
+function extractWetMaskPolygons(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  gridToWgs84: (gx: number, gy: number) => [number, number]
+): DEMFloodPolygonPart[] {
+  const pw = width + 2;
+  const ph = height + 2;
+  const pad = new Uint8Array(pw * ph);
+  for (let y = 0; y < height; y++) {
+    const srcOff = y * width;
+    const dstOff = (y + 1) * pw + 1;
+    for (let x = 0; x < width; x++) {
+      pad[dstOff + x] = mask[srcOff + x];
+    }
+  }
+
+  const stride = 2 * width + 3;
+  const adj = new Map<number, number[]>();
+  const addEdge = (ux0: number, uy0: number, ux1: number, uy1: number) => {
+    const k0 = uy0 * stride + (ux0 + 1);
+    const k1 = uy1 * stride + (ux1 + 1);
+    const list = adj.get(k0);
+    if (list) list.push(k1);
+    else adj.set(k0, [k1]);
+  };
+
+  // Marching squares cell (cx, cy) over corners in pad:
+  // T=(2cx, 2cy-1), R=(2cx+1, 2cy), B=(2cx, 2cy+1), L=(2cx-1, 2cy)
+  for (let cy = 0; cy <= height; cy++) {
+    const row0 = cy * pw;
+    const row1 = (cy + 1) * pw;
+    const uyT = 2 * cy - 1;
+    const uyM = 2 * cy;
+    const uyB = 2 * cy + 1;
+    for (let cx = 0; cx <= width; cx++) {
+      const tl = pad[row0 + cx];
+      const tr = pad[row0 + cx + 1];
+      const br = pad[row1 + cx + 1];
+      const bl = pad[row1 + cx];
+      const code = (tl << 3) | (tr << 2) | (br << 1) | bl;
+      if (code === 0 || code === 15) continue;
+
+      const uxL = 2 * cx - 1;
+      const uxM = 2 * cx;
+      const uxR = 2 * cx + 1;
+
+      switch (code) {
+        case 1:  addEdge(uxL, uyM, uxM, uyB); break;
+        case 2:  addEdge(uxM, uyB, uxR, uyM); break;
+        case 3:  addEdge(uxL, uyM, uxR, uyM); break;
+        case 4:  addEdge(uxR, uyM, uxM, uyT); break;
+        case 5:
+          addEdge(uxL, uyM, uxM, uyT);
+          addEdge(uxR, uyM, uxM, uyB);
+          break;
+        case 6:  addEdge(uxM, uyB, uxM, uyT); break;
+        case 7:  addEdge(uxL, uyM, uxM, uyT); break;
+        case 8:  addEdge(uxM, uyT, uxL, uyM); break;
+        case 9:  addEdge(uxM, uyT, uxM, uyB); break;
+        case 10:
+          addEdge(uxM, uyT, uxR, uyM);
+          addEdge(uxM, uyB, uxL, uyM);
+          break;
+        case 11: addEdge(uxM, uyT, uxR, uyM); break;
+        case 12: addEdge(uxR, uyM, uxL, uyM); break;
+        case 13: addEdge(uxR, uyM, uxM, uyB); break;
+        case 14: addEdge(uxM, uyB, uxL, uyM); break;
+      }
+    }
+  }
+
+  interface TracedRing {
+    areaGrid: number; // positive = outer wet ring, negative = inner dry hole
+    pts: [number, number][]; // [lat, lon]
+    bbox: [number, number, number, number]; // minLat, minLon, maxLat, maxLon
+  }
+
+  const outers: TracedRing[] = [];
+  const holes: TracedRing[] = [];
+
+  for (const [startKey, startTargets] of adj.entries()) {
+    while (startTargets.length > 0) {
+      const loopKeys: number[] = [startKey];
+      let curKey = startTargets.pop()!;
+      let guard = 0;
+      const maxSteps = adj.size + 8;
+
+      while (curKey !== startKey && guard < maxSteps) {
+        loopKeys.push(curKey);
+        const nxtList = adj.get(curKey);
+        if (!nxtList || nxtList.length === 0) break;
+        curKey = nxtList.pop()!;
+        guard++;
+      }
+
+      if (curKey !== startKey || loopKeys.length < 3) continue;
+
+      // Convert integer keys to (ux, uy) and drop collinear vertices
+      const rawCoords: [number, number][] = loopKeys.map((k) => {
+        const uy = Math.floor(k / stride);
+        const ux = k - uy * stride - 1;
+        return [ux, uy];
+      });
+
+      const simplifiedGrid: [number, number][] = [];
+      const m = rawCoords.length;
+      for (let i = 0; i < m; i++) {
+        const prev = rawCoords[(i - 1 + m) % m];
+        const curr = rawCoords[i];
+        const next = rawCoords[(i + 1) % m];
+        const cross =
+          (curr[0] - prev[0]) * (next[1] - curr[1]) -
+          (curr[1] - prev[1]) * (next[0] - curr[0]);
+        if (cross !== 0) {
+          simplifiedGrid.push(curr);
+        }
+      }
+      if (simplifiedGrid.length < 3) continue;
+
+      // Signed area in demGrid units (since u = 2*g, divide shoelace by 8)
+      let doubleUArea = 0;
+      for (let i = 0; i < simplifiedGrid.length; i++) {
+        const p1 = simplifiedGrid[i];
+        const p2 = simplifiedGrid[(i + 1) % simplifiedGrid.length];
+        doubleUArea += p1[0] * p2[1] - p2[0] * p1[1];
+      }
+      const areaGrid = doubleUArea / 8;
+      if (Math.abs(areaGrid) < 0.25) continue;
+
+      let geoRing = simplifiedGrid.map(([ux, uy]) => gridToWgs84(ux / 2, uy / 2));
+
+      // Gentle Douglas-Peucker simplification on large rings so KML stays compact & crisp
+      if (geoRing.length > 16) {
+        try {
+          const closed = [...geoRing, geoRing[0]].map(([lat, lon]) => [lon, lat]);
+          const simp = turf.simplify(turf.polygon([closed]), {
+            tolerance: 0.000004,
+            highQuality: true
+          });
+          const coords = simp?.geometry?.coordinates?.[0];
+          if (coords && coords.length >= 4) {
+            geoRing = coords.slice(0, -1).map(([lon, lat]) => [lat, lon]);
+          }
+        } catch {
+          // keep unsimplified geoRing if simplify fails on slender geometry
+        }
+      }
+
+      let minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
+      for (let i = 0; i < geoRing.length; i++) {
+        const [lat, lon] = geoRing[i];
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+      }
+
+      const ringObj: TracedRing = {
+        areaGrid,
+        pts: geoRing,
+        bbox: [minLat, minLon, maxLat, maxLon]
+      };
+
+      if (areaGrid > 0) outers.push(ringObj);
+      else holes.push(ringObj);
+    }
+  }
+
+  // Largest outer polygons first
+  outers.sort((a, b) => b.areaGrid - a.areaGrid);
+
+  const pointInGeoRing = (lat: number, lon: number, ring: [number, number][]): boolean => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const yi = ring[i][0], xi = ring[i][1];
+      const yj = ring[j][0], xj = ring[j][1];
+      const intersect = ((yi > lat) !== (yj > lat)) && (lon < ((xj - xi) * (lat - yi)) / (yj - yi + 1e-12) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  };
+
+  const parts: DEMFloodPolygonPart[] = outers.map((o) => ({
+    outer: [...o.pts, o.pts[0]],
+    holes: []
+  }));
+
+  // Assign each dry hole to the smallest enclosing outer ring
+  for (const h of holes) {
+    const [testLat, testLon] = h.pts[0];
+    let bestIdx = -1;
+    let bestArea = Infinity;
+    for (let i = 0; i < outers.length; i++) {
+      const o = outers[i];
+      if (
+        testLat < o.bbox[0] || testLat > o.bbox[2] ||
+        testLon < o.bbox[1] || testLon > o.bbox[3]
+      ) continue;
+      if (o.areaGrid < bestArea && pointInGeoRing(testLat, testLon, o.pts)) {
+        bestArea = o.areaGrid;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx !== -1) {
+      parts[bestIdx].holes.push([...h.pts, h.pts[0]]);
+    }
+  }
+
+  return parts;
+}
+
+/**
+ * Clips extracted RAS Mapper DEM flood polygon parts against uploaded Study Area polygon(s).
+ */
+export function clipDEMFloodPolygonsToStudyArea(
+  parts: DEMFloodPolygonPart[],
+  studyAreaPolygons: [number, number][][]
+): DEMFloodPolygonPart[] {
+  if (!parts || parts.length === 0 || !studyAreaPolygons || studyAreaPolygons.length === 0) {
+    return parts;
+  }
+
+  const clipped: DEMFloodPolygonPart[] = [];
+
+  for (const part of parts) {
+    if (part.outer.length < 4) continue;
+    const rings: number[][][] = [
+      part.outer.map(([lat, lon]) => [lon, lat]),
+      ...part.holes
+        .filter(h => h.length >= 4)
+        .map(h => h.map(([lat, lon]) => [lon, lat]))
+    ];
+
+    let srcPoly;
+    try {
+      srcPoly = turf.polygon(rings);
+    } catch {
+      continue;
+    }
+
+    for (const sRing of studyAreaPolygons) {
+      if (sRing.length < 3) continue;
+      const closedS = [...sRing, sRing[0]].map(([lat, lon]) => [lon, lat]);
+      try {
+        const studyPoly = turf.polygon([closedS]);
+        const res = turf.intersect(turf.featureCollection([srcPoly, studyPoly]));
+        if (!res || !res.geometry) continue;
+
+        if (res.geometry.type === 'Polygon') {
+          const coords = res.geometry.coordinates;
+          if (coords.length > 0 && coords[0].length >= 4) {
+            clipped.push({
+              outer: coords[0].map(([lon, lat]) => [lat, lon] as [number, number]),
+              holes: coords.slice(1).map(hr => hr.map(([lon, lat]) => [lat, lon] as [number, number]))
+            });
+          }
+        } else if (res.geometry.type === 'MultiPolygon') {
+          for (const polyCoords of res.geometry.coordinates) {
+            if (polyCoords.length > 0 && polyCoords[0].length >= 4) {
+              clipped.push({
+                outer: polyCoords[0].map(([lon, lat]) => [lat, lon] as [number, number]),
+                holes: polyCoords.slice(1).map(hr => hr.map(([lon, lat]) => [lat, lon] as [number, number]))
+              });
+            }
+          }
+        }
+      } catch {
+        // skip invalid intersection polygon
+      }
+    }
+  }
+
+  return clipped;
+}
+
+
