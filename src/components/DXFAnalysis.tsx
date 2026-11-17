@@ -1,10 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, ZoomOut, Compass, RotateCcw, Sliders, Mountain, Globe, Map as MapIcon, Sun, Moon, MousePointerClick, Info, X, Search } from 'lucide-react';
-import DxfParser from 'dxf-parser';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Upload, Eye, FileCode, CheckCircle, RefreshCw, Layers, ZoomIn, ZoomOut, Compass, RotateCcw, Sliders, Mountain, Globe, Sun, Moon, MousePointerClick, Info, X, Search, AlertTriangle } from 'lucide-react';
 import proj4 from 'proj4';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { parseDXFBuffer, fixTurkishDxfText } from '../utils/dxfUtils';
+import { parseCADFile } from '../utils/cadParser';
+import { fixTurkishDxfText, cleanCADTextString, expandCADEntities } from '../utils/cadGeometry';
 
 function distToSegmentSquared(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
   const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
@@ -208,6 +208,8 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
   const [localCrs, setLocalCrs] = useState<string>('NONE');
   const [isParsing, setIsParsing] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
   const [localDxfData, setLocalDxfData] = useState<any>(null);
   const [localLayers, setLocalLayers] = useState<CADLayer[]>([]);
   
@@ -215,6 +217,13 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
   const layers = propsLayers ?? localLayers;
   const crs = propsCrs ?? localCrs;
   const isParsed = Boolean(dxfData);
+
+  const expandedEntities = useMemo(() => {
+    if (!dxfData || !Array.isArray(dxfData.entities)) return [];
+    return expandCADEntities(dxfData.entities, dxfData.blocks, { expandInserts: true });
+  }, [dxfData]);
+
+  const cadFormat: string | null = dxfData?.metadata?.format || (dxfData ? 'DXF' : null);
 
   const updateDxfData = (data: any) => {
     setLocalDxfData(data);
@@ -272,41 +281,44 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     if (!file) return;
     setPendingFile(file);
     updateDxfData(null);
+    setParseError(null);
+    setParseWarnings([]);
+    setSelectedEntity(null);
+    setSelectedEntityInfo(null);
     setUploadMessage(`Dosya seçildi: ${file.name}`);
   };
 
   const handleParse = async () => {
     if (!pendingFile) return;
+    const ext = pendingFile.name.split('.').pop()?.toUpperCase() || 'CAD';
     setIsParsing(true);
-    setUploadMessage('DXF dosyası ayrıştırılıyor...');
+    setParseError(null);
+    setParseWarnings([]);
+    setUploadMessage(
+      ext === 'DWG' || ext === 'DGN'
+        ? `${ext} WASM motoru hazırlanıyor ve ayrıştırılıyor...`
+        : `${ext} dosyası ayrıştırılıyor...`
+    );
 
     try {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const buffer = e.target?.result as ArrayBuffer;
-          const { parsed, extractedLayers } = parseDXFBuffer(buffer);
-          
-          updateDxfData(parsed);
-          propsSetDxfFileName?.(pendingFile.name);
-          updateLayers(extractedLayers);
-          
-          setZoom(1);
-          setPan({ x: 0, y: 0 });
-          setUploadMessage(`DXF Açıldı: ${extractedLayers.length} katman bulundu.`);
-          // Switch to map view automatically on mobile after parsing
-          setMobileTab('map');
-        } catch (err) {
-          console.error("DXF Parse Error:", err);
-          setUploadMessage("DXF dosyası ayrıştırılamadı. Geçerli bir DXF seçtiğinizden emin olun.");
-        } finally {
-          setIsParsing(false);
-        }
-      };
-      reader.readAsArrayBuffer(pendingFile);
-    } catch (err) {
-      console.error(err);
-      setUploadMessage("Dosya okuma hatası oluştu.");
+      const result = await parseCADFile(pendingFile);
+
+      updateDxfData(result.parsed);
+      propsSetDxfFileName?.(pendingFile.name);
+      updateLayers(result.extractedLayers);
+      setParseWarnings(result.warnings || []);
+
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      setUploadMessage(
+        `${result.format} açıldı: ${result.extractedLayers.length} katman, ${result.stats.entityCount} obje bulundu.`
+      );
+      setMobileTab('map');
+    } catch (err: any) {
+      console.error('CAD Parse Error:', err);
+      setParseError(err?.message || 'CAD dosyası ayrıştırılamadı. Geçerli bir DXF, DWG veya V7 DGN dosyası seçtiğinizden emin olun.');
+      setUploadMessage(null);
+    } finally {
       setIsParsing(false);
     }
   };
@@ -348,10 +360,10 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
       ctx.fillRect(0, 0, width, height);
     }
 
-    // Calculate extents
+    // Calculate extents across expanded entities (includes INSERT block geometry)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    if (dxfData.entities && dxfData.entities.length > 0) {
-       dxfData.entities.forEach((entity: any) => {
+    if (expandedEntities.length > 0) {
+       expandedEntities.forEach((entity: any) => {
           const layer = layers.find(l => l.name === entity.layer);
           if (layer && !layer.visible) return;
 
@@ -446,9 +458,9 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     ctx.translate(centerX, centerY);
     ctx.scale(zoom, zoom);
 
-    // Draw entities with their original layer/entity colors
-    if (dxfData.entities) {
-      dxfData.entities.forEach((entity: any) => {
+    // Draw expanded entities with their original layer/entity colors
+    if (expandedEntities.length > 0) {
+      expandedEntities.forEach((entity: any) => {
         const layer = layers.find(l => l.name === entity.layer);
         if (layer && !layer.visible) return;
 
@@ -459,7 +471,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           ? getAciColor(entityRawColor, layerColorHex, isLightBg) 
           : layerColorHex;
 
-        // Determine line weight from DXF entity or layer
+        // Determine line weight from CAD entity or layer
         const entityLw = entity.lineWeight ?? entity.lineweight;
         const layerLw = layer?.lineWeight;
         let lwMM = 0.25; // Default 0.25mm
@@ -484,7 +496,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             ctx.lineTo((v1.x - midX) * fitScale, -(v1.y - midY) * fitScale);
             ctx.stroke();
           }
-        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
+        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE' || entity.type === '3DFACE') {
           if (entity.vertices && entity.vertices.length > 0) {
             ctx.beginPath();
             entity.vertices.forEach((v: any, i: number) => {
@@ -493,7 +505,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
               if (i === 0) ctx.moveTo(sx, sy);
               else ctx.lineTo(sx, sy);
             });
-            if (entity.shape || entity.closed) ctx.closePath();
+            if (entity.shape || entity.closed || entity.type === '3DFACE') ctx.closePath();
             ctx.stroke();
           }
         } else if (entity.type === 'CIRCLE') {
@@ -516,13 +528,12 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             ctx.arc(cx, cy, r, startAngle, endAngle);
             ctx.stroke();
           }
-        } else if (entity.type === 'POINT') {
-          const pt = entity.position || (entity.vertices && entity.vertices[0]);
+        } else if (entity.type === 'POINT' || entity.type === 'INSERT') {
+          const pt = entity.position || entity.insertionPoint || (entity.vertices && entity.vertices[0]);
           if (pt) {
             const px = (pt.x - midX) * fitScale;
             const py = -(pt.y - midY) * fitScale;
             
-            // Read $PDSIZE from DXF header if available
             const pdSizeHeader = dxfData.header?.$PDSIZE ?? 0;
             let pdWorldSize = 0;
             if (pdSizeHeader > 0) {
@@ -530,7 +541,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             } else if (pdSizeHeader < 0) {
               pdWorldSize = (Math.abs(pdSizeHeader) / 100) * spanX;
             } else {
-              pdWorldSize = spanX * 0.003; // Fallback ~0.3% of drawing width
+              pdWorldSize = spanX * 0.003;
             }
             const ptRadius = Math.max(2 / zoom, (pdWorldSize * fitScale) / 2);
 
@@ -541,35 +552,25 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             ctx.arc(px, py, Math.max(1 / zoom, ptRadius * 0.25), 0, 2 * Math.PI);
             ctx.fill();
           }
-        } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+        } else if (entity.type === 'TEXT' || entity.type === 'MTEXT' || entity.type === 'ATTRIB') {
           const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
           if (pt && entity.text) {
             const tx = (pt.x - midX) * fitScale;
             const ty = -(pt.y - midY) * fitScale;
             
-            // Clean MTEXT formatting codes (\P, \f..., \H..., \W..., \{, \})
-            let rawStr = fixTurkishDxfText(
-              String(entity.text)
-                .replace(/\\P/g, ' ')
-                .replace(/\\{[^}]*\}|\\[a-zA-Z0-9]+;/g, '')
-                .replace(/[\{\}]/g, '')
-                .trim()
-            );
+            const rawStr = cleanCADTextString(entity.text);
             if (!rawStr) return;
 
-            // Read CAD text height directly from DXF entity (height / textHeight / nominalTextHeight)
             let cadTextHeight = entity.height || entity.textHeight || entity.nominalTextHeight;
             if (!cadTextHeight || cadTextHeight <= 0) {
               cadTextHeight = dxfData.header?.$TEXTSIZE || (spanX * 0.005);
             }
 
-            // Calculate exact font size in canvas space
             const fontCanvasPx = cadTextHeight * fitScale;
 
             ctx.save();
             ctx.translate(tx, ty);
 
-            // Apply rotation if defined in DXF entity (in degrees)
             if (entity.rotation) {
               const rotRad = -(entity.rotation * Math.PI) / 180;
               ctx.rotate(rotRad);
@@ -610,7 +611,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           ctx.arc(sx1, sy1, 4 / zoom, 0, 2 * Math.PI);
           ctx.fill();
         }
-      } else if (selectedEntity.type === 'LWPOLYLINE' || selectedEntity.type === 'POLYLINE' || selectedEntity.type === 'SPLINE') {
+      } else if (selectedEntity.type === 'LWPOLYLINE' || selectedEntity.type === 'POLYLINE' || selectedEntity.type === 'SPLINE' || selectedEntity.type === '3DFACE') {
         if (selectedEntity.vertices && selectedEntity.vertices.length > 0) {
           ctx.beginPath();
           selectedEntity.vertices.forEach((v: any, i: number) => {
@@ -619,7 +620,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             if (i === 0) ctx.moveTo(sx, sy);
             else ctx.lineTo(sx, sy);
           });
-          if (selectedEntity.shape || selectedEntity.closed) ctx.closePath();
+          if (selectedEntity.shape || selectedEntity.closed || selectedEntity.type === '3DFACE') ctx.closePath();
           ctx.stroke();
 
           // Vertex handles
@@ -675,7 +676,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
 
     ctx.restore();
 
-  }, [dxfData, isParsed, zoom, pan, layers, mobileTab, canvasTheme, basemap, crs, selectedEntity]);
+  }, [dxfData, expandedEntities, isParsed, zoom, pan, layers, mobileTab, canvasTheme, basemap, crs, selectedEntity]);
 
   // Mouse pan handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -730,7 +731,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         details.push({ label: 'Bitiş (X, Y, Z)', value: `${v1.x.toFixed(3)}, ${v1.y.toFixed(3)}, ${(v1.z || 0).toFixed(3)}` });
         details.push({ label: 'Uzunluk', value: `${len.toFixed(3)} m` });
       }
-    } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
+    } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE' || entity.type === '3DFACE') {
       if (entity.vertices && entity.vertices.length > 0) {
         let totalLen = 0;
         for (let i = 0; i < entity.vertices.length - 1; i++) {
@@ -738,17 +739,21 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           const vB = entity.vertices[i + 1];
           totalLen += Math.hypot(vB.x - vA.x, vB.y - vA.y, (vB.z || 0) - (vA.z || 0));
         }
-        if (entity.shape || entity.closed) {
+        if (entity.shape || entity.closed || entity.type === '3DFACE') {
           const vA = entity.vertices[entity.vertices.length - 1];
           const vB = entity.vertices[0];
           totalLen += Math.hypot(vB.x - vA.x, vB.y - vA.y, (vB.z || 0) - (vA.z || 0));
         }
         details.push({ label: 'Köşe (Nokta) Sayısı', value: `${entity.vertices.length} adet` });
-        details.push({ label: 'Kapalı Geometri (Poligon)', value: (entity.shape || entity.closed) ? 'Evet' : 'Hayır' });
+        details.push({ label: 'Kapalı Geometri (Poligon)', value: (entity.shape || entity.closed || entity.type === '3DFACE') ? 'Evet' : 'Hayır' });
         details.push({ label: 'Toplam Uzunluk', value: `${totalLen.toFixed(3)} m` });
+        const sampleZ = entity.vertices[0]?.z ?? entity.elevation;
+        if (typeof sampleZ === 'number' && Number.isFinite(sampleZ)) {
+          details.push({ label: 'Kot / Z (İlk Köşe)', value: `${sampleZ.toFixed(3)} m` });
+        }
       }
-    } else if (entity.type === 'POINT') {
-      const pt = entity.position || (entity.vertices && entity.vertices[0]);
+    } else if (entity.type === 'POINT' || entity.type === 'INSERT') {
+      const pt = entity.position || entity.insertionPoint || (entity.vertices && entity.vertices[0]);
       if (pt) {
         details.push({ label: 'Doğu (X)', value: pt.x.toFixed(3) });
         details.push({ label: 'Kuzey (Y)', value: pt.y.toFixed(3) });
@@ -771,15 +776,9 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
         details.push({ label: 'Yarıçap (R)', value: `${r.toFixed(3)} m` });
         details.push({ label: 'Açı Aralığı', value: `${(entity.startAngle || 0).toFixed(1)}° - ${(entity.endAngle || 0).toFixed(1)}°` });
       }
-    } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+    } else if (entity.type === 'TEXT' || entity.type === 'MTEXT' || entity.type === 'ATTRIB') {
       const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
-      let cleanText = fixTurkishDxfText(
-        String(entity.text || '')
-          .replace(/\\P/g, ' ')
-          .replace(/\\{[^}]*\}|\LW[a-zA-Z0-9]+;/g, '')
-          .replace(/[\{\}]/g, '')
-          .trim()
-      );
+      const cleanText = cleanCADTextString(entity.text || '');
       details.push({ label: 'Metin / Yazı', value: cleanText || '(Boş)' });
       details.push({ label: 'Yazı Yüksekliği', value: `${(entity.height || entity.textHeight || 0).toFixed(3)} m` });
       if (pt) {
@@ -827,8 +826,8 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     const height = rect.height;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    if (dxfData.entities && dxfData.entities.length > 0) {
-       dxfData.entities.forEach((entity: any) => {
+    if (expandedEntities.length > 0) {
+       expandedEntities.forEach((entity: any) => {
           const layer = layers.find(l => l.name === entity.layer);
           if (layer && !layer.visible) return;
 
@@ -878,8 +877,8 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
     let closestEntity: any = null;
     let minDistScreen = Infinity;
 
-    if (dxfData.entities) {
-      dxfData.entities.forEach((entity: any) => {
+    if (expandedEntities.length > 0) {
+      expandedEntities.forEach((entity: any) => {
         const layer = layers.find(l => l.name === entity.layer);
         if (layer && !layer.visible) return;
 
@@ -891,7 +890,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           if (v0 && v1) {
             distWorld = Math.sqrt(distToSegmentSquared(clickWorldX, clickWorldY, v0.x, v0.y, v1.x, v1.y));
           }
-        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE') {
+        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE' || entity.type === 'SPLINE' || entity.type === '3DFACE') {
           if (entity.vertices && entity.vertices.length > 0) {
             for (let i = 0; i < entity.vertices.length - 1; i++) {
               const v0 = entity.vertices[i];
@@ -899,15 +898,15 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
               const d = Math.sqrt(distToSegmentSquared(clickWorldX, clickWorldY, v0.x, v0.y, v1.x, v1.y));
               if (d < distWorld) distWorld = d;
             }
-            if (entity.shape || entity.closed) {
+            if (entity.shape || entity.closed || entity.type === '3DFACE') {
               const v0 = entity.vertices[entity.vertices.length - 1];
               const v1 = entity.vertices[0];
               const d = Math.sqrt(distToSegmentSquared(clickWorldX, clickWorldY, v0.x, v0.y, v1.x, v1.y));
               if (d < distWorld) distWorld = d;
             }
           }
-        } else if (entity.type === 'POINT') {
-          const pt = entity.position || (entity.vertices && entity.vertices[0]);
+        } else if (entity.type === 'POINT' || entity.type === 'INSERT') {
+          const pt = entity.position || entity.insertionPoint || (entity.vertices && entity.vertices[0]);
           if (pt) {
             distWorld = Math.hypot(clickWorldX - pt.x, clickWorldY - pt.y);
           }
@@ -923,7 +922,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             const dCenter = Math.hypot(clickWorldX - entity.center.x, clickWorldY - entity.center.y);
             distWorld = Math.abs(dCenter - r);
           }
-        } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+        } else if (entity.type === 'TEXT' || entity.type === 'MTEXT' || entity.type === 'ATTRIB') {
           const pt = entity.startPoint || entity.position || (entity.vertices && entity.vertices[0]);
           if (pt) {
             distWorld = Math.hypot(clickWorldX - pt.x, clickWorldY - pt.y);
@@ -1118,23 +1117,19 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                 <Upload size={13} className="text-cyan-600" />
-                1. DXF Dosyası Seç
+                1. CAD Dosyası Seç
               </h3>
-              {pendingFile && (
-                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1">
-                  <CheckCircle size={10} /> Seçildi
-                </span>
-              )}
+              <span className="text-[10px] font-mono text-slate-500">DXF · DWG · DGN</span>
             </div>
             
             <label className="border border-dashed border-slate-300 hover:border-cyan-500 rounded-xl px-2.5 py-1.5 flex items-center gap-2 cursor-pointer transition-all bg-slate-50 hover:bg-slate-100">
-              <input type="file" accept=".dxf" className="hidden" onChange={handleFileUpload} />
+              <input type="file" accept=".dxf,.dwg,.dgn" className="hidden" onChange={handleFileUpload} />
               <div className="w-6 h-6 bg-cyan-100 rounded-lg flex items-center justify-center text-cyan-700 shrink-0">
                 <Upload size={13} />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium text-slate-800 truncate">
-                  {pendingFile ? pendingFile.name : 'DXF Seç veya Sürükle'}
+                  {pendingFile ? pendingFile.name : 'DXF, DWG veya DGN Seç'}
                 </p>
               </div>
             </label>
@@ -1147,7 +1142,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                 <Compass size={13} className="text-indigo-600" />
                 2. Projeksiyon / CRS
               </h3>
-              <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">İsteğe Bağlı</span>
+              <span className="text-[10px] text-slate-500 font-medium">İsteğe Bağlı</span>
             </div>
             <select
               value={crs}
@@ -1167,7 +1162,7 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
             <button
               onClick={handleParse}
               disabled={!pendingFile || isParsing}
-              className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-sm ${
+              className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer ${
                 !pendingFile || isParsing
                   ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
                   : 'bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500'
@@ -1186,13 +1181,26 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
               )}
             </button>
 
-            {uploadMessage && (
+            {parseError && (
+              <div className="text-[10px] p-2 rounded-xl border bg-rose-50 border-rose-200 text-rose-800 font-medium flex items-start gap-1.5 leading-snug">
+                <AlertTriangle size={13} className="shrink-0 text-rose-600 mt-0.5" />
+                <span>{parseError}</span>
+              </div>
+            )}
+
+            {uploadMessage && !parseError && (
               <div className={`text-[10px] p-1.5 rounded-xl border leading-tight ${
                 isParsed 
                   ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-medium' 
                   : 'bg-slate-100 border-slate-200 text-slate-700'
               }`}>
                 {uploadMessage}
+              </div>
+            )}
+
+            {parseWarnings.length > 0 && (
+              <div className="text-[10px] p-1.5 rounded-xl border bg-amber-50 border-amber-200 text-amber-800 font-medium leading-tight">
+                {parseWarnings.join(' ')}
               </div>
             )}
           </div>
@@ -1261,9 +1269,13 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
           
           {/* Canvas Toolbar Header */}
           <div className="px-3 py-2 bg-slate-100 border-b border-slate-300 flex flex-wrap items-center justify-between gap-2 z-10 shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 animate-pulse" />
+            <div className="flex items-center gap-2.5">
               <h3 className="text-xs font-bold text-slate-900">2D CAD Görüntüleme Ekranı</h3>
+              {isParsed && (
+                <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                  {cadFormat} · {expandedEntities.length} Obje · {layers.length} Katman
+                </span>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1504,11 +1516,11 @@ const DXFAnalysis: React.FC<DXFAnalysisProps> = ({
                   <p className="text-xs text-slate-600">
                     {mobileTab === 'map' ? (
                       <>
-                        Üstteki <span className="text-cyan-700 font-bold">Paneli Aç</span> butonundan bir .dxf dosyası seçip haritanızı ekrana yükleyebilirsiniz.
+                        Üstteki <span className="text-cyan-700 font-bold">Paneli Aç</span> butonundan bir .dxf, .dwg veya .dgn dosyası seçip haritanızı ekrana yükleyebilirsiniz.
                       </>
                     ) : (
                       <>
-                        Sol taraftaki panelden bir .dxf dosyası seçip &apos;Dosyayı Aç / Ayrıştır&apos; butonuna basarak haritanızı ekrana yükleyebilirsiniz.
+                        Sol taraftaki panelden bir .dxf, .dwg veya .dgn dosyası seçip &apos;Dosyayı Aç / Ayrıştır&apos; butonuna basarak haritanızı ekrana yükleyebilirsiniz.
                       </>
                     )}
                   </p>

@@ -38,7 +38,7 @@ const Header: React.FC<HeaderProps> = ({
       case 'about':
         return 'Yardım & Hakkında';
       case 'dxf-analysis':
-        return 'DXF Dosya Analizleri';
+        return 'CAD Dosya Analizleri';
       case 'dem-generator':
         return 'Sayısal Yükseklik Modeli (DEM) Üretici';
       case 'one-d-analysis':

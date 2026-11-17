@@ -1,20 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Layers, Play, Download, CheckCircle, AlertTriangle, 
-  RefreshCw, BarChart2, Eye, Grid, Mountain, Sparkles, FileText,
-  Upload, FileCode, Sliders, ZoomIn, ZoomOut, RotateCcw, ArrowRight,
-  Droplets, Check
+  Layers, Play, Download, AlertTriangle, 
+  RefreshCw, Eye, Grid, Mountain, FileText,
+  Upload, FileCode, Sliders, ZoomIn, RotateCcw, ArrowRight,
+  Droplets
 } from 'lucide-react';
-import DxfParser from 'dxf-parser';
 import { 
-  extractPointsFromDXF, 
+  extractPointsWithStatsFromCAD,
+  CADPointExtractStats,
   generateTINDEM, 
   renderDEMToCanvas, 
   exportDEMToASC, 
   exportDEMToGeoTIFF, 
   DEMResult 
 } from '../utils/demGenerator';
-import { parseDXFBuffer } from '../utils/dxfUtils';
+import { parseCADFile } from '../utils/cadParser';
 
 export interface CADLayer {
   name: string;
@@ -116,8 +116,14 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [isParsing, setIsParsing] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
 
   const [cellSize, setCellSize] = useState<number>(2.0);
+
+  // CAD Elevation Extraction Options
+  const [includeBlocks, setIncludeBlocks] = useState<boolean>(true);
+  const [extractTextElevations, setExtractTextElevations] = useState<boolean>(false);
+  const [excludeZeroZ, setExcludeZeroZ] = useState<boolean>(false);
 
   const [minZFilter, setMinZFilter] = useState<string>('');
   const [maxZFilter, setMaxZFilter] = useState<string>('');
@@ -126,6 +132,13 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
   const [zeroCount, setZeroCount] = useState<number>(0);
   const [totalDetectedPoints, setTotalDetectedPoints] = useState<number>(0);
   const [nonZeroMinZ, setNonZeroMinZ] = useState<number | null>(null);
+  const [extractStats, setExtractStats] = useState<CADPointExtractStats>({
+    totalPoints: 0,
+    blockPoints: 0,
+    textKotPoints: 0,
+    zeroPoints: 0,
+    excludedZeroPoints: 0,
+  });
 
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [demResult, setDemResult] = useState<DEMResult | null>(null);
@@ -140,8 +153,9 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
   const activeLayers = layers.filter(l => l.visible);
   const activeLayerNames = new Set(activeLayers.map(l => l.name));
+  const cadFormat: string = dxfData?.metadata?.format || 'DXF';
 
-  // Detect Z statistics from active layers
+  // Detect Z statistics from active layers and CAD extraction options
   useEffect(() => {
     if (!dxfData) {
       setDetectedMinZ(null);
@@ -149,14 +163,27 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
       setZeroCount(0);
       setTotalDetectedPoints(0);
       setNonZeroMinZ(null);
+      setExtractStats({
+        totalPoints: 0,
+        blockPoints: 0,
+        textKotPoints: 0,
+        zeroPoints: 0,
+        excludedZeroPoints: 0,
+      });
       return;
     }
 
-    const points = extractPointsFromDXF(dxfData, activeLayerNames);
+    const { points, stats } = extractPointsWithStatsFromCAD(dxfData, activeLayerNames, {
+      includeBlocks,
+      extractTextElevations,
+      excludeZeroZ,
+    });
+    setExtractStats(stats);
+
     if (points.length === 0) {
       setDetectedMinZ(null);
       setDetectedMaxZ(null);
-      setZeroCount(0);
+      setZeroCount(stats.zeroPoints);
       setTotalDetectedPoints(0);
       setNonZeroMinZ(null);
       return;
@@ -165,24 +192,21 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
     let minZ = Infinity;
     let maxZ = -Infinity;
     let posMinZ = Infinity;
-    let zeros = 0;
 
     points.forEach(p => {
       if (p.z < minZ) minZ = p.z;
       if (p.z > maxZ) maxZ = p.z;
-      if (Math.abs(p.z) < 1e-3) {
-        zeros++;
-      } else if (p.z > 0 && p.z < posMinZ) {
+      if (p.z > 0 && p.z < posMinZ) {
         posMinZ = p.z;
       }
     });
 
     setDetectedMinZ(minZ === Infinity ? null : minZ);
     setDetectedMaxZ(maxZ === -Infinity ? null : maxZ);
-    setZeroCount(zeros);
+    setZeroCount(stats.zeroPoints);
     setTotalDetectedPoints(points.length);
     setNonZeroMinZ(posMinZ === Infinity ? null : posMinZ);
-  }, [dxfData, layers]);
+  }, [dxfData, layers, includeBlocks, extractTextElevations, excludeZeroZ]);
 
   // Render canvas whenever DEM result changes
   useEffect(() => {
@@ -191,40 +215,54 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
     }
   }, [demResult]);
 
+  const parseSelectedFile = async (file: File) => {
+    const ext = file.name.split('.').pop()?.toUpperCase() || 'CAD';
+    setIsParsing(true);
+    setErrorMsg(null);
+    setParseWarnings([]);
+    setUploadMessage(
+      ext === 'DWG' || ext === 'DGN'
+        ? `${ext} WASM motoru hazırlanıyor ve ayrıştırılıyor...`
+        : `${ext} dosyası ayrıştırılıyor...`
+    );
+
+    try {
+      const result = await parseCADFile(file);
+      setDxfData(result.parsed);
+      setDxfFileName(file.name);
+      setLayers(result.extractedLayers);
+      setDemResult(null);
+      setPendingFile(null);
+      setParseWarnings(result.warnings || []);
+      setUploadMessage(
+        `${result.format} yüklendi: ${result.extractedLayers.length} katman, ${result.stats.entityCount} obje.`
+      );
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'CAD dosyası ayrıştırılamadı. Geçerli bir DXF, DWG veya V7 DGN seçtiğinizden emin olun.');
+      setUploadMessage(null);
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setPendingFile(file);
+    setErrorMsg(null);
     setUploadMessage(`Dosya seçildi: ${file.name}`);
+  };
+
+  const handleReplaceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    await parseSelectedFile(file);
   };
 
   const handleParseDXF = async () => {
     if (!pendingFile) return;
-    setIsParsing(true);
-    setUploadMessage('DXF dosyası ayrıştırılıyor...');
-
-    try {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const buffer = e.target?.result as ArrayBuffer;
-          const { parsed, extractedLayers } = parseDXFBuffer(buffer);
-
-          setDxfData(parsed);
-          setDxfFileName(pendingFile.name);
-          setLayers(extractedLayers);
-          setUploadMessage(`Ayrıştırma başarılı! ${extractedLayers.length} katman bulundu.`);
-        } catch (err: any) {
-          setUploadMessage(`Ayrıştırma hatası: ${err.message || 'Geçersiz DXF'}`);
-        } finally {
-          setIsParsing(false);
-        }
-      };
-      reader.readAsArrayBuffer(pendingFile);
-    } catch (err: any) {
-      setUploadMessage(`Hata: ${err.message}`);
-      setIsParsing(false);
-    }
+    await parseSelectedFile(pendingFile);
   };
 
   const toggleLayer = (layerName: string) => {
@@ -233,7 +271,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
   const handleGenerateDEM = async () => {
     if (!dxfData) {
-      setErrorMsg('Lütfen önce geçerli bir DXF dosyası yükleyin.');
+      setErrorMsg('Lütfen önce geçerli bir DXF, DWG veya V7 DGN dosyası yükleyin.');
       return;
     }
 
@@ -244,7 +282,11 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
     await new Promise(resolve => setTimeout(resolve, 50));
 
     try {
-      let points = extractPointsFromDXF(dxfData, activeLayerNames);
+      let { points } = extractPointsWithStatsFromCAD(dxfData, activeLayerNames, {
+        includeBlocks,
+        extractTextElevations,
+        excludeZeroZ,
+      });
 
       // Apply Min Z & Max Z Filter
       if (minZFilter.trim() !== '' && !isNaN(Number(minZFilter))) {
@@ -258,7 +300,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
 
       if (points.length < 3) {
         throw new Error(
-          `Seçili katmanlarda ve uygulanan Z filtresine (${minZFilter || '-∞'}m - ${maxZFilter || '+∞'}m) uyan en az 3 adet 3D nokta bulunamadı.`
+          `Seçili katmanlarda ve uygulanan Z filtresine (${minZFilter || '-∞'}m - ${maxZFilter || '+∞'}m) uyan en az 3 adet 3D nokta bulunamadı. 2D çizimlerde 'Yazılardan sayısal kot oku' seçeneğini açmayı deneyin.`
         );
       }
 
@@ -347,38 +389,50 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
           mobileTab === 'controls' ? 'flex' : 'hidden lg:flex'
         }`}>
           
-          {/* Card 1: DXF Dosya Kaynağı & Koordinat Sistemi */}
+          {/* Card 1: CAD Dosya Kaynağı & Koordinat Sistemi */}
           <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2.5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                 <FileCode size={14} className="text-cyan-700" />
-                1. DXF Dosya Kaynağı
+                1. CAD Dosya Kaynağı
               </h3>
-              {dxfFileName && (
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-mono font-bold border border-emerald-300">
-                  Yüklendi
-                </span>
-              )}
+              <span className="text-[10px] font-mono text-slate-500">
+                {dxfData ? cadFormat : 'DXF · DWG · DGN'}
+              </span>
             </div>
 
             {dxfData ? (
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-600 font-medium">Dosya:</span>
-                  <span className="text-slate-900 font-mono font-bold truncate max-w-[150px]">{dxfFileName || 'CAD_Map.dxf'}</span>
+                <div className="flex items-center justify-between text-xs gap-2">
+                  <span className="text-slate-900 font-mono font-bold truncate">{dxfFileName || 'CAD_Harita'}</span>
+                  <label className="text-[10px] text-cyan-700 hover:text-cyan-900 font-bold cursor-pointer shrink-0 underline">
+                    {isParsing ? 'Yükleniyor...' : 'Değiştir'}
+                    <input
+                      type="file"
+                      accept=".dxf,.dwg,.dgn"
+                      disabled={isParsing}
+                      onChange={handleReplaceFileUpload}
+                      className="hidden"
+                    />
+                  </label>
                 </div>
-                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
-                  <span className="text-slate-600 font-medium">Aktif Katman:</span>
+                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200 font-mono tabular-nums">
+                  <span className="text-slate-600 font-sans">Aktif Katman</span>
                   <span className="text-emerald-700 font-bold">{activeLayers.length} / {layers.length}</span>
                 </div>
+                {parseWarnings.length > 0 && (
+                  <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 leading-snug">
+                    {parseWarnings.join(' ')}
+                  </p>
+                )}
               </div>
             ) : (
               <div className="space-y-2">
                 <label className="border-2 border-dashed border-slate-300 hover:border-cyan-600 bg-slate-50 hover:bg-slate-100/80 rounded-xl p-2.5 text-center cursor-pointer block transition-colors shadow-sm">
                   <Upload size={18} className="mx-auto text-slate-500 mb-1" />
-                  <span className="text-xs text-slate-800 font-bold block">.dxf Dosyası Seçin</span>
-                  <span className="text-[10px] text-slate-500 block">CAD / GIS Harita Verisi</span>
-                  <input type="file" accept=".dxf" onChange={handleFileUpload} className="hidden" />
+                  <span className="text-xs text-slate-800 font-bold block">.dxf / .dwg / .dgn Dosyası Seçin</span>
+                  <span className="text-[10px] text-slate-500 block">Tarayıcı Tabanlı WASM CAD Motoru</span>
+                  <input type="file" accept=".dxf,.dwg,.dgn" onChange={handleFileUpload} className="hidden" />
                 </label>
 
                 {pendingFile && (
@@ -388,7 +442,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                     className="w-full py-2 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     {isParsing ? <RefreshCw size={13} className="animate-spin" /> : <Eye size={13} />}
-                    <span>{isParsing ? 'Ayrıştırılıyor...' : 'DXF Ayrıştır'}</span>
+                    <span>{isParsing ? 'Ayrıştırılıyor...' : 'CAD Dosyasını Ayrıştır'}</span>
                   </button>
                 )}
 
@@ -503,54 +557,93 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                 <div className="h-full min-h-[90px] flex flex-col items-center justify-center text-center p-3 text-slate-400 space-y-1.5 bg-slate-50/70 rounded-xl border border-dashed border-slate-200">
                   <Layers size={22} className="text-slate-300" />
                   <p className="text-[11px] text-slate-500 font-medium leading-tight">
-                    DXF dosyası yüklendiğinde katmanlar burada listelenecektir.
+                    CAD dosyası (.dxf, .dwg, .dgn) yüklendiğinde katmanlar burada listelenecektir.
                   </p>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Card 3: Kot (Z) Yükseklik Filtresi & İstatistikleri */}
+          {/* Card 3: Kot Okuma Seçenekleri & Z Filtresi */}
           <div className="bg-white border border-slate-300 rounded-2xl p-3 shrink-0 shadow-sm space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                 <Sliders size={13} className="text-cyan-700" />
-                3. Kot (Z) Yükseklik Filtresi
+                3. Kot Okuma & Z Filtresi
               </label>
               {(minZFilter || maxZFilter) && (
                 <button
                   onClick={() => { setMinZFilter(''); setMaxZFilter(''); }}
-                  className="text-[10px] text-cyan-700 hover:underline font-mono font-bold"
+                  className="text-[10px] text-cyan-700 hover:underline font-mono font-bold cursor-pointer"
                 >
-                  Filtreyi Temizle
+                  Temizle
                 </button>
               )}
             </div>
 
+            {/* CAD Elevation Extraction Options */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1.5">
+              <label className="flex items-center justify-between gap-2 text-[11px] text-slate-800 font-medium cursor-pointer select-none">
+                <span>Blok (INSERT) noktalarını çöz</span>
+                <input
+                  type="checkbox"
+                  checked={includeBlocks}
+                  onChange={(e) => setIncludeBlocks(e.target.checked)}
+                  className="accent-cyan-700 w-3.5 h-3.5 cursor-pointer"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-2 text-[11px] text-slate-800 font-medium cursor-pointer select-none">
+                <span>Yazılardan (TEXT/MTEXT) kot oku</span>
+                <input
+                  type="checkbox"
+                  checked={extractTextElevations}
+                  onChange={(e) => setExtractTextElevations(e.target.checked)}
+                  className="accent-cyan-700 w-3.5 h-3.5 cursor-pointer"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-2 text-[11px] text-slate-800 font-medium cursor-pointer select-none">
+                <span>Z = 0.00 m noktalarını hariç tut</span>
+                <input
+                  type="checkbox"
+                  checked={excludeZeroZ}
+                  onChange={(e) => setExcludeZeroZ(e.target.checked)}
+                  className="accent-cyan-700 w-3.5 h-3.5 cursor-pointer"
+                />
+              </label>
+            </div>
+
             {/* Detected Stats Info Box */}
-            {dxfData && detectedMinZ !== null && detectedMaxZ !== null && (
+            {dxfData && (
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-600 font-medium">Aktif Katman Kotları:</span>
-                  <span className="font-mono font-bold text-cyan-800">
-                    {detectedMinZ.toFixed(1)}m — {detectedMaxZ.toFixed(1)}m
+                  <span className="text-slate-600 font-medium">Kot Aralığı:</span>
+                  <span className="font-mono tabular-nums font-bold text-cyan-800">
+                    {detectedMinZ !== null && detectedMaxZ !== null
+                      ? `${detectedMinZ.toFixed(1)}m — ${detectedMaxZ.toFixed(1)}m`
+                      : 'Kot verisi yok'}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-600">
-                  <span>Toplam Nokta: <strong className="text-slate-900">{totalDetectedPoints}</strong></span>
+                <div className="text-[10px] text-slate-600 font-mono tabular-nums flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
+                  <span>
+                    Nokta: <strong className="text-slate-900">{totalDetectedPoints}</strong>
+                    {extractStats.blockPoints > 0 && ` · Blok: ${extractStats.blockPoints}`}
+                    {extractStats.textKotPoints > 0 && ` · Yazı: ${extractStats.textKotPoints}`}
+                  </span>
                   {zeroCount > 0 && (
-                    <span className="text-amber-700 font-bold">Kot 0 olan: {zeroCount} nokta</span>
+                    <span className="text-amber-700 font-semibold">
+                      Z=0: {zeroCount}{excludeZeroZ ? ' (hariç)' : ''}
+                    </span>
                   )}
                 </div>
 
-                {zeroCount > 0 && nonZeroMinZ !== null && (
+                {!excludeZeroZ && zeroCount > 0 && nonZeroMinZ !== null && (
                   <button
-                    onClick={() => {
-                      setMinZFilter(String(Math.floor(nonZeroMinZ)));
-                    }}
-                    className="w-full mt-1 py-1 px-2 bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all"
+                    onClick={() => setExcludeZeroZ(true)}
+                    className="w-full mt-1 py-1 px-2 bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer"
                   >
-                    <span>⚡ Sıfır (0m) Kotları Filtrele (Min {Math.floor(nonZeroMinZ)}m Yap)</span>
+                    <span>Z = 0.00 m ({zeroCount} nokta) Hariç Tut</span>
                   </button>
                 )}
               </div>
@@ -567,7 +660,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                     placeholder={detectedMinZ !== null ? String(detectedMinZ.toFixed(1)) : 'Min'}
                     value={minZFilter}
                     onChange={(e) => setMinZFilter(e.target.value)}
-                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 text-xs text-slate-900 px-2 py-1.5 rounded-xl outline-none font-mono shadow-sm"
+                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 text-xs text-slate-900 px-2 py-1.5 rounded-xl outline-none font-mono tabular-nums shadow-sm"
                   />
                   {minZFilter && (
                     <button 
@@ -589,7 +682,7 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
                     placeholder={detectedMaxZ !== null ? String(detectedMaxZ.toFixed(1)) : 'Max'}
                     value={maxZFilter}
                     onChange={(e) => setMaxZFilter(e.target.value)}
-                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 text-xs text-slate-900 px-2 py-1.5 rounded-xl outline-none font-mono shadow-sm"
+                    className="w-full bg-white border border-slate-300 focus:border-cyan-600 text-xs text-slate-900 px-2 py-1.5 rounded-xl outline-none font-mono tabular-nums shadow-sm"
                   />
                   {maxZFilter && (
                     <button 
@@ -675,16 +768,13 @@ const DEMGenerator: React.FC<DEMGeneratorProps> = ({
           
           {/* Viewer Toolbar Header */}
           <div className="px-3 py-2 bg-slate-100 border-b border-slate-300 flex items-center justify-between z-10 shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 animate-pulse" />
-              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-2">
-                Topoğrafik Yükseklik Haritası (DEM)
-                {demResult && (
-                  <span className="text-[10px] bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-md font-mono border border-cyan-300 font-bold">
-                    TIN Surface ({demResult.cols}x{demResult.rows})
-                  </span>
-                )}
-              </h3>
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-xs font-bold text-slate-900">Topoğrafik Yükseklik Haritası (DEM)</h3>
+              {demResult && (
+                <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                  Delaunay TIN · {demResult.cols}×{demResult.rows} · {demResult.pointCount} Nokta
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2">

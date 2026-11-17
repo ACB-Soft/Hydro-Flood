@@ -169,10 +169,10 @@ const Dashboard: React.FC<DashboardProps> = ({
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900 group-hover:text-indigo-700 transition-colors">
-                  DXF Dosya & CBS Harita Analizleri
+                  CAD Dosya & CBS Harita Analizleri
                 </h3>
                 <p className="text-xs text-slate-600 leading-relaxed mt-1">
-                  CAD (.dxf) harita çizimlerini yükleyin, katman yönetimini yapın, EPSG projeksiyon dönüşümü ile Google Earth / Esri / OSM altlıkları üzerinde 2D vektör harita analizi gerçekleştirin.
+                  CAD (.dxf, .dwg, .dgn) harita çizimlerini yükleyin, katman yönetimini yapın, EPSG projeksiyon dönüşümü ile Google Earth / Esri / OSM altlıkları üzerinde 2D vektör harita analizi gerçekleştirin.
                 </p>
               </div>
             </div>
@@ -181,7 +181,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               onClick={onOpenDXFAnalysis}
               className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-sm rounded-xl border border-indigo-500 shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
             >
-              <span>DXF Portalı Aç</span>
+              <span>CAD Portalını Aç</span>
               <ArrowRight size={16} />
             </button>
           </div>
@@ -202,7 +202,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                   DEM & Topografya Üretici
                 </h3>
                 <p className="text-xs text-slate-600 leading-relaxed mt-1">
-                  CAD projelerinizdeki kot noktalarından (Point) ve eşyükselti eğrilerinden (Izohips) 3D sayısal yükseklik matrisi (GeoTIFF) oluşturun.
+                  CAD (.dxf, .dwg, .dgn) projelerinizdeki kot noktalarından, bloklardan, kot yazılarından ve eşyükselti eğrilerinden (Izohips) 3D sayısal yükseklik matrisi (GeoTIFF) oluşturun.
                 </p>
               </div>
             </div>

@@ -1,9 +1,24 @@
 import Delaunator from 'delaunator';
+import { expandCADEntities, parseNumericElevationFromText } from './cadGeometry';
 
 export interface DEMPoint {
   x: number;
   y: number;
   z: number;
+}
+
+export interface CADPointExtractOptions {
+  includeBlocks?: boolean;
+  extractTextElevations?: boolean;
+  excludeZeroZ?: boolean;
+}
+
+export interface CADPointExtractStats {
+  totalPoints: number;
+  blockPoints: number;
+  textKotPoints: number;
+  zeroPoints: number;
+  excludedZeroPoints: number;
 }
 
 export interface DEMResult {
@@ -24,63 +39,142 @@ export interface DEMResult {
 }
 
 /**
- * Extracts 3D points from active layers of parsed DXF data
+ * Extracts 3D points & extraction diagnostics from active layers of parsed CAD data
  */
-export function extractPointsFromDXF(dxfData: any, activeLayerNames: Set<string>): DEMPoint[] {
+export function extractPointsWithStatsFromCAD(
+  dxfData: any,
+  activeLayerNames: Set<string>,
+  options: CADPointExtractOptions = {}
+): { points: DEMPoint[]; stats: CADPointExtractStats } {
+  const emptyStats: CADPointExtractStats = {
+    totalPoints: 0,
+    blockPoints: 0,
+    textKotPoints: 0,
+    zeroPoints: 0,
+    excludedZeroPoints: 0,
+  };
+
   if (!dxfData || !dxfData.entities || !Array.isArray(dxfData.entities)) {
-    return [];
+    return { points: [], stats: emptyStats };
   }
 
-  const points: DEMPoint[] = [];
+  const {
+    includeBlocks = true,
+    extractTextElevations = false,
+    excludeZeroZ = false,
+  } = options;
 
-  const addPoint = (x: number, y: number, z: number | undefined) => {
+  const points: DEMPoint[] = [];
+  let blockPoints = 0;
+  let textKotPoints = 0;
+  let zeroPoints = 0;
+  let excludedZeroPoints = 0;
+
+  const addPoint = (
+    x: number,
+    y: number,
+    z: number | undefined,
+    fromBlock = false,
+    fromTextKot = false
+  ) => {
     if (typeof x === 'number' && !isNaN(x) && typeof y === 'number' && !isNaN(y)) {
-      const elevation = (typeof z === 'number' && !isNaN(z)) ? z : 0;
+      const elevation = typeof z === 'number' && !isNaN(z) ? z : 0;
+      const isZero = Math.abs(elevation) < 1e-6;
+      if (isZero) {
+        zeroPoints++;
+        if (excludeZeroZ) {
+          excludedZeroPoints++;
+          return;
+        }
+      }
+      if (fromBlock) blockPoints++;
+      if (fromTextKot) textKotPoints++;
       points.push({ x, y, z: elevation });
     }
   };
 
-  dxfData.entities.forEach((entity: any) => {
-    if (!entity.layer || !activeLayerNames.has(entity.layer)) {
+  const expandedEntities = expandCADEntities(dxfData.entities, dxfData.blocks, {
+    expandInserts: includeBlocks,
+  });
+
+  expandedEntities.forEach((entity: any) => {
+    const layerName = entity.layer || '0';
+    if (!activeLayerNames.has(layerName)) {
       return;
     }
 
     const type = entity.type;
+    const fromBlock = Boolean(entity._fromBlock);
     const entityElev = typeof entity.elevation === 'number' ? entity.elevation : undefined;
 
     if (type === 'POINT') {
       const pos = entity.position || (entity.vertices && entity.vertices[0]);
       if (pos) {
-        addPoint(pos.x, pos.y, pos.z ?? entityElev);
+        addPoint(pos.x, pos.y, pos.z ?? entityElev, fromBlock, false);
+      }
+    } else if (type === 'INSERT') {
+      // Fallback when INSERT has no expandable block geometry
+      const pos = entity.position || entity.insertionPoint;
+      if (pos) {
+        addPoint(pos.x, pos.y, pos.z ?? entityElev, true, false);
       }
     } else if (type === 'LINE') {
       const v0 = entity.vertices ? entity.vertices[0] : entity.startPoint;
       const v1 = entity.vertices ? entity.vertices[1] : entity.endPoint;
-      if (v0) addPoint(v0.x, v0.y, v0.z ?? entityElev);
-      if (v1) addPoint(v1.x, v1.y, v1.z ?? entityElev);
-    } else if (type === 'LWPOLYLINE' || type === 'POLYLINE' || type === '3DFACE' || type === 'SPLINE') {
+      if (v0) addPoint(v0.x, v0.y, v0.z ?? entityElev, fromBlock, false);
+      if (v1) addPoint(v1.x, v1.y, v1.z ?? entityElev, fromBlock, false);
+    } else if (
+      type === 'LWPOLYLINE' ||
+      type === 'POLYLINE' ||
+      type === '3DFACE' ||
+      type === 'SPLINE'
+    ) {
       if (Array.isArray(entity.vertices)) {
         entity.vertices.forEach((v: any) => {
-          addPoint(v.x, v.y, v.z ?? entityElev);
+          addPoint(v.x, v.y, v.z ?? entityElev, fromBlock, false);
         });
       }
-    } else if (type === 'TEXT' || type === 'MTEXT') {
-      // Use text element Z coordinate if explicitly set, no string-to-number parsing
+    } else if (type === 'TEXT' || type === 'MTEXT' || type === 'ATTRIB') {
       const pt = entity.position || entity.startPoint || (entity.vertices && entity.vertices[0]);
       if (pt) {
         const explicitZ = pt.z ?? entityElev;
-        if (typeof explicitZ === 'number' && !isNaN(explicitZ) && explicitZ !== 0) {
-          addPoint(pt.x, pt.y, explicitZ);
+        if (typeof explicitZ === 'number' && !isNaN(explicitZ) && Math.abs(explicitZ) >= 1e-6) {
+          addPoint(pt.x, pt.y, explicitZ, fromBlock, false);
+        } else if (extractTextElevations) {
+          const parsedKot = parseNumericElevationFromText(entity.text ?? entity.string);
+          if (parsedKot !== null) {
+            addPoint(pt.x, pt.y, parsedKot, fromBlock, true);
+          }
         }
       }
     } else if (type === 'CIRCLE' || type === 'ARC') {
       if (entity.center) {
-        addPoint(entity.center.x, entity.center.y, entity.center.z ?? entityElev);
+        addPoint(entity.center.x, entity.center.y, entity.center.z ?? entityElev, fromBlock, false);
       }
     }
   });
 
-  return points;
+  return {
+    points,
+    stats: {
+      totalPoints: points.length,
+      blockPoints,
+      textKotPoints,
+      zeroPoints,
+      excludedZeroPoints,
+    },
+  };
+}
+
+/**
+ * Extracts 3D points from active layers of parsed DXF/DWG/DGN data
+ */
+export function extractPointsFromDXF(
+  dxfData: any,
+  activeLayerNames: Set<string>,
+  options: CADPointExtractOptions = {}
+): DEMPoint[] {
+  return extractPointsWithStatsFromCAD(dxfData, activeLayerNames, options).points;
 }
 
 /**
