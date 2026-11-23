@@ -99,6 +99,7 @@ import { CRS_LIST, CRSItem } from '../utils/crsList';
 import { MapAutoCenter } from './MapHelpers';
 import ManningLibraryModal from './ManningLibraryModal';
 import { CrossSectionManagerModal } from './CrossSectionManagerModal';
+import { HydrographSourceModal, HydrographSourceCoord } from './HydrographSourceModal';
 
 interface OneDAnalysisProps {
   onBackToDashboard: () => void;
@@ -279,6 +280,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [hydroPasteOpen, setHydroPasteOpen] = useState<boolean>(false);
   const [hydroPasteText, setHydroPasteText] = useState<string>('');
   const [hydroPasteError, setHydroPasteError] = useState<string | null>(null);
+  const [isHydrographSourceModalOpen, setIsHydrographSourceModalOpen] = useState<boolean>(false);
+  const [isSelectingHydrographLocationOnMap, setIsSelectingHydrographLocationOnMap] = useState<boolean>(false);
+  const [hydrographSourcePoint, setHydrographSourcePoint] = useState<HydrographSourceCoord | null>(null);
 
   // Computed topographic bed slope from cross sections (uses main channel bed)
   const detectedBedSlope = useMemo(() => {
@@ -363,6 +367,9 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         allPoints.push(...ring);
       });
     }
+    if (hydrographSourcePoint) {
+      allPoints.push([hydrographSourcePoint.lat, hydrographSourcePoint.lon]);
+    }
     if (allPoints.length === 0) {
       return demOverlay?.wgs84Bounds || null;
     }
@@ -380,7 +387,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
       [minLat - 0.002, minLon - 0.002],
       [maxLat + 0.002, maxLon + 0.002]
     ];
-  }, [centerlineCoords, detectedThalwegCoords, leftBankCoords, rightBankCoords, sections, structures, demOverlay, studyAreaKml]);
+  }, [centerlineCoords, detectedThalwegCoords, leftBankCoords, rightBankCoords, sections, structures, demOverlay, studyAreaKml, hydrographSourcePoint]);
 
   // Handle Centerline KML Upload
   const handleCenterlineUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1742,6 +1749,17 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
     }
     setIsSelectingLocationOnMap(false);
     setIsStructureModalOpen(true);
+  };
+
+  // Interactive Map Click Handler for Automated Hydrograph Source Point
+  const handleMapHydrographLocationSelected = (lat: number, lon: number) => {
+    setHydrographSourcePoint({
+      lat: Number(lat.toFixed(6)),
+      lon: Number(lon.toFixed(6)),
+      label: 'Haritadan Seçilen Nokta',
+    });
+    setIsSelectingHydrographLocationOnMap(false);
+    setIsHydrographSourceModalOpen(true);
   };
 
   // Save Edited Structure
@@ -5685,9 +5703,18 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </div>
                     </div>
 
-                    {/* Action Toolbar: Add Row, Paste, Sort, Open Full Editor, Upload/Template */}
+                    {/* Action Toolbar: Auto API, Add Row, Paste, Sort, Open Full Editor */}
                     <div className="flex flex-wrap items-center justify-between gap-1">
                       <div className="flex items-center gap-1 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setIsHydrographSourceModalOpen(true)}
+                          className="px-2 py-1 bg-cyan-700 hover:bg-cyan-800 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                          title="GloFAS, Yağış-Akış (SCS-CN) veya USGS ağlarından otomatik hidrograf çek"
+                        >
+                          <Globe size={11} />
+                          <span>Otomatik Veri Çek (API)</span>
+                        </button>
                         <button
                           type="button"
                           onClick={handleAddHydrographRow}
@@ -6277,7 +6304,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 {/* Content View: Map or Cross Section Profile or Hydrograph */}
                 <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner">
                   {rightPanelTab === 'map' ? (
-                    !isFileOpened && centerlineCoords.length === 0 && sections.length === 0 && !studyAreaKml ? (
+                    !isFileOpened && centerlineCoords.length === 0 && sections.length === 0 && !studyAreaKml && !isSelectingHydrographLocationOnMap && !hydrographSourcePoint ? (
                       /* Empty Blueprint State matching Analysis.tsx */
                       <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-3.5 p-6 text-center bg-slate-100 relative select-none">
                         <div
@@ -6369,18 +6396,21 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         )}
                         <MapContainer
                           center={
-                            centerlineCoords[0] ||
-                            sections[0]?.centerCoord ||
-                            studyAreaKml?.polygons[0]?.[0] ||
-                            (demOverlay
-                              ? [
-                                  (demOverlay.wgs84Bounds[0][0] + demOverlay.wgs84Bounds[1][0]) / 2,
-                                  (demOverlay.wgs84Bounds[0][1] + demOverlay.wgs84Bounds[1][1]) / 2
-                                ]
-                              : [39.92, 32.85])
+                            hydrographSourcePoint
+                              ? [hydrographSourcePoint.lat, hydrographSourcePoint.lon]
+                              : centerlineCoords[0] ||
+                                sections[0]?.centerCoord ||
+                                studyAreaKml?.polygons[0]?.[0] ||
+                                (demOverlay
+                                  ? [
+                                      (demOverlay.wgs84Bounds[0][0] + demOverlay.wgs84Bounds[1][0]) / 2,
+                                      (demOverlay.wgs84Bounds[0][1] + demOverlay.wgs84Bounds[1][1]) / 2
+                                    ]
+                                  : [39.0, 35.0])
                           }
-                          zoom={13}
+                          zoom={hydrographSourcePoint || centerlineCoords.length > 0 || demOverlay ? 13 : 6}
                           maxZoom={24}
+                          style={isSelectingHydrographLocationOnMap || isSelectingLocationOnMap ? { cursor: 'crosshair' } : undefined}
                           className="w-full h-full"
                         >
                           <TileLayer url={currentBasemap.url} attribution={currentBasemap.attribution} maxZoom={24} maxNativeZoom={20} />
@@ -6619,14 +6649,55 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             );
                           })}
 
-                          {/* Map Click Listener for Structure Location Picking */}
-                          <MapLocationPicker onMapClick={handleMapLocationSelected} active={isSelectingLocationOnMap} />
+                          {hydrographSourcePoint && (
+                            <CircleMarker
+                              center={[hydrographSourcePoint.lat, hydrographSourcePoint.lon]}
+                              radius={8}
+                              pathOptions={{
+                                color: '#ffffff',
+                                fillColor: '#0284c7',
+                                fillOpacity: 0.95,
+                                weight: 2.5,
+                              }}
+                            >
+                              <Tooltip direction="top" offset={[0, -8]} opacity={0.95}>
+                                <div className="text-xs font-semibold font-mono tabular-nums">
+                                  {hydrographSourcePoint.label || 'Hidrograf Noktası'} ({hydrographSourcePoint.lat.toFixed(4)}°, {hydrographSourcePoint.lon.toFixed(4)}°)
+                                </div>
+                              </Tooltip>
+                            </CircleMarker>
+                          )}
+
+                          {/* Map Click Listener for Structure or Hydrograph Location Picking */}
+                          <MapLocationPicker
+                            onMapClick={isSelectingHydrographLocationOnMap ? handleMapHydrographLocationSelected : handleMapLocationSelected}
+                            active={isSelectingLocationOnMap || isSelectingHydrographLocationOnMap}
+                          />
 
                           {mapBounds && <MapAutoCenter bounds={mapBounds} />}
                         </MapContainer>
 
                         {/* Interactive Location Selection Banner */}
-                        {isSelectingLocationOnMap ? (
+                        {isSelectingHydrographLocationOnMap ? (
+                          <div className="absolute top-2.5 left-2.5 right-2.5 z-[500] bg-cyan-900/95 backdrop-blur-md text-white px-3.5 py-2 rounded-xl text-xs flex items-center justify-between shadow-2xl border border-cyan-400/60">
+                            <div className="flex items-center gap-2">
+                              <Compass size={15} className="text-cyan-300" />
+                              <span>
+                                <strong>Hidrograf Konum Seçimi Aktif:</strong> Harita üzerinde akım veya yağış verisi çekilecek noktaya tıklayınız.
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsSelectingHydrographLocationOnMap(false);
+                                setIsHydrographSourceModalOpen(true);
+                              }}
+                              className="px-2.5 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[11px] font-bold transition-all cursor-pointer"
+                            >
+                              İptal
+                            </button>
+                          </div>
+                        ) : isSelectingLocationOnMap ? (
                           <div className="absolute top-2.5 left-2.5 right-2.5 z-[500] bg-cyan-900/95 backdrop-blur-md text-white px-3.5 py-2 rounded-xl text-xs flex items-center justify-between shadow-2xl border border-cyan-400/60 animate-pulse">
                             <div className="flex items-center gap-2">
                               <Compass size={15} className="text-cyan-300 animate-spin" />
@@ -7522,6 +7593,14 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
+                            onClick={() => setIsHydrographSourceModalOpen(true)}
+                            className="px-2.5 py-1 bg-cyan-700 hover:bg-cyan-800 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                          >
+                            <Globe size={12} />
+                            <span>Otomatik Veri Çek (API)</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={handleAddHydrographRow}
                             className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
                           >
@@ -7543,7 +7622,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               setHydrographData(synth);
                               setHydrographFileName('Sentetik Taşkın Hidrografı');
                             }}
-                            className="px-2.5 py-1 bg-cyan-700 hover:bg-cyan-800 text-white rounded-lg text-[11px] font-bold cursor-pointer"
+                            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-[11px] font-bold cursor-pointer"
                           >
                             Sentetik Üret
                           </button>
@@ -8022,6 +8101,27 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         onUpdateSectionManning={handleUpdateSectionManning}
         onExportJson={handleExportCrossSectionsJSON}
         onImportJson={handleImportCrossSectionsJSON}
+      />
+
+      {/* Otomatik Akım Hidrografı (GloFAS / Yağış-Akış SCS-CN / USGS) Modalı */}
+      <HydrographSourceModal
+        isOpen={isHydrographSourceModalOpen}
+        onClose={() => setIsHydrographSourceModalOpen(false)}
+        sourceCoord={hydrographSourcePoint}
+        onChangeSourceCoord={(next) => setHydrographSourcePoint(next)}
+        onStartMapPick={() => {
+          setIsHydrographSourceModalOpen(false);
+          setRightPanelTab('map');
+          setMobileTab('preview');
+          setIsSelectingHydrographLocationOnMap(true);
+        }}
+        centerlineCoords={centerlineCoords}
+        onApplyHydrograph={(points, label) => {
+          setFlowMode('hydrograph');
+          applyHydrographPoints(points, label);
+          setRightPanelTab('hydrograph');
+          setMobileTab('preview');
+        }}
       />
     </div>
   );
