@@ -3,10 +3,7 @@ import {
   X,
   Upload,
   Crosshair,
-  CloudRain,
   Waves,
-  Radio,
-  Search,
   RefreshCw,
   AlertTriangle,
   Check,
@@ -14,15 +11,10 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import {
-  HydrographSourceType,
   GloFASMetric,
   HydrographPreviewResult,
-  USGSSiteCandidate,
   parseHydrographPointKML,
   fetchGloFASDischarge,
-  fetchOpenMeteoPrecipitationAndComputeSCS,
-  discoverUSGSStationsNearPoint,
-  fetchUSGSDischarge,
 } from '../utils/hydrographFetcher';
 
 export interface HydrographSourceCoord {
@@ -56,32 +48,15 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
   centerlineCoords,
   onApplyHydrograph,
 }) => {
-  const [activeSource, setActiveSource] = useState<HydrographSourceType>('glofas');
   const [kmlStatusNote, setKmlStatusNote] = useState<string | null>(null);
   const [coordError, setCoordError] = useState<string | null>(null);
 
-  // GloFAS Parameters
+  // Copernicus GloFAS v4 Parameters
   const [glofasPastDays, setGlofasPastDays] = useState<number>(14);
   const [glofasForecastDays, setGlofasForecastDays] = useState<number>(7);
   const [glofasMetric, setGlofasMetric] = useState<GloFASMetric>('river_discharge');
   const [glofasStepHours, setGlofasStepHours] = useState<1 | 3 | 6 | 24>(1);
   const [glofasPeakWindowOnly, setGlofasPeakWindowOnly] = useState<boolean>(false);
-
-  // SCS-CN Rainfall-Runoff Parameters
-  const [rainPastDays, setRainPastDays] = useState<number>(3);
-  const [rainForecastDays, setRainForecastDays] = useState<number>(3);
-  const [basinAreaKm2, setBasinAreaKm2] = useState<number>(25);
-  const [curveNumber, setCurveNumber] = useState<number>(78);
-  const [tcHours, setTcHours] = useState<number>(2.5);
-  const [baseFlowM3s, setBaseFlowM3s] = useState<number>(1.5);
-
-  // USGS Parameters
-  const [usgsSiteCode, setUsgsSiteCode] = useState<string>('');
-  const [usgsPeriod, setUsgsPeriod] = useState<'P1D' | 'P3D' | 'P7D' | 'P14D'>('P3D');
-  const [usgsStepHours, setUsgsStepHours] = useState<0.5 | 1 | 3>(1);
-  const [usgsCandidates, setUsgsCandidates] = useState<USGSSiteCandidate[]>([]);
-  const [isSearchingUsgs, setIsSearchingUsgs] = useState<boolean>(false);
-  const [usgsSearchMessage, setUsgsSearchMessage] = useState<string | null>(null);
 
   // Fetch & Preview State
   const [isFetching, setIsFetching] = useState<boolean>(false);
@@ -128,66 +103,24 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
     }
   };
 
-  const handleSearchUSGSNear = async () => {
-    setIsSearchingUsgs(true);
-    setUsgsSearchMessage(null);
-    setFetchError(null);
-    try {
-      const sites = await discoverUSGSStationsNearPoint(effectiveCoord.lat, effectiveCoord.lon, 0.4);
-      setUsgsCandidates(sites);
-      if (sites.length === 0) {
-        setUsgsSearchMessage(
-          'Seçili koordinatın ~45 km çevresinde aktif USGS istasyonu bulunamadı (USGS ağı yalnızca ABD sınırları içindedir).'
-        );
-      } else {
-        setUsgsSiteCode(sites[0].siteCode);
-        setUsgsSearchMessage(`${sites.length} aktif USGS istasyonu bulundu; en yakın istasyon seçildi.`);
-      }
-    } catch (err: any) {
-      setUsgsSearchMessage(err?.message || 'USGS istasyon taraması başarısız oldu.');
-    } finally {
-      setIsSearchingUsgs(false);
-    }
-  };
-
   const handleFetchAndPreview = async () => {
     setIsFetching(true);
     setFetchError(null);
     setHoverIdx(null);
 
     try {
-      let result: HydrographPreviewResult;
-      if (activeSource === 'glofas') {
-        result = await fetchGloFASDischarge({
-          lat: effectiveCoord.lat,
-          lon: effectiveCoord.lon,
-          pastDays: glofasPastDays,
-          forecastDays: glofasForecastDays,
-          metric: glofasMetric,
-          stepHours: glofasStepHours,
-          peakWindowOnly: glofasPeakWindowOnly,
-        });
-      } else if (activeSource === 'scs_rain') {
-        result = await fetchOpenMeteoPrecipitationAndComputeSCS({
-          lat: effectiveCoord.lat,
-          lon: effectiveCoord.lon,
-          pastDays: rainPastDays,
-          forecastDays: rainForecastDays,
-          basinAreaKm2,
-          curveNumber,
-          tcHours,
-          baseFlowM3s,
-        });
-      } else {
-        result = await fetchUSGSDischarge({
-          siteCode: usgsSiteCode,
-          period: usgsPeriod,
-          stepHours: usgsStepHours,
-        });
-      }
+      const result = await fetchGloFASDischarge({
+        lat: effectiveCoord.lat,
+        lon: effectiveCoord.lon,
+        pastDays: glofasPastDays,
+        forecastDays: glofasForecastDays,
+        metric: glofasMetric,
+        stepHours: glofasStepHours,
+        peakWindowOnly: glofasPeakWindowOnly,
+      });
       setPreviewResult(result);
     } catch (err: any) {
-      setFetchError(err?.message || 'Hidrograf verisi çekilirken bir hata oluştu.');
+      setFetchError(err?.message || 'GloFAS hidrograf verisi çekilirken bir hata oluştu.');
     } finally {
       setIsFetching(false);
     }
@@ -235,10 +168,10 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
         <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-4 shrink-0">
           <div>
             <h3 className="text-base font-bold text-slate-900 tracking-tight">
-              Otomatik Akım Hidrografı Oluşturucu
+              Otomatik Akım Hidrografı Oluşturucu (GloFAS v4)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Açık hidroloji ve meteoroloji API servislerinden canlı/tahmin verisi çekin, ön izleyin ve saatlik hidrografa aktarın
+              Copernicus GloFAS v4 küresel nehir debisi servisinden geçmiş ve tahmin verisi çekin, ön izleyin ve saatlik hidrografa aktarın
             </p>
           </div>
           <button
@@ -348,356 +281,92 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
             )}
           </div>
 
-          {/* 2. Source Switcher + Configuration */}
+          {/* 2. Copernicus GloFAS v4 Configuration */}
           <div className="space-y-4">
-            <div className="flex items-center gap-1 p-1 bg-slate-100 border border-slate-200 rounded-xl w-fit flex-wrap">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveSource('glofas');
-                  setFetchError(null);
-                }}
-                className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeSource === 'glofas'
-                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Waves size={14} className={activeSource === 'glofas' ? 'text-cyan-700' : ''} />
-                <span>Küresel Nehir Debisi (GloFAS)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveSource('scs_rain');
-                  setFetchError(null);
-                }}
-                className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeSource === 'scs_rain'
-                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <CloudRain size={14} className={activeSource === 'scs_rain' ? 'text-cyan-700' : ''} />
-                <span>Yağış-Akış (SCS-CN)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveSource('usgs');
-                  setFetchError(null);
-                }}
-                className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeSource === 'usgs'
-                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Radio size={14} className={activeSource === 'usgs' ? 'text-cyan-700' : ''} />
-                <span>USGS İstasyon Ağı (ABD)</span>
-              </button>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-900">
+                  <Waves size={15} className="text-cyan-700 shrink-0" />
+                  <span>Copernicus GloFAS v4 — Küresel Nehir Debisi (~5 km grid)</span>
+                </div>
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={glofasPeakWindowOnly}
+                    onChange={(e) => setGlofasPeakWindowOnly(e.target.checked)}
+                    className="rounded border-slate-300 text-cyan-700 focus:ring-cyan-600"
+                  />
+                  <span>Pik dalgası odaklı (±3 gün) kes</span>
+                </label>
+              </div>
+
+              <p className="text-xs text-slate-600">
+                Günlük toplam nehir debisi (m³/s) verisini çeker ve seçilen adıma monoton kübik interpolasyon (PCHIP) ile dönüştürür.
+              </p>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Geçmiş Gün (0–92)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={92}
+                    value={glofasPastDays}
+                    onChange={(e) => setGlofasPastDays(Math.max(0, Math.min(92, Number(e.target.value) || 0)))}
+                    className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Tahmin Günü (1–90)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={glofasForecastDays}
+                    onChange={(e) => setGlofasForecastDays(Math.max(1, Math.min(90, Number(e.target.value) || 7)))}
+                    className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Topluluk İstatistiği</label>
+                  <select
+                    value={glofasMetric}
+                    onChange={(e) => setGlofasMetric(e.target.value as GloFASMetric)}
+                    className="w-full text-xs font-semibold text-slate-900 bg-transparent focus:outline-none"
+                  >
+                    <option value="river_discharge">Standart (Seamless)</option>
+                    <option value="river_discharge_mean">Ortalama (Mean)</option>
+                    <option value="river_discharge_median">Medyan (Median)</option>
+                    <option value="river_discharge_max">Maksimum Senaryo</option>
+                  </select>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Saatlik Örnekleme</label>
+                  <select
+                    value={glofasStepHours}
+                    onChange={(e) => setGlofasStepHours(Number(e.target.value) as 1 | 3 | 6 | 24)}
+                    className="w-full text-xs font-semibold text-slate-900 bg-transparent focus:outline-none font-mono"
+                  >
+                    <option value={1}>1 saat (PCHIP Pürüzsüz)</option>
+                    <option value={3}>3 saat (PCHIP)</option>
+                    <option value={6}>6 saat (PCHIP)</option>
+                    <option value={24}>24 saat (Ham Günlük)</option>
+                  </select>
+                </div>
+              </div>
             </div>
-
-            {/* Source Specific Controls */}
-            {activeSource === 'glofas' && (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
-                  <span>
-                    Copernicus GloFAS v4 (~5 km grid) üzerinden küresel nehir debisi reanalizi ve tahmini çeker (Türkiye dahil).
-                  </span>
-                  <label className="flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={glofasPeakWindowOnly}
-                      onChange={(e) => setGlofasPeakWindowOnly(e.target.checked)}
-                      className="rounded border-slate-300 text-cyan-700 focus:ring-cyan-600"
-                    />
-                    <span>Pik dalgası odaklı (±3 gün) kes</span>
-                  </label>
-                </div>
-
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Geçmiş Gün (0–92)</label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={92}
-                      value={glofasPastDays}
-                      onChange={(e) => setGlofasPastDays(Math.max(0, Math.min(92, Number(e.target.value) || 0)))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Tahmin Günü (1–90)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={90}
-                      value={glofasForecastDays}
-                      onChange={(e) => setGlofasForecastDays(Math.max(1, Math.min(90, Number(e.target.value) || 7)))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Topluluk İstatistiği</label>
-                    <select
-                      value={glofasMetric}
-                      onChange={(e) => setGlofasMetric(e.target.value as GloFASMetric)}
-                      className="w-full text-xs font-semibold text-slate-900 bg-transparent focus:outline-none"
-                    >
-                      <option value="river_discharge">Standart (Seamless)</option>
-                      <option value="river_discharge_mean">Ortalama (Mean)</option>
-                      <option value="river_discharge_median">Medyan (Median)</option>
-                      <option value="river_discharge_max">Maksimum Senaryo</option>
-                    </select>
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Saatlik Örnekleme</label>
-                    <select
-                      value={glofasStepHours}
-                      onChange={(e) => setGlofasStepHours(Number(e.target.value) as 1 | 3 | 6 | 24)}
-                      className="w-full text-xs font-semibold text-slate-900 bg-transparent focus:outline-none font-mono"
-                    >
-                      <option value={1}>1 saat (PCHIP Pürüzsüz)</option>
-                      <option value={3}>3 saat (PCHIP)</option>
-                      <option value={6}>6 saat (PCHIP)</option>
-                      <option value={24}>24 saat (Ham Günlük)</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeSource === 'scs_rain' && (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
-                  <span>
-                    Open-Meteo saatlik yağış verisini alır ve NRCS SCS-CN + Boyutsuz Birim Hidrografı ile küçük/orta dere hidrografına dönüştürür.
-                  </span>
-                  <div className="flex items-center gap-1.5 font-mono tabular-nums text-[11px]">
-                    <span className="text-slate-500">CN Şablonu:</span>
-                    <button
-                      type="button"
-                      onClick={() => setCurveNumber(62)}
-                      className="px-2 py-0.5 bg-white hover:bg-slate-100 border border-slate-300 rounded text-slate-700 font-medium cursor-pointer"
-                    >
-                      Orman 62
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCurveNumber(75)}
-                      className="px-2 py-0.5 bg-white hover:bg-slate-100 border border-slate-300 rounded text-slate-700 font-medium cursor-pointer"
-                    >
-                      Tarım 75
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCurveNumber(88)}
-                      className="px-2 py-0.5 bg-white hover:bg-slate-100 border border-slate-300 rounded text-slate-700 font-medium cursor-pointer"
-                    >
-                      Kentsel 88
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Geçmiş (Gün)</label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={30}
-                      value={rainPastDays}
-                      onChange={(e) => setRainPastDays(Math.max(0, Math.min(30, Number(e.target.value) || 0)))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Tahmin (Gün)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={16}
-                      value={rainForecastDays}
-                      onChange={(e) => setRainForecastDays(Math.max(1, Math.min(16, Number(e.target.value) || 1)))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Havza Alanı (km²)</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min={0.1}
-                      max={50000}
-                      value={basinAreaKm2}
-                      onChange={(e) => setBasinAreaKm2(Math.max(0.1, Number(e.target.value) || 1))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Eğri No (CN)</label>
-                    <input
-                      type="number"
-                      min={30}
-                      max={98}
-                      value={curveNumber}
-                      onChange={(e) => setCurveNumber(Math.max(30, Math.min(98, Number(e.target.value) || 75)))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Toplanma t_c (sa)</label>
-                    <input
-                      type="number"
-                      step="0.25"
-                      min={0.25}
-                      max={72}
-                      value={tcHours}
-                      onChange={(e) => setTcHours(Math.max(0.25, Number(e.target.value) || 1))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Taban Q (m³/s)</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min={0}
-                      max={10000}
-                      value={baseFlowM3s}
-                      onChange={(e) => setBaseFlowM3s(Math.max(0, Number(e.target.value) || 0))}
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeSource === 'usgs' && (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs text-slate-600">
-                    ABD USGS istasyonlarından 15 dakikalık canlı debi verisi çeker ve m³/s saatlik hidrografa çevirir.
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleSearchUSGSNear}
-                      disabled={isSearchingUsgs}
-                      className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
-                    >
-                      {isSearchingUsgs ? <RefreshCw size={13} className="animate-spin" /> : <Search size={13} />}
-                      <span>Konum Çevresinde İstasyon Ara</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUsgsSiteCode('01646500');
-                        setUsgsSearchMessage('Örnek USGS istasyonu (01646500 · Potomac River) seçildi.');
-                      }}
-                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-xs font-medium cursor-pointer whitespace-nowrap"
-                    >
-                      Örnek: 01646500
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">USGS İstasyon Kodu (Site ID)</label>
-                    <input
-                      type="text"
-                      value={usgsSiteCode}
-                      onChange={(e) => setUsgsSiteCode(e.target.value)}
-                      placeholder="ör. 01646500"
-                      className="w-full font-mono tabular-nums text-sm font-semibold text-slate-900 focus:outline-none"
-                    />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Gözlem Penceresi</label>
-                    <select
-                      value={usgsPeriod}
-                      onChange={(e) => setUsgsPeriod(e.target.value as 'P1D' | 'P3D' | 'P7D' | 'P14D')}
-                      className="w-full text-xs font-semibold text-slate-900 bg-transparent focus:outline-none"
-                    >
-                      <option value="P1D">Son 24 Saat</option>
-                      <option value="P3D">Son 3 Gün</option>
-                      <option value="P7D">Son 7 Gün</option>
-                      <option value="P14D">Son 14 Gün</option>
-                    </select>
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-lg p-2.5">
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Saatlik Örnekleme</label>
-                    <select
-                      value={usgsStepHours}
-                      onChange={(e) => setUsgsStepHours(Number(e.target.value) as 0.5 | 1 | 3)}
-                      className="w-full text-xs font-semibold text-slate-900 bg-transparent focus:outline-none font-mono"
-                    >
-                      <option value={0.5}>0.5 saat (30 dk)</option>
-                      <option value={1}>1 saat</option>
-                      <option value={3}>3 saat</option>
-                    </select>
-                  </div>
-                </div>
-
-                {usgsSearchMessage && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-700 pt-1">
-                    <span>{usgsSearchMessage}</span>
-                    {usgsCandidates.length === 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveSource('glofas')}
-                        className="text-cyan-700 hover:text-cyan-900 font-semibold underline cursor-pointer"
-                      >
-                        GloFAS Sekmesine Geç
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {usgsCandidates.length > 0 && (
-                  <div className="max-h-36 overflow-y-auto custom-scrollbar bg-white border border-slate-200 rounded-lg divide-y divide-slate-100">
-                    {usgsCandidates.map((site) => {
-                      const isSelected = usgsSiteCode.trim() === site.siteCode;
-                      return (
-                        <button
-                          key={site.siteCode}
-                          type="button"
-                          onClick={() => setUsgsSiteCode(site.siteCode)}
-                          className={`w-full px-3 py-2 text-left flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer ${
-                            isSelected ? 'bg-cyan-50/70 text-cyan-950 font-semibold' : 'hover:bg-slate-50 text-slate-700'
-                          }`}
-                        >
-                          <div className="min-w-0 flex-1 truncate">
-                            <span className="font-mono tabular-nums text-slate-900">{site.siteCode}</span>
-                            <span className="mx-1.5 text-slate-300">·</span>
-                            <span className="truncate">{site.siteName}</span>
-                          </div>
-                          <div className="font-mono tabular-nums text-[11px] text-slate-500 shrink-0">
-                            {site.distanceKm} km ·{' '}
-                            {site.latestFlowM3s !== null ? `${site.latestFlowM3s} m³/s` : 'Debi yok'}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
 
             <div className="flex items-center justify-end">
               <button
                 type="button"
                 onClick={handleFetchAndPreview}
-                disabled={isFetching || (activeSource === 'usgs' && !usgsSiteCode.trim())}
+                disabled={isFetching}
                 className="px-5 py-2.5 bg-cyan-700 hover:bg-cyan-800 disabled:bg-slate-300 text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
               >
                 {isFetching ? (
                   <>
                     <RefreshCw size={15} className="animate-spin" />
-                    <span>Veri Çekiliyor...</span>
+                    <span>GloFAS Verisi Çekiliyor...</span>
                   </>
                 ) : (
                   <>
@@ -740,16 +409,6 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
                 </div>
               </div>
 
-              {previewResult.source === 'scs_rain' && previewResult.meta.totalPrecipMm !== undefined && (
-                <div className="text-xs font-mono tabular-nums text-slate-600">
-                  Toplam Yağış: <strong className="text-slate-900">{previewResult.meta.totalPrecipMm} mm</strong>
-                  <span className="mx-2 text-slate-300">·</span>
-                  Etkin Akış: <strong className="text-cyan-800">{previewResult.meta.effectiveRunoffMm} mm</strong>
-                  <span className="mx-2 text-slate-300">·</span>
-                  İlk Kayıp (Iₐ): <strong className="text-slate-900">{previewResult.meta.initialAbstractionMm} mm</strong>
-                </div>
-              )}
-
               {/* Warnings (non-blocking) */}
               {previewResult.warnings.length > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900 space-y-0.5">
@@ -772,15 +431,6 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
                     )}
                     <span className="mx-2 text-slate-300">·</span>
                     <strong className="text-cyan-800">{previewResult.points[hoverIdx].flow.toFixed(2)} m³/s</strong>
-                    {previewResult.rainfallBars?.[hoverIdx] && (
-                      <>
-                        <span className="mx-2 text-slate-300">·</span>
-                        <span>
-                          Yağış: {previewResult.rainfallBars[hoverIdx].precipMm} mm (Etkin:{' '}
-                          {previewResult.rainfallBars[hoverIdx].excessMm} mm)
-                        </span>
-                      </>
-                    )}
                   </div>
                 ) : (
                   <span className="text-slate-400">
@@ -823,10 +473,6 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
                       x: mapX(maxT * r),
                     }));
 
-                    const rainBars = previewResult.rainfallBars || [];
-                    const maxP = rainBars.length > 0 ? Math.max(...rainBars.map((b) => b.precipMm), 0.1) : 0;
-                    const barW = Math.max(2, (640 / Math.max(1, maxT)) * 0.72);
-
                     return (
                       <>
                         {yTicks.map((tk, i) => (
@@ -851,33 +497,6 @@ export const HydrographSourceModal: React.FC<HydrographSourceModalProps> = ({
                         <text x="14" y="108" fontSize="9" fill="#475569" fontFamily="monospace" transform="rotate(-90 14 108)" textAnchor="middle">
                           Q (m³/s)
                         </text>
-
-                        {/* Inverted Rainfall Hyetograph Bars */}
-                        {rainBars.length > 0 && maxP > 0 && (
-                          <g>
-                            {rainBars.map((bar, idx) => {
-                              const bx = mapX(bar.time) - barW / 2;
-                              const hTot = (bar.precipMm / maxP) * 44;
-                              const hEff = (bar.excessMm / maxP) * 44;
-                              return (
-                                <g key={`rb-${idx}`}>
-                                  {hTot > 0 && (
-                                    <rect x={bx} y={20} width={barW} height={hTot} fill="#0891B2" fillOpacity="0.28" />
-                                  )}
-                                  {hEff > 0 && (
-                                    <rect x={bx} y={20} width={barW} height={hEff} fill="#0369A1" fillOpacity="0.72" />
-                                  )}
-                                </g>
-                              );
-                            })}
-                            <text x="706" y="28" fontSize="9" fill="#0E7490" fontFamily="monospace">
-                              0 mm
-                            </text>
-                            <text x="706" y="64" fontSize="9" fill="#0E7490" fontFamily="monospace">
-                              {maxP.toFixed(1)} mm
-                            </text>
-                          </g>
-                        )}
 
                         {/* Flow Area & Curve */}
                         <polygon points={areaStr} fill="#0284C7" fillOpacity="0.14" />

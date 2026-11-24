@@ -5765,7 +5765,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                               type="number"
                               step="1"
                               min="1"
-                              max="168"
+                              max="4368"
                               value={simDuration}
                               onChange={(e) => {
                                 const v = Number(e.target.value);
@@ -5786,7 +5786,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           type="button"
                           onClick={() => setIsHydrographSourceModalOpen(true)}
                           className="px-2 py-1 bg-cyan-700 hover:bg-cyan-800 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
-                          title="GloFAS, Yağış-Akış (SCS-CN) veya USGS ağlarından otomatik hidrograf çek"
+                          title="Copernicus GloFAS v4 üzerinden otomatik akım hidrografı çek"
                         >
                           <Globe size={11} />
                           <span>Otomatik Veri Çek (API)</span>
@@ -6026,7 +6026,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     <input
                       type="number"
                       min="1"
-                      max="168"
+                      max="4368"
                       value={simDuration}
                       onChange={(e) => setSimDuration(Number(e.target.value))}
                       className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800"
@@ -8251,7 +8251,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         onImportJson={handleImportCrossSectionsJSON}
       />
 
-      {/* Otomatik Akım Hidrografı (GloFAS / Yağış-Akış SCS-CN / USGS) Modalı */}
+      {/* Otomatik Akım Hidrografı (Copernicus GloFAS v4) Modalı */}
       <HydrographSourceModal
         isOpen={isHydrographSourceModalOpen}
         onClose={() => setIsHydrographSourceModalOpen(false)}
