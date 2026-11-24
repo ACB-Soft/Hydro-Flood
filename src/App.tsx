@@ -1746,7 +1746,7 @@ ${floodPolygons.join('\n')}
               {...{
                 currentStep, setCurrentStep, dem, setDem, params, setParams, coords, setCoords,
                 selectedCRS, setSelectedCRS, isSimulating, setIsSimulating, progress, setProgress,
-                waterDepth, setWaterDepth, outflowType, setOutflowType, showStats, setShowStats,
+                waterDepth, setWaterDepth, connectedFloodMask, outflowType, setOutflowType, showStats, setShowStats,
                 simMethod, setSimMethod, bathtubLevel, setBathtubLevel, flowThreshold, setFlowThreshold,
                 waterLevelMode, setWaterLevelMode, targetWaterElevation, setTargetWaterElevation,
                 floodImage, setFloodImage, elevationImage, setElevationImage, reliefImage,

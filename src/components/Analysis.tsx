@@ -21,11 +21,13 @@ import {
   ChevronDown,
   Eye,
   FileCode,
-  Mountain
+  Mountain,
+  Box
 } from 'lucide-react';
 import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon, Tooltip, Popup } from 'react-leaflet';
 import proj4 from 'proj4';
 import { MapAutoCenter, MapClickHandler } from './MapHelpers';
+import Terrain3DModal from './Terrain3DModal';
 
 interface AnalysisProps {
   currentStep: number;
@@ -44,6 +46,7 @@ interface AnalysisProps {
   setProgress: (progress: number) => void;
   waterDepth: any;
   setWaterDepth: (waterDepth: any) => void;
+  connectedFloodMask?: Uint8Array | null;
   outflowType: string;
   setOutflowType: (type: 'free' | 'normal') => void;
   showStats: boolean;
@@ -130,6 +133,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
+  const [is3DModalOpen, setIs3DModalOpen] = useState<boolean>(false);
 
   // Directly use provided elevation or dynamically sample from DEM
   const sourceElevation = React.useMemo<number | null>(() => {
@@ -262,8 +266,20 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                 </div>
               )}
 
-              {/* Basemap Picker Overlay */}
-              <div className="absolute top-4 right-4 z-[400]">
+              {/* 3D View & Basemap Picker Overlay */}
+              <div className="absolute top-4 right-4 z-[400] flex items-center gap-2">
+                {dem && (
+                  <button
+                    type="button"
+                    onClick={() => setIs3DModalOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-cyan-700 hover:bg-cyan-600 text-white border border-cyan-500 shadow-xl transition-all cursor-pointer whitespace-nowrap"
+                    title="DEM ve statik taşkın kütlesini 3 boyutlu incele"
+                  >
+                    <Box size={14} />
+                    <span>3B Görünüm</span>
+                  </button>
+                )}
+
                 <div className="relative">
                   <button
                     onClick={() => setShowBasemapMenu(!showBasemapMenu)}
@@ -986,6 +1002,19 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       <span>Paneli Aç</span>
                     </button>
 
+                    {/* 3B DEM View Trigger */}
+                    {dem && (
+                      <button
+                        type="button"
+                        onClick={() => setIs3DModalOpen(true)}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-cyan-700 hover:bg-cyan-800 text-white border border-cyan-600 shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                        title="Yüklenen DEM verisini 3 boyutlu incele"
+                      >
+                        <Box size={13} />
+                        <span>3B Görünüm</span>
+                      </button>
+                    )}
+
                     {/* Basemap Switcher Dropdown */}
                     <div className="relative">
                       <button
@@ -1070,13 +1099,23 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                             </p>
                           </div>
                           {dem && (
-                            <button
-                              onClick={() => setIsFileOpened(true)}
-                              className="z-10 mt-1 py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer"
-                            >
-                              <Eye size={15} />
-                              <span>Dosyayı Aç (Haritada Göster)</span>
-                            </button>
+                            <div className="z-10 mt-1 flex flex-wrap items-center justify-center gap-2">
+                              <button
+                                onClick={() => setIsFileOpened(true)}
+                                className="py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer"
+                              >
+                                <Eye size={15} />
+                                <span>Dosyayı Aç (Haritada Göster)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setIs3DModalOpen(true)}
+                                className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                              >
+                                <Box size={15} />
+                                <span>3B İncele</span>
+                              </button>
+                            </div>
                           )}
                         </>
                       )}
@@ -1208,6 +1247,22 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
           </div>
         </div>
       )}
+
+      <Terrain3DModal
+        isOpen={is3DModalOpen}
+        onClose={() => setIs3DModalOpen(false)}
+        title="Statik Taşkın Simülasyonu · 3B DEM İnceleme"
+        mode="static"
+        crsDef={selectedCRS?.def || '+proj=longlat +datum=WGS84 +no_defs'}
+        staticDem={dem}
+        waterDepth={props.waterDepth}
+        connectedFloodMask={props.connectedFloodMask}
+        sourceWgs={sourceWgs}
+        sourceElevation={sourceElevation}
+        staticWse={currentWse}
+        staticRiverCoords={riverKml?.coords}
+        staticAreaCoords={areaKml?.coords}
+      />
     </div>
   );
 };
