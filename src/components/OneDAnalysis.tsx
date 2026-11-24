@@ -101,7 +101,7 @@ import { MapAutoCenter } from './MapHelpers';
 import ManningLibraryModal from './ManningLibraryModal';
 import { CrossSectionManagerModal } from './CrossSectionManagerModal';
 import { HydrographSourceModal, HydrographSourceCoord } from './HydrographSourceModal';
-import Terrain3DModal from './Terrain3DModal';
+import Terrain3DView from './Terrain3DView';
 
 interface OneDAnalysisProps {
   onBackToDashboard: () => void;
@@ -172,7 +172,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
   const [activeBasemap, setActiveBasemap] = useState<string>('hybrid');
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
-  const [is3DModalOpen, setIs3DModalOpen] = useState<boolean>(false);
+  const [mapDimension, setMapDimension] = useState<'2d' | '3d'>('2d');
 
   // Flood Inundation Map Layer Toggles
   const [showDemReliefLayer, setShowDemReliefLayer] = useState<boolean>(true);
@@ -3590,10 +3590,52 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                 {/* Result Tab 3: Interactive Flooded Map */}
                 {resultTab === 'map' && (
                   <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner mt-2 flex flex-col">
-                    {/* Top Floating Layer & Basemap Quick Bar */}
-                    <div className="absolute top-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 pointer-events-none">
-                      {/* Layer Toggle Chips */}
-                      <div className="flex flex-wrap items-center gap-1 bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-300 shadow-md pointer-events-auto">
+                    {mapDimension === '3d' && demFile ? (
+                      <Terrain3DView
+                        title="1B Dinamik Akış Analizi · 3B DEM"
+                        mode="dynamic1d"
+                        crsDef={selectedCRS.def}
+                        demFile={demFile}
+                        sections={sections}
+                        selectedSectionIdx={selectedSectionIdx}
+                        centerlineCoords={centerlineCoords}
+                        leftBankCoords={leftBankCoords}
+                        rightBankCoords={rightBankCoords}
+                        structures={structures}
+                        studyAreaPolygons={studyAreaKml?.polygons || []}
+                        dynamicResults={dynamicResults}
+                        static1DResults={simResults}
+                        currentStepIdx={currentStepIdx}
+                        onChangeStepIdx={(idx) => setCurrentStepIdx(idx)}
+                        resultDisplayMode={resultDisplayMode}
+                        onChangeResultDisplayMode={(m) => setResultDisplayMode(m)}
+                        headerRightSlot={
+                          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setMapDimension('2d')}
+                              className="px-2.5 py-1 rounded-md text-[11px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 flex items-center gap-1 cursor-pointer whitespace-nowrap transition-colors"
+                            >
+                              <MapIcon size={12} />
+                              <span>2B Harita</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMapDimension('3d')}
+                              className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-cyan-700 text-white flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            >
+                              <Box size={12} />
+                              <span>3B Arazi</span>
+                            </button>
+                          </div>
+                        }
+                      />
+                    ) : (
+                      <>
+                        {/* Top Floating Layer & Basemap Quick Bar */}
+                        <div className="absolute top-2.5 left-2.5 right-2.5 z-[1100] flex flex-wrap items-center justify-between gap-1.5 pointer-events-none">
+                          {/* Layer Toggle Chips */}
+                          <div className="flex flex-wrap items-center gap-1 bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-300 shadow-md pointer-events-auto">
                         <button
                           onClick={() => setShowDemFloodDepthLayer(!showDemFloodDepthLayer)}
                           className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
@@ -3772,28 +3814,39 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         )}
                       </div>
 
-                      {/* 3D View + Basemap Selector */}
+                      {/* 2B/3B Switch + Basemap Selector */}
                       <div className="flex items-center gap-1.5 pointer-events-auto">
                         {demFile && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsPlaying(false);
-                              setIs3DModalOpen(true);
-                            }}
-                            className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-cyan-700 hover:bg-cyan-600 text-white border border-cyan-500 shadow-md transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                            title="1B taşkın dalgasını, dere aksını ve enkesitleri 3 boyutlu incele"
-                          >
-                            <Box size={13} />
-                            <span>3B Görünüm</span>
-                          </button>
+                          <div className="flex items-center bg-slate-900/95 p-0.5 rounded-xl border border-slate-700 shadow-md">
+                            <button
+                              type="button"
+                              onClick={() => setMapDimension('2d')}
+                              className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-cyan-700 text-white flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            >
+                              <MapIcon size={12} />
+                              <span>2B Harita</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsPlaying(false);
+                                setShowBasemapMenu(false);
+                                setMapDimension('3d');
+                              }}
+                              className="px-2.5 py-1 rounded-lg text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                              title="1B taşkın dalgasını, dere aksını ve enkesitleri aynı ekranda 3 boyutlu incele"
+                            >
+                              <Box size={12} />
+                              <span>3B Arazi</span>
+                            </button>
+                          </div>
                         )}
                         <div className="bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-300 shadow-md flex items-center gap-1">
                           {BASEMAP_OPTIONS.map((b) => (
                             <button
                               key={b.id}
                               onClick={() => setActiveBasemap(b.id)}
-                              className={`px-2 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                              className={`px-2 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
                                 activeBasemap === b.id 
                                   ? 'bg-cyan-700 text-white shadow-xs' 
                                   : 'text-slate-600 hover:bg-slate-100'
@@ -3806,7 +3859,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       </div>
                     </div>
 
-                    {/* Leaflet Map */}
+                    {/* Leaflet Map (Isolated z-0 stacking context) */}
+                    <div className="w-full h-full relative z-0 isolate">
                     <MapContainer
                       center={centerlineCoords[0] || (demOverlay ? [(demOverlay.wgs84Bounds[0][0] + demOverlay.wgs84Bounds[1][0]) / 2, (demOverlay.wgs84Bounds[0][1] + demOverlay.wgs84Bounds[1][1]) / 2] : [39.92, 32.85])}
                       zoom={14}
@@ -4222,10 +4276,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                       ) : (
                         mapBounds && <MapAutoCenter bounds={mapBounds} />
                       )}
-                    </MapContainer>
+                      </MapContainer>
+                    </div>
 
                     {/* Floating Inundation Depth Legend in Bottom-Left */}
-                    <div className="absolute bottom-3 left-3 z-[400] bg-white/95 backdrop-blur-md px-3 py-2 rounded-xl text-[11px] text-slate-800 border border-slate-300 shadow-xl space-y-1.5">
+                    <div className="absolute bottom-3 left-3 z-[1100] bg-white/95 backdrop-blur-md px-3 py-2 rounded-xl text-[11px] text-slate-800 border border-slate-300 shadow-xl space-y-1.5">
                       <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                         1B Taşkın Yayılım Lejandı
                       </div>
@@ -4282,7 +4337,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             : 'Toplam Taşkın Alanı');
 
                       return (
-                        <div className="absolute bottom-3 right-3 z-[400] bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl text-slate-200 border border-slate-700 shadow-xl text-right">
+                        <div className="absolute bottom-3 right-3 z-[1100] bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl text-slate-200 border border-slate-700 shadow-xl text-right">
                           <div className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider">
                             {title}
                           </div>
@@ -4300,6 +4355,8 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         </div>
                       );
                     })()}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -6283,61 +6340,104 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     )}
                   </div>
 
-                  {/* 3D View & Basemap Switcher */}
+                  {/* 2B/3B Switch & Basemap Switcher */}
                   <div className="flex items-center gap-2">
-                    {demFile && (
-                      <button
-                        type="button"
-                        onClick={() => setIs3DModalOpen(true)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-cyan-700 hover:bg-cyan-800 text-white border border-cyan-600 shadow-sm transition-all cursor-pointer whitespace-nowrap"
-                        title="DEM arazisini, dere aksını ve enkesitleri 3 boyutlu incele"
-                      >
-                        <Box size={13} />
-                        <span>3B Görünüm</span>
-                      </button>
-                    )}
-
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowBasemapMenu(!showBasemapMenu)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 shadow-sm transition-all cursor-pointer"
-                      >
-                        <Layers size={13} />
-                        <span>{currentBasemap.label}</span>
-                      </button>
-
-                    {showBasemapMenu && (
-                      <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-xl p-1.5 shadow-2xl z-[500] space-y-1">
-                        <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                          Harita Katmanı
-                        </div>
-                        {BASEMAP_OPTIONS.map((bm) => (
-                          <button
-                            key={bm.id}
-                            onClick={() => {
-                              setActiveBasemap(bm.id);
-                              setShowBasemapMenu(false);
-                            }}
-                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
-                              activeBasemap === bm.id
-                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
-                                : 'text-slate-300 hover:bg-white/10'
-                            }`}
-                          >
-                            <span>{bm.label}</span>
-                            {activeBasemap === bm.id && <Check size={13} className="text-cyan-400" />}
-                          </button>
-                        ))}
+                    {demFile && rightPanelTab === 'map' && (
+                      <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-300">
+                        <button
+                          type="button"
+                          onClick={() => setMapDimension('2d')}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                            mapDimension === '2d'
+                              ? 'bg-cyan-700 text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <MapIcon size={12} />
+                          <span>2B Harita</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowBasemapMenu(false);
+                            setMapDimension('3d');
+                          }}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                            mapDimension === '3d'
+                              ? 'bg-cyan-700 text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title="DEM arazisini, dere aksını ve enkesitleri aynı ekranda 3 boyutlu incele"
+                        >
+                          <Box size={12} />
+                          <span>3B Arazi</span>
+                        </button>
                       </div>
                     )}
-                    </div>
+
+                    {(rightPanelTab !== 'map' || mapDimension === '2d') && (
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowBasemapMenu(!showBasemapMenu)}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                        >
+                          <Layers size={13} />
+                          <span>{currentBasemap.label}</span>
+                        </button>
+
+                        {showBasemapMenu && (
+                          <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-xl p-1.5 shadow-2xl z-[1200] space-y-1">
+                            <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                              Harita Katmanı
+                            </div>
+                            {BASEMAP_OPTIONS.map((bm) => (
+                              <button
+                                key={bm.id}
+                                onClick={() => {
+                                  setActiveBasemap(bm.id);
+                                  setShowBasemapMenu(false);
+                                }}
+                                className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                                  activeBasemap === bm.id
+                                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
+                                    : 'text-slate-300 hover:bg-white/10'
+                                }`}
+                              >
+                                <span>{bm.label}</span>
+                                {activeBasemap === bm.id && <Check size={13} className="text-cyan-400" />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 {/* Content View: Map or Cross Section Profile or Hydrograph */}
                 <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner">
                   {rightPanelTab === 'map' ? (
-                    !isFileOpened && centerlineCoords.length === 0 && sections.length === 0 && !studyAreaKml && !isSelectingHydrographLocationOnMap && !hydrographSourcePoint ? (
+                    mapDimension === '3d' && demFile ? (
+                      <Terrain3DView
+                        title="1B Dinamik Akış Analizi · 3B DEM Önizleme"
+                        mode="dynamic1d"
+                        crsDef={selectedCRS.def}
+                        demFile={demFile}
+                        sections={sections}
+                        selectedSectionIdx={selectedSectionIdx}
+                        centerlineCoords={centerlineCoords}
+                        leftBankCoords={leftBankCoords}
+                        rightBankCoords={rightBankCoords}
+                        structures={structures}
+                        studyAreaPolygons={studyAreaKml?.polygons || []}
+                        dynamicResults={dynamicResults}
+                        static1DResults={simResults}
+                        currentStepIdx={currentStepIdx}
+                        onChangeStepIdx={(idx) => setCurrentStepIdx(idx)}
+                        resultDisplayMode={resultDisplayMode}
+                        onChangeResultDisplayMode={(m) => setResultDisplayMode(m)}
+                      />
+                    ) : !isFileOpened && centerlineCoords.length === 0 && sections.length === 0 && !studyAreaKml && !isSelectingHydrographLocationOnMap && !hydrographSourcePoint ? (
                       /* Empty Blueprint State matching Analysis.tsx */
                       <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-3.5 p-6 text-center bg-slate-100 relative select-none">
                         <div
@@ -6382,7 +6482,10 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             </button>
                             <button
                               type="button"
-                              onClick={() => setIs3DModalOpen(true)}
+                              onClick={() => {
+                                setShowBasemapMenu(false);
+                                setMapDimension('3d');
+                              }}
                               className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
                             >
                               <Box size={15} />
@@ -6394,7 +6497,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                     ) : (
                       <>
                         {(demOverlay || studyAreaKml) && (
-                          <div className="absolute top-2.5 right-2.5 z-[400] flex items-center gap-1.5 bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-300 shadow-md">
+                          <div className="absolute top-2.5 right-2.5 z-[1100] flex items-center gap-1.5 bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-300 shadow-md">
                             {studyAreaKml && (
                               <button
                                 type="button"
@@ -6437,6 +6540,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             )}
                           </div>
                         )}
+                        <div className="w-full h-full relative z-0 isolate">
                         <MapContainer
                           center={
                             hydrographSourcePoint
@@ -6719,10 +6823,11 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
                           {mapBounds && <MapAutoCenter bounds={mapBounds} />}
                         </MapContainer>
+                        </div>
 
                         {/* Interactive Location Selection Banner */}
                         {isSelectingHydrographLocationOnMap ? (
-                          <div className="absolute top-2.5 left-2.5 right-2.5 z-[500] bg-cyan-900/95 backdrop-blur-md text-white px-3.5 py-2 rounded-xl text-xs flex items-center justify-between shadow-2xl border border-cyan-400/60">
+                          <div className="absolute top-2.5 left-2.5 right-2.5 z-[1150] bg-cyan-900/95 backdrop-blur-md text-white px-3.5 py-2 rounded-xl text-xs flex items-center justify-between shadow-2xl border border-cyan-400/60">
                             <div className="flex items-center gap-2">
                               <Compass size={15} className="text-cyan-300" />
                               <span>
@@ -6741,7 +6846,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                             </button>
                           </div>
                         ) : isSelectingLocationOnMap ? (
-                          <div className="absolute top-2.5 left-2.5 right-2.5 z-[500] bg-cyan-900/95 backdrop-blur-md text-white px-3.5 py-2 rounded-xl text-xs flex items-center justify-between shadow-2xl border border-cyan-400/60 animate-pulse">
+                          <div className="absolute top-2.5 left-2.5 right-2.5 z-[1150] bg-cyan-900/95 backdrop-blur-md text-white px-3.5 py-2 rounded-xl text-xs flex items-center justify-between shadow-2xl border border-cyan-400/60 animate-pulse">
                             <div className="flex items-center gap-2">
                               <Compass size={15} className="text-cyan-300 animate-spin" />
                               <span>
@@ -6760,7 +6865,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                           </div>
                         ) : (
                           /* Top Notification Banner & Color Legend inside Map */
-                          <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-2 shadow-md flex-wrap">
+                          <div className="absolute top-2.5 left-2.5 z-[1100] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-2 shadow-md flex-wrap">
                             <span className="flex items-center gap-1 font-semibold text-blue-400">
                               <span className="w-2.5 h-1 bg-blue-500 inline-block rounded-xs"></span>
                               <span>Orijinal (Mavi)</span>
@@ -6792,7 +6897,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
                         )}
 
                         {/* Bottom Status Bar inside Map */}
-                        <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
+                        <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[1100] flex flex-wrap items-center justify-between gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
                           <div className="flex items-center gap-3 text-[10px]">
                             <span>
                               <strong className="text-cyan-400">CRS:</strong> {selectedCRS.code}
@@ -7854,7 +7959,7 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
 
       {/* Structure Edit Modal */}
       {isStructureModalOpen && editingStructure && (
-        <div className="fixed inset-0 z-[1000] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[1300] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border border-slate-300 shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -8167,28 +8272,6 @@ const OneDAnalysis: React.FC<OneDAnalysisProps> = ({ onBackToDashboard }) => {
         }}
       />
 
-      {/* 1B Dinamik Akış & DEM 3B İnceleme Penceresi */}
-      <Terrain3DModal
-        isOpen={is3DModalOpen}
-        onClose={() => setIs3DModalOpen(false)}
-        title="1B Dinamik Akış Analizi · 3B DEM İnceleme"
-        mode="dynamic1d"
-        crsDef={selectedCRS.def}
-        demFile={demFile}
-        sections={sections}
-        selectedSectionIdx={selectedSectionIdx}
-        centerlineCoords={centerlineCoords}
-        leftBankCoords={leftBankCoords}
-        rightBankCoords={rightBankCoords}
-        structures={structures}
-        studyAreaPolygons={studyAreaKml?.polygons || []}
-        dynamicResults={dynamicResults}
-        static1DResults={simResults}
-        currentStepIdx={currentStepIdx}
-        onChangeStepIdx={(idx) => setCurrentStepIdx(idx)}
-        resultDisplayMode={resultDisplayMode}
-        onChangeResultDisplayMode={(m) => setResultDisplayMode(m)}
-      />
     </div>
   );
 };

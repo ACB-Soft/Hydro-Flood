@@ -646,6 +646,80 @@ export function sampleElevationAtGrid(
 }
 
 /**
+ * Samples terrain elevation (meters) directly on the exact DEM triangle plane
+ * rendered by buildTerrainMeshBuffers, with fallback to nearest valid cell near NoData borders.
+ */
+export function sampleTerrainMeshSurfaceElev(
+  grid: Terrain3DGrid,
+  gx: number,
+  gy: number
+): number | null {
+  const { gridW, gridH, elevations } = grid;
+  const cx = Math.max(0, Math.min(gridW - 1, gx));
+  const cy = Math.max(0, Math.min(gridH - 1, gy));
+
+  const x0 = Math.min(gridW - 2, Math.floor(cx));
+  const y0 = Math.min(gridH - 2, Math.floor(cy));
+  const fx = Math.max(0, Math.min(1, cx - x0));
+  const fy = Math.max(0, Math.min(1, cy - y0));
+
+  const tl = elevations[y0 * gridW + x0];
+  const tr = elevations[y0 * gridW + (x0 + 1)];
+  const bl = elevations[(y0 + 1) * gridW + x0];
+  const br = elevations[(y0 + 1) * gridW + (x0 + 1)];
+
+  // Exact match with buildTerrainMeshBuffers triangle split:
+  // Upper-left tri: (tl, bl, tr) when fx + fy <= 1
+  // Lower-right tri: (tr, bl, br) when fx + fy > 1
+  if (fx + fy <= 1) {
+    if (!isNaN(tl) && !isNaN(bl) && !isNaN(tr)) {
+      const wTL = 1 - fx - fy;
+      const wBL = fy;
+      const wTR = fx;
+      return wTL * tl + wBL * bl + wTR * tr;
+    }
+  } else {
+    if (!isNaN(tr) && !isNaN(bl) && !isNaN(br)) {
+      const wTR = 1 - fy;
+      const wBL = 1 - fx;
+      const wBR = fx + fy - 1;
+      return wTR * tr + wBL * bl + wBR * br;
+    }
+  }
+
+  // Fallback to valid bilinear corners inside this cell
+  const bilinear = sampleElevationAtGrid(grid, cx, cy);
+  if (bilinear !== null) return bilinear;
+
+  // Fallback for KML vertices touching NoData/outer edge: nearest valid cell
+  const ix = Math.round(cx);
+  const iy = Math.round(cy);
+  let bestDist = Infinity;
+  let bestElev: number | null = null;
+  for (let r = 1; r <= 16; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const nx = ix + dx;
+        const ny = iy + dy;
+        if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
+        const v = elevations[ny * gridW + nx];
+        if (!isNaN(v)) {
+          const d = dx * dx + dy * dy;
+          if (d < bestDist) {
+            bestDist = d;
+            bestElev = v;
+          }
+        }
+      }
+    }
+    if (bestElev !== null) return bestElev;
+  }
+
+  return null;
+}
+
+/**
  * Converts geographic [lat, lon] to Three.js world space (x, baseY_at_1x, z).
  */
 export function wgs84ToWorldPoint(
@@ -660,7 +734,7 @@ export function wgs84ToWorldPoint(
   const elev =
     overrideElevationM !== undefined && overrideElevationM !== null
       ? overrideElevationM
-      : sampleElevationAtGrid(grid, gx, gy);
+      : sampleTerrainMeshSurfaceElev(grid, gx, gy);
   const wy =
     elev !== null ? (elev - grid.minElev) * grid.metersToWorld : 0;
   return [wx, wy, wz];
@@ -959,13 +1033,14 @@ export function build1DWaterMeshForResults(
 }
 
 /**
- * Samples a polyline of [lat, lon] points densely along the DEM grid so 3D lines drape over terrain.
+ * Samples a polyline of [lat, lon] points at full DEM grid density so 3D lines hug
+ * the exact terrain triangle surface without floating across valleys or cutting ridges.
  */
 export function drapePolylineOverTerrain(
   grid: Terrain3DGrid,
   coords: [number, number][],
-  verticalLiftWorld = 0.25,
-  samplesPerSegment = 8
+  verticalLiftWorld = 0.035,
+  minSamplesPerSegment = 6
 ): Float32Array | null {
   if (!coords || coords.length < 2) return null;
   const pts: number[] = [];
@@ -973,7 +1048,12 @@ export function drapePolylineOverTerrain(
   for (let i = 0; i < coords.length - 1; i++) {
     const [lat0, lon0] = coords[i];
     const [lat1, lon1] = coords[i + 1];
-    const steps = i === coords.length - 2 ? samplesPerSegment : samplesPerSegment;
+    const [gx0, gy0] = wgs84ToTerrainGridPixel(grid, lat0, lon0);
+    const [gx1, gy1] = wgs84ToTerrainGridPixel(grid, lat1, lon1);
+    const pixDist = Math.hypot(gx1 - gx0, gy1 - gy0);
+    if (pixDist < 1e-5 && i < coords.length - 2) continue;
+
+    const steps = Math.max(minSamplesPerSegment, Math.min(300, Math.ceil(pixDist * 2.5)));
     const endStep = i === coords.length - 2 ? steps : steps - 1;
     for (let s = 0; s <= endStep; s++) {
       const f = s / steps;
@@ -987,6 +1067,78 @@ export function drapePolylineOverTerrain(
   }
 
   return pts.length >= 6 ? new Float32Array(pts) : null;
+}
+
+/**
+ * Builds a continuous terrain-anchored boundary ribbon (curtain strip rooted into the DEM surface)
+ * for KML study area polygons so the perimeter is visibly pinned to the 3D terrain relief.
+ */
+export function buildDrapedBoundaryRibbonBuffers(
+  grid: Terrain3DGrid,
+  coords: [number, number][],
+  bottomOffsetWorld = -0.04,
+  topOffsetWorld = 0.12
+): { positions: Float32Array; indices: Uint32Array } | null {
+  if (!coords || coords.length < 3) return null;
+
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  const isClosed = Math.hypot(first[0] - last[0], first[1] - last[1]) < 1e-7;
+  const ring = isClosed ? coords : [...coords, first];
+
+  const samples: Array<[number, number, number]> = [];
+  for (let i = 0; i < ring.length - 1; i++) {
+    const [lat0, lon0] = ring[i];
+    const [lat1, lon1] = ring[i + 1];
+    const [gx0, gy0] = wgs84ToTerrainGridPixel(grid, lat0, lon0);
+    const [gx1, gy1] = wgs84ToTerrainGridPixel(grid, lat1, lon1);
+    const pixDist = Math.hypot(gx1 - gx0, gy1 - gy0);
+    if (pixDist < 1e-5 && i < ring.length - 2) continue;
+
+    const steps = Math.max(4, Math.min(300, Math.ceil(pixDist * 2.5)));
+    const endStep = i === ring.length - 2 ? steps : steps - 1;
+    for (let s = 0; s <= endStep; s++) {
+      const f = s / steps;
+      const lat = lat0 + f * (lat1 - lat0);
+      const lon = lon0 + f * (lon1 - lon0);
+      const wp = wgs84ToWorldPoint(grid, lat, lon);
+      if (wp) samples.push(wp);
+    }
+  }
+
+  if (samples.length < 2) return null;
+
+  const positions = new Float32Array(samples.length * 2 * 3);
+  const indices = new Uint32Array((samples.length - 1) * 6);
+
+  for (let i = 0; i < samples.length; i++) {
+    const [x, y, z] = samples[i];
+    const base = i * 6;
+    // Bottom vertex anchored inside terrain surface
+    positions[base] = x;
+    positions[base + 1] = y + bottomOffsetWorld;
+    positions[base + 2] = z;
+    // Top vertex slightly above terrain surface
+    positions[base + 3] = x;
+    positions[base + 4] = y + topOffsetWorld;
+    positions[base + 5] = z;
+  }
+
+  for (let i = 0; i < samples.length - 1; i++) {
+    const b0 = i * 2;
+    const t0 = b0 + 1;
+    const b1 = b0 + 2;
+    const t1 = b0 + 3;
+    const idxOff = i * 6;
+    indices[idxOff] = b0;
+    indices[idxOff + 1] = b1;
+    indices[idxOff + 2] = t0;
+    indices[idxOff + 3] = t0;
+    indices[idxOff + 4] = b1;
+    indices[idxOff + 5] = t1;
+  }
+
+  return { positions, indices };
 }
 
 /**

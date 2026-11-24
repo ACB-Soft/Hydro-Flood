@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
-  X,
   ChevronDown,
   ChevronUp,
   Play,
@@ -28,6 +27,7 @@ import {
   StaticDEMInput,
   Terrain3DGrid,
   build1DWaterMeshForResults,
+  buildDrapedBoundaryRibbonBuffers,
   buildStaticWaterMesh,
   buildTerrainGridFromFile,
   buildTerrainGridFromStaticDEM,
@@ -41,12 +41,11 @@ import {
   worldXZToLatLon,
 } from '../utils/terrain3dBuilder';
 
-export interface Terrain3DModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  title: string;
+export interface Terrain3DViewProps {
+  title?: string;
   mode: 'static' | 'dynamic1d';
   crsDef: string;
+  headerRightSlot?: React.ReactNode;
 
   // Static Flood Inputs
   staticDem?: StaticDEMInput | null;
@@ -86,8 +85,6 @@ interface CursorReadout {
 }
 
 // Pre-allocated math helpers (Zero GC in render loop)
-const _camGoalPos = new THREE.Vector3();
-const _camGoalTarget = new THREE.Vector3();
 const _rayMouse = new THREE.Vector2();
 const _raycaster = new THREE.Raycaster();
 
@@ -143,17 +140,14 @@ function createStaticSourceBeaconGroup(): THREE.Group {
     metalness: 0.15,
   });
 
-  // 1. Grounded base collar
   const base = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.35, 0.35, 24), ringMat);
   base.position.y = 0.175;
   group.add(base);
 
-  // 2. Vertical mast
   const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 4.2, 12), stemMat);
   mast.position.y = 2.35;
   group.add(mast);
 
-  // 3. Beacon octahedron head
   const head = new THREE.Mesh(new THREE.OctahedronGeometry(0.95, 0), headMat);
   head.position.y = 5.0;
   group.add(head);
@@ -187,7 +181,6 @@ function createStructureGroup(
   const deckDepth = 1.6;
   const pierH = 2.0;
 
-  // 1 & 2. Left / Right abutment piers
   const pierGeo = new THREE.BoxGeometry(0.65, pierH, deckDepth * 0.9);
   const leftPier = new THREE.Mesh(pierGeo, concreteMat);
   leftPier.position.set(-span * 0.45, -pierH * 0.5, 0);
@@ -197,12 +190,10 @@ function createStructureGroup(
   rightPier.position.set(span * 0.45, -pierH * 0.5, 0);
   group.add(rightPier);
 
-  // 3. Deck slab
   const deck = new THREE.Mesh(new THREE.BoxGeometry(span, 0.4, deckDepth), deckMat);
   deck.position.y = 0.2;
   group.add(deck);
 
-  // 4 & 5. Safety guard rails
   const railGeo = new THREE.BoxGeometry(span, 0.22, 0.14);
   const frontRail = new THREE.Mesh(railGeo, railMat);
   frontRail.position.set(0, 0.51, deckDepth * 0.44);
@@ -216,12 +207,11 @@ function createStructureGroup(
   return group;
 }
 
-export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
-  isOpen,
-  onClose,
-  title,
+export const Terrain3DView: React.FC<Terrain3DViewProps> = ({
+  title = '3B Arazi Modeli',
   mode,
   crsDef,
+  headerRightSlot,
   staticDem,
   waterDepth,
   connectedFloodMask,
@@ -259,6 +249,7 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
   const [showCenterline, setShowCenterline] = useState<boolean>(true);
   const [showSections, setShowSections] = useState<boolean>(true);
   const [showStructures, setShowStructures] = useState<boolean>(true);
+  const [showStudyArea, setShowStudyArea] = useState<boolean>(true);
   const [showWireframe, setShowWireframe] = useState<boolean>(false);
   const [isDockCollapsed, setIsDockCollapsed] = useState<boolean>(false);
   const [isPlaying3D, setIsPlaying3D] = useState<boolean>(false);
@@ -290,7 +281,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     currentZExag: number;
     targetCamPos: THREE.Vector3;
     targetCamLook: THREE.Vector3;
-    lastWaterWseAtGrid: Float32Array | null;
   }>({
     renderer: null,
     scene: null,
@@ -311,18 +301,13 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     currentZExag: 2.5,
     targetCamPos: new THREE.Vector3(95, 70, 95),
     targetCamLook: new THREE.Vector3(0, 6, 0),
-    lastWaterWseAtGrid: null,
   });
 
-  // Keep latest grid + water info in refs for throttled pointer raycasting
   const terrainGridRef = useRef<Terrain3DGrid | null>(null);
   terrainGridRef.current = terrainGrid;
-  const active1DResultsRef = useRef<RoutingResult[] | null>(null);
-  const active1DMappingRef = useRef<ReachGridMapping | null>(null);
 
-  // Build Terrain3DGrid when modal opens
+  // Build Terrain3DGrid when DEM input / CRS changes
   useEffect(() => {
-    if (!isOpen) return;
     let cancelled = false;
     setLoadError(null);
     setCursorInfo(null);
@@ -341,7 +326,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       return;
     }
 
-    // 1D mode loads from demFile (already WeakMap cached in loadDEM)
     if (!demFile) {
       setTerrainGrid(null);
       setLoadError('3B görünüm için önce 1B analiz panelinden bir DEM dosyası yükleyin.');
@@ -369,15 +353,13 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, mode, staticDem, demFile, crsDef]);
+  }, [mode, staticDem, demFile, crsDef]);
 
   // Precompute 1D reach mapping once when terrainGrid & sections change
   const reachMapping = useMemo<ReachGridMapping | null>(() => {
     if (mode !== 'dynamic1d' || !terrainGrid || sections.length < 2) return null;
     return precompute1DReachGridMapping(terrainGrid, sections);
   }, [mode, terrainGrid, sections]);
-
-  active1DMappingRef.current = reachMapping;
 
   // Determine active 1D results snapshot (dynamic step vs peak vs steady)
   const active1DResults = useMemo<RoutingResult[]>(() => {
@@ -390,25 +372,22 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     return static1DResults;
   }, [mode, dynamicResults, resultDisplayMode, currentStepIdx, static1DResults]);
 
-  active1DResultsRef.current = active1DResults;
-
-  // Keyboard shortcuts: Esc closes modal, H toggles bottom dock
+  // Keyboard shortcut: H toggles bottom dock (only when not typing in inputs)
   useEffect(() => {
-    if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      } else if (e.key === 'h' || e.key === 'H') {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'h' || e.key === 'H') {
         setIsDockCollapsed((prev) => !prev);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, onClose]);
+  }, []);
 
-  // 1D Dynamic playback timer inside 3D viewer
+  // 1D Dynamic playback timer inside 3D view
   useEffect(() => {
-    if (!isOpen || !isPlaying3D || mode !== 'dynamic1d' || !dynamicResults || !onChangeStepIdx) {
+    if (!isPlaying3D || mode !== 'dynamic1d' || !dynamicResults || !onChangeStepIdx) {
       return;
     }
     const maxIdx = Math.max(0, dynamicResults.timeSteps.length - 1);
@@ -422,9 +401,8 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       }
     }, 450);
     return () => window.clearInterval(id);
-  }, [isOpen, isPlaying3D, mode, dynamicResults, currentStepIdx, onChangeStepIdx, onChangeResultDisplayMode]);
+  }, [isPlaying3D, mode, dynamicResults, currentStepIdx, onChangeStepIdx, onChangeResultDisplayMode]);
 
-  // Helper to compute camera preset positions relative to terrain height
   const computePresetCamera = (
     preset: CameraPreset,
     grid: Terrain3DGrid,
@@ -465,14 +443,12 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
         return { pos: camPos, target: lookAt };
       }
     }
-    // Isometric default
     return {
       pos: new THREE.Vector3(88, Math.max(58, midY + 55), 88),
       target,
     };
   };
 
-  // Trigger camera preset animation
   const handleSelectPreset = (preset: CameraPreset) => {
     setActivePreset(preset);
     if (!terrainGrid) return;
@@ -483,9 +459,9 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     sceneRefs.current.requestRender?.();
   };
 
-  // Initialize Three.js WebGL scene once when modal mounts + terrainGrid is ready
+  // Initialize Three.js WebGL scene when terrainGrid is ready
   useEffect(() => {
-    if (!isOpen || !terrainGrid || !canvasMountRef.current) return;
+    if (!terrainGrid || !canvasMountRef.current) return;
 
     const mountEl = canvasMountRef.current;
     const isSoftwareGl = detectSoftwareWebGL();
@@ -560,17 +536,14 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     rimLight.position.set(85, 55, 80);
     scene.add(rimLight);
 
-    // Subtle reference ground grid beneath terrain block
     const gridHelper = new THREE.GridHelper(180, 24, 0x1e293b, 0x111a29);
     gridHelper.position.y = -4.6;
     scene.add(gridHelper);
 
-    // Terrain root group (scaled vertically by Z exaggeration)
     const terrainRootGroup = new THREE.Group();
     terrainRootGroup.scale.y = zExaggeration;
     scene.add(terrainRootGroup);
 
-    // Build terrain mesh + skirt
     const { terrain: terrBuf, skirt: skirtBuf } = buildTerrainMeshBuffers(terrainGrid);
     const terrGeo = new THREE.BufferGeometry();
     terrGeo.setAttribute('position', new THREE.BufferAttribute(terrBuf.positions, 3));
@@ -589,7 +562,7 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     const terrainMesh = new THREE.Mesh(terrGeo, terrMat);
     terrainMesh.receiveShadow = !isSoftwareGl;
     terrainMesh.castShadow = !isSoftwareGl;
-    terrainMesh.layers.enable(1); // Raycasting inspection target
+    terrainMesh.layers.enable(1);
     terrainRootGroup.add(terrainMesh);
 
     const wireMat = new THREE.MeshBasicMaterial({
@@ -622,7 +595,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       terrainRootGroup.add(skirtMesh);
     }
 
-    // Water surface mesh (populated dynamically by separate effect)
     const waterGeo = new THREE.BufferGeometry();
     const waterMat = new THREE.MeshStandardMaterial({
       vertexColors: true,
@@ -647,7 +619,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     const markersGroup = new THREE.Group();
     scene.add(markersGroup);
 
-    // Populate refs
     sceneRefs.current = {
       ...sceneRefs.current,
       renderer,
@@ -674,7 +645,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       renderer.compile(scene, camera);
     }
 
-    // On-demand render scheduler + smooth damp transition loop
     let frameId = 0;
     let renderBusy = false;
     let renderDirty = false;
@@ -722,7 +692,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
         const refs = sceneRefs.current;
         let needsFollowUp = false;
 
-        // Smoothly damp Z exaggeration
         if (Math.abs(refs.currentZExag - refs.targetZExag) > 0.004) {
           refs.currentZExag = THREE.MathUtils.damp(
             refs.currentZExag,
@@ -747,7 +716,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
           }
         }
 
-        // Smoothly damp camera preset transitions
         if (refs.isAnimatingCam) {
           camera.position.x = THREE.MathUtils.damp(camera.position.x, refs.targetCamPos.x, 7.5, dt);
           camera.position.y = THREE.MathUtils.damp(camera.position.y, refs.targetCamPos.y, 7.5, dt);
@@ -796,7 +764,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     controls.addEventListener('change', onControlsChange);
     controls.addEventListener('start', onControlsStart);
 
-    // Throttled pointermove raycasting on Terrain layer (1)
     let lastRaycastMs = 0;
     const onPointerMove = (ev: PointerEvent) => {
       const now = performance.now();
@@ -829,7 +796,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
         return;
       }
 
-      // Check water elevation at point
       let waterZ: number | null = null;
       let depthM: number | null = null;
       const wMesh = sceneRefs.current.waterMesh;
@@ -906,7 +872,7 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       sceneRefs.current.controls = null;
       sceneRefs.current.requestRender = null;
     };
-  }, [isOpen, terrainGrid]);
+  }, [terrainGrid]);
 
   // Sync Z exaggeration target
   useEffect(() => {
@@ -930,12 +896,11 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     }
   }, [showWater]);
 
-  // Rebuild vector overlays (Centerline, Bank lines, Cross-sections, Study area, Source Beacon, Structures)
+  // Rebuild vector overlays
   useEffect(() => {
     const { vectorGroup, markersGroup, requestRender } = sceneRefs.current;
     if (!terrainGrid || !vectorGroup || !markersGroup) return;
 
-    // Clear previous vectors
     while (vectorGroup.children.length > 0) {
       const ch = vectorGroup.children[0];
       vectorGroup.remove(ch);
@@ -949,10 +914,9 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     sceneRefs.current.sourceBeacon = null;
     sceneRefs.current.structureItems = [];
 
-    // 1. River Centerline
     const riverLineCoords = mode === 'static' ? staticRiverCoords : centerlineCoords;
     if (showCenterline && riverLineCoords && riverLineCoords.length >= 2) {
-      const pts = drapePolylineOverTerrain(terrainGrid, riverLineCoords, 0.35, 10);
+      const pts = drapePolylineOverTerrain(terrainGrid, riverLineCoords, 0.04, 10);
       if (pts) {
         const lineGeo = new THREE.BufferGeometry();
         lineGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
@@ -963,18 +927,17 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       }
     }
 
-    // 2. Bank Lines (1D)
     if (mode === 'dynamic1d' && showCenterline) {
       for (const bank of [leftBankCoords, rightBankCoords]) {
         if (bank && bank.length >= 2) {
-          const pts = drapePolylineOverTerrain(terrainGrid, bank, 0.25, 6);
+          const pts = drapePolylineOverTerrain(terrainGrid, bank, 0.035, 6);
           if (pts) {
             const bGeo = new THREE.BufferGeometry();
             bGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
             const bMat = new THREE.LineBasicMaterial({
               color: 0x34d399,
               transparent: true,
-              opacity: 0.75,
+              opacity: 0.78,
             });
             vectorGroup.add(new THREE.Line(bGeo, bMat));
           }
@@ -982,14 +945,13 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       }
     }
 
-    // 3. Cross-sections (1D)
     if (mode === 'dynamic1d' && showSections && sections.length > 0) {
       sections.forEach((sec, idx) => {
         if (!sec.cutLine) return;
         const pts = drapePolylineOverTerrain(
           terrainGrid,
           [sec.cutLine[0], sec.cutLine[1]],
-          0.3,
+          0.035,
           12
         );
         if (!pts) return;
@@ -999,7 +961,7 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
         const sMat = new THREE.LineBasicMaterial({
           color: isSelected ? 0xfbbf24 : 0x94a3b8,
           transparent: true,
-          opacity: isSelected ? 1.0 : 0.6,
+          opacity: isSelected ? 1.0 : 0.65,
         });
         const sLine = new THREE.Line(sGeo, sMat);
         sLine.renderOrder = isSelected ? 8 : 4;
@@ -1007,31 +969,74 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       });
     }
 
-    // 4. Study Area Boundary (Static or 1D)
     const areaRings =
       mode === 'static'
         ? staticAreaCoords && staticAreaCoords.length >= 3
           ? [staticAreaCoords]
           : []
         : studyAreaPolygons;
-    for (const ring of areaRings) {
-      if (ring.length >= 3) {
-        const closed = [...ring, ring[0]];
-        const pts = drapePolylineOverTerrain(terrainGrid, closed, 0.35, 6);
-        if (pts) {
-          const aGeo = new THREE.BufferGeometry();
-          aGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-          const aMat = new THREE.LineBasicMaterial({
-            color: 0x10b981,
-            transparent: true,
-            opacity: 0.9,
-          });
-          vectorGroup.add(new THREE.Line(aGeo, aMat));
+    if (showStudyArea) {
+      for (const ring of areaRings) {
+        if (ring.length >= 3) {
+          const closed =
+            Math.hypot(
+              ring[0][0] - ring[ring.length - 1][0],
+              ring[0][1] - ring[ring.length - 1][1]
+            ) < 1e-7
+              ? ring
+              : [...ring, ring[0]];
+
+          // 1. Terrain-anchored translucent perimeter ribbon rooted into DEM surface
+          const ribbonBuf = buildDrapedBoundaryRibbonBuffers(terrainGrid, closed, -0.04, 0.12);
+          if (ribbonBuf) {
+            const rGeo = new THREE.BufferGeometry();
+            rGeo.setAttribute('position', new THREE.BufferAttribute(ribbonBuf.positions, 3));
+            rGeo.setIndex(new THREE.BufferAttribute(ribbonBuf.indices, 1));
+            const rMat = new THREE.MeshBasicMaterial({
+              color: 0x10b981,
+              transparent: true,
+              opacity: 0.38,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+            });
+            const rMesh = new THREE.Mesh(rGeo, rMat);
+            rMesh.renderOrder = 6;
+            vectorGroup.add(rMesh);
+          }
+
+          // 2. Ground-contact contour line flush on DEM surface
+          const groundPts = drapePolylineOverTerrain(terrainGrid, closed, 0.03, 6);
+          if (groundPts) {
+            const aGeo = new THREE.BufferGeometry();
+            aGeo.setAttribute('position', new THREE.BufferAttribute(groundPts, 3));
+            const aMat = new THREE.LineBasicMaterial({
+              color: 0x34d399,
+              transparent: true,
+              opacity: 0.95,
+            });
+            const aLine = new THREE.Line(aGeo, aMat);
+            aLine.renderOrder = 7;
+            vectorGroup.add(aLine);
+          }
+
+          // 3. Upper rim contour line along ribbon top
+          const topPts = drapePolylineOverTerrain(terrainGrid, closed, 0.125, 6);
+          if (topPts) {
+            const tGeo = new THREE.BufferGeometry();
+            tGeo.setAttribute('position', new THREE.BufferAttribute(topPts, 3));
+            const tMat = new THREE.LineBasicMaterial({
+              color: 0x6ee7b7,
+              transparent: true,
+              opacity: 0.85,
+            });
+            const tLine = new THREE.Line(tGeo, tMat);
+            tLine.renderOrder = 7;
+            vectorGroup.add(tLine);
+          }
         }
       }
     }
 
-    // 5. Static Source Point Beacon
     if (mode === 'static' && sourceWgs) {
       const wp = wgs84ToWorldPoint(terrainGrid, sourceWgs[0], sourceWgs[1], sourceElevation);
       if (wp) {
@@ -1043,7 +1048,6 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
       }
     }
 
-    // 6. Hydraulic Structures (1D Bridges / Culverts)
     if (mode === 'dynamic1d' && showStructures && structures.length > 0) {
       const placed = resolveStructureWorldPositions(terrainGrid, structures, sections);
       const list: Array<{ group: THREE.Group; baseY: number }> = [];
@@ -1071,6 +1075,7 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     showCenterline,
     showSections,
     showStructures,
+    showStudyArea,
     staticRiverCoords,
     staticAreaCoords,
     sourceWgs,
@@ -1129,406 +1134,402 @@ export const Terrain3DModal: React.FC<Terrain3DModalProps> = ({
     showWater,
   ]);
 
-  if (!isOpen) return null;
-
   const activeTimeStep =
     mode === 'dynamic1d' && dynamicResults && dynamicResults.timeSteps.length > 0
       ? dynamicResults.timeSteps[currentStepIdx] || dynamicResults.timeSteps[0]
       : null;
 
   return (
-    <div className="fixed inset-0 z-[1200] bg-slate-950/75 flex items-center justify-center p-3 sm:p-5">
-      {/* Framed CAD-Viewer Sized Window */}
-      <div className="w-full max-w-[1380px] h-[82vh] max-h-[840px] bg-[#0B111A] border border-slate-700/90 rounded-2xl shadow-2xl overflow-hidden flex flex-col relative select-none text-slate-100">
-        {/* Top Metadata & Close Strip (zero pills, tabular-nums, no backdrop-filter over WebGL) */}
-        <div className="h-12 px-4 bg-[#0F172A] border-b border-slate-800 flex items-center justify-between gap-4 shrink-0 z-20">
-          <div className="flex items-center gap-3 min-w-0">
-            <Mountain size={16} className="text-cyan-400 shrink-0" />
-            <h3 className="text-xs sm:text-sm font-bold text-slate-100 whitespace-nowrap truncate">
-              {title}
-            </h3>
-            {terrainGrid && (
-              <div className="hidden md:flex items-center gap-2 text-[11px] font-mono tabular-nums text-slate-400 whitespace-nowrap">
-                <span aria-hidden="true">·</span>
-                <span>
-                  {Math.round(terrainGrid.spanMetersX)} × {Math.round(terrainGrid.spanMetersZ)} m
-                </span>
-                <span aria-hidden="true">·</span>
-                <span>
-                  Kot: {terrainGrid.minElev.toFixed(1)} – {terrainGrid.maxElev.toFixed(1)} m
-                </span>
-                {waterStats.hasWater && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span className="text-cyan-300">
-                      Maks. Derinlik: {waterStats.maxDepth.toFixed(2)} m
-                    </span>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Cursor Raycast Telemetry + Close */}
-          <div className="flex items-center gap-4 shrink-0">
-            {cursorInfo && (
-              <div className="hidden sm:flex items-center gap-2.5 text-[11px] font-mono tabular-nums text-slate-300">
-                <span>
-                  Z: <strong className="text-amber-300">{cursorInfo.terrainZ.toFixed(2)} m</strong>
-                </span>
-                {cursorInfo.waterZ !== null && cursorInfo.depthM !== null && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span>
-                      WSE: <strong className="text-cyan-300">{cursorInfo.waterZ.toFixed(2)} m</strong>
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span>
-                      h: <strong className="text-sky-400">{cursorInfo.depthM.toFixed(2)} m</strong>
-                    </span>
-                  </>
-                )}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
-              title="3B Pencereyi Kapat (ESC)"
-            >
-              <X size={14} />
-              <span>Kapat</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 3D WebGL Viewport Container */}
-        <div className="flex-1 w-full min-h-0 relative bg-[#0B111A]">
-          {/* Dedicated isolated canvas mount */}
-          <div ref={canvasMountRef} className="w-full h-full" />
-
-          {/* Loading or Error Overlay */}
-          {isLoadingTerrain && (
-            <div className="absolute inset-0 z-30 bg-[#0B111A]/90 flex flex-col items-center justify-center gap-3 text-center p-6">
-              <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-              <div className="text-xs font-semibold text-slate-200">
-                3B Arazi ve Taşkın Geometrisi Hazırlanıyor...
-              </div>
-            </div>
-          )}
-
-          {(loadError || webglLost) && !isLoadingTerrain && (
-            <div className="absolute inset-0 z-30 bg-[#0B111A]/95 flex flex-col items-center justify-center gap-3 text-center p-6">
-              <AlertTriangle size={28} className="text-amber-400" />
-              <div className="text-sm font-bold text-slate-100">
-                {webglLost
-                  ? 'WebGL Grafik Bağlamı Kesintiye Uğradı'
-                  : '3B Sahne Oluşturulamadı'}
-              </div>
-              <p className="text-xs text-slate-400 max-w-md">
-                {loadError ||
-                  'Tarayıcı grafik sürücüsü sıfırlandı. Pencereyi kapatıp tekrar açabilirsiniz.'}
-              </p>
-            </div>
-          )}
-
-          {/* Subtle Mouse Helper Hint (Top-Left, non-obstructive) */}
-          {terrainGrid && !loadError && !webglLost && (
-            <div className="absolute top-3 left-3 z-10 pointer-events-none text-[11px] text-slate-400 bg-[#0F172A]/85 border border-slate-800 rounded-lg px-2.5 py-1.5 flex items-center gap-2 font-sans">
-              <span>Sol Sürükle: Döndür</span>
+    <div className="w-full h-full flex flex-col relative select-none text-slate-100 bg-[#0B111A] rounded-xl overflow-hidden">
+      {/* Compact Top Telemetry Strip (zero pills, tabular-nums, no backdrop-filter over WebGL) */}
+      <div className="h-10 px-3 bg-[#0F172A] border-b border-slate-800 flex items-center justify-between gap-3 shrink-0 z-20">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Mountain size={15} className="text-cyan-400 shrink-0" />
+          <span className="text-xs font-bold text-slate-100 whitespace-nowrap truncate">
+            {title}
+          </span>
+          {terrainGrid && (
+            <div className="hidden lg:flex items-center gap-2 text-[11px] font-mono tabular-nums text-slate-400 whitespace-nowrap">
               <span aria-hidden="true">·</span>
-              <span>Sağ Sürükle: Kaydır</span>
+              <span>
+                {Math.round(terrainGrid.spanMetersX)} × {Math.round(terrainGrid.spanMetersZ)} m
+              </span>
               <span aria-hidden="true">·</span>
-              <span>Tekerlek: Yakınlaş</span>
-            </div>
-          )}
-
-          {/* Static WSE Info (Top-Right if available and not occluded) */}
-          {mode === 'static' && staticWse !== null && staticWse !== undefined && terrainGrid && (
-            <div className="absolute top-3 right-3 z-10 pointer-events-none text-[11px] font-mono tabular-nums text-slate-200 bg-[#0F172A]/85 border border-slate-800 rounded-lg px-3 py-1.5 flex items-center gap-2">
-              <Droplets size={13} className="text-cyan-400 shrink-0" />
-              <span>Hedef WSE: {staticWse.toFixed(2)} m</span>
+              <span>
+                Kot: {terrainGrid.minElev.toFixed(1)} – {terrainGrid.maxElev.toFixed(1)} m
+              </span>
               {waterStats.hasWater && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span>Alan: {Math.round(waterStats.areaM2).toLocaleString()} m²</span>
+                  <span className="text-cyan-300">
+                    Maks. Derinlik: {waterStats.maxDepth.toFixed(2)} m
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          {cursorInfo && (
+            <div className="hidden sm:flex items-center gap-2 text-[11px] font-mono tabular-nums text-slate-300 whitespace-nowrap">
+              <span>
+                Z: <strong className="text-amber-300">{cursorInfo.terrainZ.toFixed(2)} m</strong>
+              </span>
+              {cursorInfo.waterZ !== null && cursorInfo.depthM !== null && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    WSE: <strong className="text-cyan-300">{cursorInfo.waterZ.toFixed(2)} m</strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    h: <strong className="text-sky-400">{cursorInfo.depthM.toFixed(2)} m</strong>
+                  </span>
                 </>
               )}
             </div>
           )}
 
-          {/* Collapsible Bottom Control Dock */}
-          {terrainGrid && !loadError && (
-            <div
-              className={`absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center transition-transform duration-200 ${
-                isDockCollapsed ? 'translate-y-[calc(100%-32px)]' : 'translate-y-0'
-              }`}
-              style={{ maxWidth: 'min(960px, 95%)' }}
+          {headerRightSlot}
+        </div>
+      </div>
+
+      {/* 3D WebGL Viewport Container */}
+      <div className="flex-1 w-full min-h-0 relative bg-[#0B111A]">
+        <div ref={canvasMountRef} className="w-full h-full" />
+
+        {isLoadingTerrain && (
+          <div className="absolute inset-0 z-30 bg-[#0B111A]/90 flex flex-col items-center justify-center gap-3 text-center p-6">
+            <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+            <div className="text-xs font-semibold text-slate-200">
+              3B Arazi ve Taşkın Geometrisi Hazırlanıyor...
+            </div>
+          </div>
+        )}
+
+        {(loadError || webglLost) && !isLoadingTerrain && (
+          <div className="absolute inset-0 z-30 bg-[#0B111A]/95 flex flex-col items-center justify-center gap-3 text-center p-6">
+            <AlertTriangle size={28} className="text-amber-400" />
+            <div className="text-sm font-bold text-slate-100">
+              {webglLost
+                ? 'WebGL Grafik Bağlamı Kesintiye Uğradı'
+                : '3B Sahne Oluşturulamadı'}
+            </div>
+            <p className="text-xs text-slate-400 max-w-md">
+              {loadError ||
+                'Tarayıcı grafik sürücüsü sıfırlandı. 2B Harita görünümüne geçip tekrar 3B sekmeyi açabilirsiniz.'}
+            </p>
+          </div>
+        )}
+
+        {/* Mouse Helper Hint (Top-Left) */}
+        {terrainGrid && !loadError && !webglLost && (
+          <div className="hidden sm:flex absolute top-2.5 left-2.5 z-10 pointer-events-none text-[11px] text-slate-400 bg-[#0F172A]/90 border border-slate-800 rounded-lg px-2.5 py-1 items-center gap-2 font-sans">
+            <span>Sol Sürükle: Döndür</span>
+            <span aria-hidden="true">·</span>
+            <span>Sağ Sürükle: Kaydır</span>
+            <span aria-hidden="true">·</span>
+            <span>Tekerlek: Yakınlaş</span>
+          </div>
+        )}
+
+        {/* Static WSE Info (Top-Right inside 3D canvas) */}
+        {mode === 'static' && staticWse !== null && staticWse !== undefined && terrainGrid && (
+          <div className="absolute top-2.5 right-2.5 z-10 pointer-events-none text-[11px] font-mono tabular-nums text-slate-200 bg-[#0F172A]/90 border border-slate-800 rounded-lg px-2.5 py-1 flex items-center gap-2">
+            <Droplets size={13} className="text-cyan-400 shrink-0" />
+            <span>Hedef WSE: {staticWse.toFixed(2)} m</span>
+            {waterStats.hasWater && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>Alan: {Math.round(waterStats.areaM2).toLocaleString()} m²</span>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Collapsible Bottom Control Dock */}
+        {terrainGrid && !loadError && (
+          <div
+            className={`absolute bottom-2.5 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center transition-transform duration-200 ${
+              isDockCollapsed ? 'translate-y-[calc(100%-30px)]' : 'translate-y-0'
+            }`}
+            style={{ maxWidth: 'min(940px, 95%)' }}
+          >
+            <button
+              type="button"
+              onClick={() => setIsDockCollapsed((p) => !p)}
+              className="px-3 py-1 bg-[#0F172A]/95 hover:bg-slate-800 text-slate-300 border border-b-0 border-slate-700 rounded-t-lg text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+              title="Kontrol Panelini Gizle/Göster (H)"
             >
-              {/* Collapse / Expand Tab */}
-              <button
-                type="button"
-                onClick={() => setIsDockCollapsed((p) => !p)}
-                className="px-3 py-1 bg-[#0F172A]/95 hover:bg-slate-800 text-slate-300 border border-b-0 border-slate-700 rounded-t-lg text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="Kontrol Panelini Gizle/Göster (H)"
-              >
-                {isDockCollapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                <span>{isDockCollapsed ? 'Kontrolleri Göster' : 'Kontrolleri Gizle'}</span>
-              </button>
+              {isDockCollapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              <span>{isDockCollapsed ? 'Kontrolleri Göster' : 'Kontrolleri Gizle'}</span>
+            </button>
 
-              {/* Main Control Bar */}
-              <div className="w-full bg-[#0F172A]/95 border border-slate-700 rounded-xl p-2.5 shadow-2xl space-y-2">
-                {/* Row 1: Z Exaggeration + Camera Presets + Layer Toggles */}
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  {/* Z Exaggeration Slider */}
-                  <div className="flex items-center gap-2.5 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5">
-                    <span className="text-[11px] font-semibold text-slate-300 whitespace-nowrap">
-                      Düşey Abartı (Z)
-                    </span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="10"
-                      step="0.25"
-                      value={zExaggeration}
-                      onChange={(e) => setZExaggeration(Number(e.target.value))}
-                      className="w-24 sm:w-28 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-cyan-500"
-                    />
-                    <span className="text-[11px] font-mono tabular-nums font-bold text-cyan-300 w-9 text-right">
-                      {zExaggeration.toFixed(1)}x
-                    </span>
-                  </div>
+            <div className="w-full bg-[#0F172A]/95 border border-slate-700 rounded-xl p-2 shadow-2xl space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                {/* Z Exaggeration Slider */}
+                <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1">
+                  <span className="text-[11px] font-semibold text-slate-300 whitespace-nowrap">
+                    Düşey Abartı (Z)
+                  </span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="10"
+                    step="0.25"
+                    value={zExaggeration}
+                    onChange={(e) => setZExaggeration(Number(e.target.value))}
+                    className="w-20 sm:w-24 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-cyan-500"
+                  />
+                  <span className="text-[11px] font-mono tabular-nums font-bold text-cyan-300 w-9 text-right">
+                    {zExaggeration.toFixed(1)}x
+                  </span>
+                </div>
 
-                  {/* Camera Presets */}
-                  <div className="flex items-center gap-1 bg-slate-900/90 border border-slate-800 rounded-lg p-1">
-                    <Compass size={13} className="text-slate-400 mx-1 shrink-0" />
-                    {(
-                      [
-                        { id: 'isometric', label: 'İzometrik' },
-                        { id: 'top', label: 'Kuşbakışı' },
-                        ...(mode === 'dynamic1d' && centerlineCoords.length >= 2
-                          ? [{ id: 'valley', label: 'Vadi Boyu' }]
-                          : []),
-                      ] as Array<{ id: CameraPreset; label: string }>
-                    ).map((cam) => (
-                      <button
-                        key={cam.id}
-                        type="button"
-                        onClick={() => handleSelectPreset(cam.id)}
-                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-                          activePreset === cam.id
-                            ? 'bg-cyan-700 text-white'
-                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                        }`}
-                      >
-                        {cam.label}
-                      </button>
-                    ))}
+                {/* Camera Presets */}
+                <div className="flex items-center gap-1 bg-slate-900/90 border border-slate-800 rounded-lg p-1">
+                  <Compass size={13} className="text-slate-400 mx-1 shrink-0" />
+                  {(
+                    [
+                      { id: 'isometric', label: 'İzometrik' },
+                      { id: 'top', label: 'Kuşbakışı' },
+                      ...(mode === 'dynamic1d' && centerlineCoords.length >= 2
+                        ? [{ id: 'valley', label: 'Vadi Boyu' }]
+                        : []),
+                    ] as Array<{ id: CameraPreset; label: string }>
+                  ).map((cam) => (
                     <button
+                      key={cam.id}
                       type="button"
-                      onClick={() => handleSelectPreset(activePreset)}
-                      className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md transition-colors cursor-pointer"
-                      title="Kamerayı Sıfırla"
+                      onClick={() => handleSelectPreset(cam.id)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                        activePreset === cam.id
+                          ? 'bg-cyan-700 text-white'
+                          : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                      }`}
                     >
-                      <RotateCcw size={12} />
+                      {cam.label}
                     </button>
-                  </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPreset(activePreset)}
+                    className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md transition-colors cursor-pointer"
+                    title="Kamerayı Sıfırla"
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                </div>
 
-                  {/* Layer Toggles */}
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {waterStats.hasWater && (
-                      <button
-                        type="button"
-                        onClick={() => setShowWater((v) => !v)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 ${
-                          showWater
-                            ? 'bg-cyan-700 text-white border-cyan-600'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-                        }`}
-                      >
-                        <Droplets size={12} />
-                        <span>Su Yüzeyi</span>
-                      </button>
-                    )}
-
-                    {((mode === 'static' && staticRiverCoords && staticRiverCoords.length >= 2) ||
-                      (mode === 'dynamic1d' && centerlineCoords.length >= 2)) && (
-                      <button
-                        type="button"
-                        onClick={() => setShowCenterline((v) => !v)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
-                          showCenterline
-                            ? 'bg-sky-700 text-white border-sky-600'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-                        }`}
-                      >
-                        Dere Aksı
-                      </button>
-                    )}
-
-                    {mode === 'dynamic1d' && sections.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setShowSections((v) => !v)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
-                          showSections
-                            ? 'bg-amber-700 text-white border-amber-600'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-                        }`}
-                      >
-                        Enkesitler
-                      </button>
-                    )}
-
-                    {mode === 'dynamic1d' && structures.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setShowStructures((v) => !v)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
-                          showStructures
-                            ? 'bg-orange-700 text-white border-orange-600'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-                        }`}
-                      >
-                        Yapılar ({structures.length})
-                      </button>
-                    )}
-
+                {/* Layer Toggles */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {waterStats.hasWater && (
                     <button
                       type="button"
-                      onClick={() => setShowWireframe((v) => !v)}
+                      onClick={() => setShowWater((v) => !v)}
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 ${
-                        showWireframe
-                          ? 'bg-slate-700 text-white border-slate-500'
+                        showWater
+                          ? 'bg-cyan-700 text-white border-cyan-600'
                           : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
                       }`}
                     >
-                      <Grid size={12} />
-                      <span>Tel Kafes</span>
+                      <Droplets size={12} />
+                      <span>Su Yüzeyi</span>
+                    </button>
+                  )}
+
+                  {((mode === 'static' && staticRiverCoords && staticRiverCoords.length >= 2) ||
+                    (mode === 'dynamic1d' && centerlineCoords.length >= 2)) && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCenterline((v) => !v)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                        showCenterline
+                          ? 'bg-sky-700 text-white border-sky-600'
+                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      Dere Aksı
+                    </button>
+                  )}
+
+                  {mode === 'dynamic1d' && sections.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowSections((v) => !v)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                        showSections
+                          ? 'bg-amber-700 text-white border-amber-600'
+                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      Enkesitler
+                    </button>
+                  )}
+
+                  {mode === 'dynamic1d' && structures.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowStructures((v) => !v)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                        showStructures
+                          ? 'bg-orange-700 text-white border-orange-600'
+                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      Yapılar ({structures.length})
+                    </button>
+                  )}
+
+                  {((mode === 'static' && staticAreaCoords && staticAreaCoords.length >= 3) ||
+                    (mode === 'dynamic1d' && studyAreaPolygons.length > 0)) && (
+                    <button
+                      type="button"
+                      onClick={() => setShowStudyArea((v) => !v)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                        showStudyArea
+                          ? 'bg-emerald-700 text-white border-emerald-600'
+                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      İnceleme Alanı
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setShowWireframe((v) => !v)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                      showWireframe
+                        ? 'bg-slate-700 text-white border-slate-500'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <Grid size={12} />
+                    <span>Tel Kafes</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 1D Dynamic Time Animation Controls */}
+              {mode === 'dynamic1d' && dynamicResults && dynamicResults.timeSteps.length > 0 && onChangeStepIdx && (
+                <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlaying3D(false);
+                        onChangeResultDisplayMode?.('dynamic');
+                        onChangeStepIdx(Math.max(0, currentStepIdx - 1));
+                      }}
+                      disabled={currentStepIdx === 0}
+                      className="p-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-slate-200 rounded-md border border-slate-800 cursor-pointer"
+                      title="Önceki Zaman Adımı"
+                    >
+                      <SkipBack size={13} />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isPlaying3D) {
+                          setIsPlaying3D(false);
+                        } else {
+                          onChangeResultDisplayMode?.('dynamic');
+                          if (currentStepIdx >= dynamicResults.timeSteps.length - 1) {
+                            onChangeStepIdx(0);
+                          }
+                          setIsPlaying3D(true);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                        isPlaying3D
+                          ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                          : 'bg-cyan-700 hover:bg-cyan-600 text-white'
+                      }`}
+                    >
+                      {isPlaying3D ? <Pause size={12} /> : <Play size={12} className="fill-white" />}
+                      <span>{isPlaying3D ? 'Durdur' : 'Oynat'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlaying3D(false);
+                        onChangeResultDisplayMode?.('dynamic');
+                        onChangeStepIdx(
+                          Math.min(dynamicResults.timeSteps.length - 1, currentStepIdx + 1)
+                        );
+                      }}
+                      disabled={currentStepIdx >= dynamicResults.timeSteps.length - 1}
+                      className="p-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-slate-200 rounded-md border border-slate-800 cursor-pointer"
+                      title="Sonraki Zaman Adımı"
+                    >
+                      <SkipForward size={13} />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 flex-1 min-w-[160px]">
+                    <input
+                      type="range"
+                      min="0"
+                      max={Math.max(1, dynamicResults.timeSteps.length - 1)}
+                      step="1"
+                      value={currentStepIdx}
+                      onChange={(e) => {
+                        setIsPlaying3D(false);
+                        onChangeResultDisplayMode?.('dynamic');
+                        onChangeStepIdx(Number(e.target.value));
+                      }}
+                      className="flex-1 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-cyan-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2.5 text-[11px] font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                    <span>
+                      {resultDisplayMode === 'peak'
+                        ? 'Pik Zarfı'
+                        : activeTimeStep?.timeFormatted || `Saat ${currentStepIdx}`}
+                    </span>
+                    {activeTimeStep && resultDisplayMode !== 'peak' && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          Giriş: <strong className="text-cyan-300">{activeTimeStep.inflowQ} m³/s</strong>
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          Çıkış: <strong className="text-emerald-300">{activeTimeStep.outflowQ} m³/s</strong>
+                        </span>
+                      </>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlaying3D(false);
+                        onChangeResultDisplayMode?.(
+                          resultDisplayMode === 'peak' ? 'dynamic' : 'peak'
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold font-sans border transition-colors cursor-pointer whitespace-nowrap ${
+                        resultDisplayMode === 'peak'
+                          ? 'bg-amber-600 text-white border-amber-500'
+                          : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'
+                      }`}
+                    >
+                      Pik Zarfı
                     </button>
                   </div>
                 </div>
-
-                {/* Row 2: 1D Dynamic Time Animation Controls */}
-                {mode === 'dynamic1d' && dynamicResults && dynamicResults.timeSteps.length > 0 && onChangeStepIdx && (
-                  <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsPlaying3D(false);
-                          onChangeResultDisplayMode?.('dynamic');
-                          onChangeStepIdx(Math.max(0, currentStepIdx - 1));
-                        }}
-                        disabled={currentStepIdx === 0}
-                        className="p-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-slate-200 rounded-md border border-slate-800 cursor-pointer"
-                        title="Önceki Zaman Adımı"
-                      >
-                        <SkipBack size={13} />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (isPlaying3D) {
-                            setIsPlaying3D(false);
-                          } else {
-                            onChangeResultDisplayMode?.('dynamic');
-                            if (currentStepIdx >= dynamicResults.timeSteps.length - 1) {
-                              onChangeStepIdx(0);
-                            }
-                            setIsPlaying3D(true);
-                          }
-                        }}
-                        className={`px-3 py-1.5 rounded-md text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
-                          isPlaying3D
-                            ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                            : 'bg-cyan-700 hover:bg-cyan-600 text-white'
-                        }`}
-                      >
-                        {isPlaying3D ? <Pause size={12} /> : <Play size={12} className="fill-white" />}
-                        <span>{isPlaying3D ? 'Durdur' : 'Oynat'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsPlaying3D(false);
-                          onChangeResultDisplayMode?.('dynamic');
-                          onChangeStepIdx(
-                            Math.min(dynamicResults.timeSteps.length - 1, currentStepIdx + 1)
-                          );
-                        }}
-                        disabled={currentStepIdx >= dynamicResults.timeSteps.length - 1}
-                        className="p-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-slate-200 rounded-md border border-slate-800 cursor-pointer"
-                        title="Sonraki Zaman Adımı"
-                      >
-                        <SkipForward size={13} />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-2.5 flex-1 min-w-[180px]">
-                      <input
-                        type="range"
-                        min="0"
-                        max={Math.max(1, dynamicResults.timeSteps.length - 1)}
-                        step="1"
-                        value={currentStepIdx}
-                        onChange={(e) => {
-                          setIsPlaying3D(false);
-                          onChangeResultDisplayMode?.('dynamic');
-                          onChangeStepIdx(Number(e.target.value));
-                        }}
-                        className="flex-1 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-cyan-500"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-3 text-[11px] font-mono tabular-nums text-slate-300 whitespace-nowrap">
-                      <span>
-                        {resultDisplayMode === 'peak'
-                          ? 'Pik Zarfı'
-                          : activeTimeStep?.timeFormatted || `Saat ${currentStepIdx}`}
-                      </span>
-                      {activeTimeStep && resultDisplayMode !== 'peak' && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span>
-                            Giriş: <strong className="text-cyan-300">{activeTimeStep.inflowQ} m³/s</strong>
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span>
-                            Çıkış: <strong className="text-emerald-300">{activeTimeStep.outflowQ} m³/s</strong>
-                          </span>
-                        </>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsPlaying3D(false);
-                          onChangeResultDisplayMode?.(
-                            resultDisplayMode === 'peak' ? 'dynamic' : 'peak'
-                          );
-                        }}
-                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold font-sans border transition-colors cursor-pointer ${
-                          resultDisplayMode === 'peak'
-                            ? 'bg-amber-600 text-white border-amber-500'
-                            : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'
-                        }`}
-                      >
-                        Pik Zarfı
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-export default Terrain3DModal;
+export default Terrain3DView;

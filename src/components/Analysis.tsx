@@ -27,7 +27,7 @@ import {
 import { MapContainer, TileLayer, ImageOverlay, Polyline, CircleMarker, Polygon, Tooltip, Popup } from 'react-leaflet';
 import proj4 from 'proj4';
 import { MapAutoCenter, MapClickHandler } from './MapHelpers';
-import Terrain3DModal from './Terrain3DModal';
+import Terrain3DView from './Terrain3DView';
 
 interface AnalysisProps {
   currentStep: number;
@@ -133,7 +133,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
   const [showBasemapMenu, setShowBasemapMenu] = useState<boolean>(false);
   const [mobileTab, setMobileTab] = useState<'controls' | 'map'>('controls');
   const [isFileOpened, setIsFileOpened] = useState<boolean>(false);
-  const [is3DModalOpen, setIs3DModalOpen] = useState<boolean>(false);
+  const [mapDimension, setMapDimension] = useState<'2d' | '3d'>('2d');
 
   // Directly use provided elevation or dynamically sample from DEM
   const sourceElevation = React.useMemo<number | null>(() => {
@@ -248,7 +248,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
               mobileTab === 'map' ? 'flex' : 'hidden lg:flex'
             }`}>
               {isSimulating && (
-                <div className="absolute inset-0 z-[500] bg-slate-950/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-4">
+                <div className="absolute inset-0 z-[1300] bg-slate-950/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-4">
                   <div className="p-4 bg-cyan-500/20 text-cyan-400 rounded-full">
                     <RefreshCw size={36} className="animate-spin" />
                   </div>
@@ -266,61 +266,112 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                 </div>
               )}
 
-              {/* 3D View & Basemap Picker Overlay */}
-              <div className="absolute top-4 right-4 z-[400] flex items-center gap-2">
-                {dem && (
-                  <button
-                    type="button"
-                    onClick={() => setIs3DModalOpen(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-cyan-700 hover:bg-cyan-600 text-white border border-cyan-500 shadow-xl transition-all cursor-pointer whitespace-nowrap"
-                    title="DEM ve statik taşkın kütlesini 3 boyutlu incele"
-                  >
-                    <Box size={14} />
-                    <span>3B Görünüm</span>
-                  </button>
-                )}
-
-                <div className="relative">
-                  <button
-                    onClick={() => setShowBasemapMenu(!showBasemapMenu)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900/90 hover:bg-slate-900 text-white border border-slate-700 shadow-xl backdrop-blur-md transition-all cursor-pointer"
-                  >
-                    <Layers size={14} className="text-cyan-400" />
-                    <span>{currentBasemap.label}</span>
-                  </button>
-
-                  {showBasemapMenu && (
-                    <div className="absolute right-0 mt-2 w-56 bg-slate-900/95 border border-slate-700 rounded-2xl p-2 shadow-2xl backdrop-blur-xl z-[450] space-y-1">
-                      <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Altlık Harita Katmanı</div>
-                      {BASEMAP_OPTIONS.map((bm) => (
+              {mapDimension === '3d' && dem ? (
+                <div className="flex-1 w-full h-full min-h-0 rounded-xl overflow-hidden relative">
+                  <Terrain3DView
+                    title="Statik Taşkın Simülasyonu · 3B DEM"
+                    mode="static"
+                    crsDef={selectedCRS?.def || '+proj=longlat +datum=WGS84 +no_defs'}
+                    staticDem={dem}
+                    waterDepth={props.waterDepth}
+                    connectedFloodMask={props.connectedFloodMask}
+                    sourceWgs={sourceWgs}
+                    sourceElevation={sourceElevation}
+                    staticWse={currentWse}
+                    staticRiverCoords={riverKml?.coords}
+                    staticAreaCoords={areaKml?.coords}
+                    headerRightSlot={
+                      <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5">
                         <button
-                          key={bm.id}
-                          onClick={() => {
-                            setActiveBasemap(bm.id);
-                            setShowBasemapMenu(false);
-                          }}
-                          className={`w-full text-left px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
-                            activeBasemap === bm.id
-                              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
-                              : 'text-slate-300 hover:bg-white/10'
-                          }`}
+                          type="button"
+                          onClick={() => setMapDimension('2d')}
+                          className="px-2.5 py-1 rounded-md text-[11px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 flex items-center gap-1 cursor-pointer whitespace-nowrap transition-colors"
                         >
-                          <span>{bm.label}</span>
-                          {activeBasemap === bm.id && <Check size={14} className="text-cyan-400" />}
+                          <MapIcon size={12} />
+                          <span>2B Harita</span>
                         </button>
-                      ))}
-                    </div>
-                  )}
+                        <button
+                          type="button"
+                          onClick={() => setMapDimension('3d')}
+                          className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-cyan-700 text-white flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                        >
+                          <Box size={12} />
+                          <span>3B Arazi</span>
+                        </button>
+                      </div>
+                    }
+                  />
                 </div>
-              </div>
+              ) : (
+                <>
+                  {/* 2B/3B Switch & Basemap Picker Overlay */}
+                  <div className="absolute top-4 right-4 z-[1100] flex items-center gap-2">
+                    {dem && (
+                      <div className="flex items-center bg-slate-900/95 border border-slate-700 rounded-xl p-0.5 shadow-xl">
+                        <button
+                          type="button"
+                          onClick={() => setMapDimension('2d')}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-cyan-700 text-white cursor-pointer whitespace-nowrap"
+                        >
+                          <MapIcon size={13} />
+                          <span>2B Harita</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowBasemapMenu(false);
+                            setMapDimension('3d');
+                          }}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap"
+                          title="DEM ve statik taşkın kütlesini aynı ekranda 3 boyutlu incele"
+                        >
+                          <Box size={13} />
+                          <span>3B Arazi</span>
+                        </button>
+                      </div>
+                    )}
 
-              <div className="flex-1 w-full h-full min-h-0 rounded-xl overflow-hidden relative">
-                <MapContainer 
-                  center={[coords.lat, coords.lon]} 
-                  zoom={13} 
-                  maxZoom={24}
-                  className="w-full h-full"
-                >
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowBasemapMenu(!showBasemapMenu)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900/95 hover:bg-slate-900 text-white border border-slate-700 shadow-xl backdrop-blur-md transition-all cursor-pointer whitespace-nowrap"
+                      >
+                        <Layers size={14} className="text-cyan-400" />
+                        <span>{currentBasemap.label}</span>
+                      </button>
+
+                      {showBasemapMenu && (
+                        <div className="absolute right-0 mt-2 w-56 bg-slate-900/95 border border-slate-700 rounded-2xl p-2 shadow-2xl backdrop-blur-xl z-[1200] space-y-1">
+                          <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Altlık Harita Katmanı</div>
+                          {BASEMAP_OPTIONS.map((bm) => (
+                            <button
+                              key={bm.id}
+                              onClick={() => {
+                                setActiveBasemap(bm.id);
+                                setShowBasemapMenu(false);
+                              }}
+                              className={`w-full text-left px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                                activeBasemap === bm.id
+                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
+                                  : 'text-slate-300 hover:bg-white/10'
+                              }`}
+                            >
+                              <span>{bm.label}</span>
+                              {activeBasemap === bm.id && <Check size={14} className="text-cyan-400" />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex-1 w-full h-full min-h-0 rounded-xl overflow-hidden relative z-0 isolate">
+                    <MapContainer 
+                      center={[coords.lat, coords.lon]} 
+                      zoom={13} 
+                      maxZoom={24}
+                      className="w-full h-full"
+                    >
                   <TileLayer
                     key={currentBasemap.id}
                     url={currentBasemap.url}
@@ -404,7 +455,7 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
               </div>
 
               {/* Map Legend Overlay */}
-              <div className="absolute bottom-4 left-4 right-4 z-[400] bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl flex flex-wrap items-center justify-between gap-3">
+              <div className="absolute bottom-4 left-4 right-4 z-[1100] bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-1.5">
                     <span className="w-2.5 h-2.5 rounded-full bg-blue-500 border border-blue-300 inline-block"></span>
@@ -442,6 +493,8 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                   </div>
                 )}
               </div>
+                </>
+              )}
             </div>
 
             {/* Summary & Export */}
@@ -1002,58 +1055,95 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                       <span>Paneli Aç</span>
                     </button>
 
-                    {/* 3B DEM View Trigger */}
+                    {/* 2B / 3B Map Mode Switch */}
                     {dem && (
-                      <button
-                        type="button"
-                        onClick={() => setIs3DModalOpen(true)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-cyan-700 hover:bg-cyan-800 text-white border border-cyan-600 shadow-sm transition-all cursor-pointer whitespace-nowrap"
-                        title="Yüklenen DEM verisini 3 boyutlu incele"
-                      >
-                        <Box size={13} />
-                        <span>3B Görünüm</span>
-                      </button>
+                      <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-300">
+                        <button
+                          type="button"
+                          onClick={() => setMapDimension('2d')}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                            mapDimension === '2d'
+                              ? 'bg-cyan-700 text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <MapIcon size={12} />
+                          <span>2B Harita</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowBasemapMenu(false);
+                            setMapDimension('3d');
+                          }}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                            mapDimension === '3d'
+                              ? 'bg-cyan-700 text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title="Yüklenen DEM verisini aynı ekranda 3 boyutlu incele"
+                        >
+                          <Box size={12} />
+                          <span>3B Arazi</span>
+                        </button>
+                      </div>
                     )}
 
                     {/* Basemap Switcher Dropdown */}
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowBasemapMenu(!showBasemapMenu)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 shadow-sm transition-all cursor-pointer"
-                      >
-                        <Layers size={13} />
-                        <span>{currentBasemap.label}</span>
-                      </button>
+                    {mapDimension === '2d' && (
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowBasemapMenu(!showBasemapMenu)}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                        >
+                          <Layers size={13} />
+                          <span>{currentBasemap.label}</span>
+                        </button>
 
-                      {showBasemapMenu && (
-                        <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-xl p-1.5 shadow-2xl z-[500] space-y-1">
-                          <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Harita Katmanı</div>
-                          {BASEMAP_OPTIONS.map((bm) => (
-                            <button
-                              key={bm.id}
-                              onClick={() => {
-                                setActiveBasemap(bm.id);
-                                setShowBasemapMenu(false);
-                              }}
-                              className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
-                                activeBasemap === bm.id
-                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
-                                  : 'text-slate-300 hover:bg-white/10'
-                              }`}
-                            >
-                              <span>{bm.label}</span>
-                              {activeBasemap === bm.id && <Check size={13} className="text-cyan-400" />}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                        {showBasemapMenu && (
+                          <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-xl p-1.5 shadow-2xl z-[1200] space-y-1">
+                            <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Harita Katmanı</div>
+                            {BASEMAP_OPTIONS.map((bm) => (
+                              <button
+                                key={bm.id}
+                                onClick={() => {
+                                  setActiveBasemap(bm.id);
+                                  setShowBasemapMenu(false);
+                                }}
+                                className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                                  activeBasemap === bm.id
+                                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
+                                    : 'text-slate-300 hover:bg-white/10'
+                                }`}
+                              >
+                                <span>{bm.label}</span>
+                                {activeBasemap === bm.id && <Check size={13} className="text-cyan-400" />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 {/* Map View */}
                 <div className="flex-1 w-full min-h-0 rounded-xl overflow-hidden border border-slate-300 relative shadow-inner">
-                  {!isFileOpened ? (
+                  {mapDimension === '3d' && dem ? (
+                    <Terrain3DView
+                      title="Statik Taşkın Simülasyonu · 3B DEM Önizleme"
+                      mode="static"
+                      crsDef={selectedCRS?.def || '+proj=longlat +datum=WGS84 +no_defs'}
+                      staticDem={dem}
+                      waterDepth={props.waterDepth}
+                      connectedFloodMask={props.connectedFloodMask}
+                      sourceWgs={sourceWgs}
+                      sourceElevation={sourceElevation}
+                      staticWse={currentWse}
+                      staticRiverCoords={riverKml?.coords}
+                      staticAreaCoords={areaKml?.coords}
+                    />
+                  ) : !isFileOpened ? (
                     <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-3.5 p-6 text-center bg-slate-100 relative select-none">
                       {/* Grid / Blueprint Background Effect */}
                       <div 
@@ -1109,7 +1199,10 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setIs3DModalOpen(true)}
+                                onClick={() => {
+                                  setShowBasemapMenu(false);
+                                  setMapDimension('3d');
+                                }}
                                 className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
                               >
                                 <Box size={15} />
@@ -1122,12 +1215,13 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                     </div>
                   ) : (
                     <>
-                      <MapContainer 
-                        center={[sourceWgs ? sourceWgs[0] : coords.lat, sourceWgs ? sourceWgs[1] : coords.lon]} 
-                        zoom={13} 
-                        maxZoom={24}
-                        className="w-full h-full"
-                      >
+                      <div className="w-full h-full relative z-0 isolate">
+                        <MapContainer 
+                          center={[sourceWgs ? sourceWgs[0] : coords.lat, sourceWgs ? sourceWgs[1] : coords.lon]} 
+                          zoom={13} 
+                          maxZoom={24}
+                          className="w-full h-full"
+                        >
                         <TileLayer
                           key={currentBasemap.id}
                           url={currentBasemap.url}
@@ -1197,16 +1291,17 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
                           </CircleMarker>
                         )}
                         {wgs84Bounds && <MapAutoCenter bounds={wgs84Bounds} />}
-                      </MapContainer>
+                        </MapContainer>
+                      </div>
 
                       {/* Top Notification Banner inside Map */}
-                      <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
+                      <div className="absolute top-2.5 left-2.5 z-[1100] bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-slate-100 border border-slate-700 flex items-center gap-1.5 shadow-md">
                         <MapPin className="text-cyan-400 shrink-0" size={13} />
                         <span>Haritaya tıklayarak veya KML yükleyerek su kaynak noktasını belirleyebilirsiniz</span>
                       </div>
 
                       {/* Bottom Status Bar inside Map */}
-                      <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
+                      <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[1100] flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-[11px] text-slate-200 border border-slate-700 shadow-xl">
                         <div className="flex flex-wrap items-center gap-2.5 text-[10px]">
                           {sourceWgs && (
                             <>
@@ -1247,22 +1342,6 @@ const Analysis: React.FC<AnalysisProps> = (props) => {
           </div>
         </div>
       )}
-
-      <Terrain3DModal
-        isOpen={is3DModalOpen}
-        onClose={() => setIs3DModalOpen(false)}
-        title="Statik Taşkın Simülasyonu · 3B DEM İnceleme"
-        mode="static"
-        crsDef={selectedCRS?.def || '+proj=longlat +datum=WGS84 +no_defs'}
-        staticDem={dem}
-        waterDepth={props.waterDepth}
-        connectedFloodMask={props.connectedFloodMask}
-        sourceWgs={sourceWgs}
-        sourceElevation={sourceElevation}
-        staticWse={currentWse}
-        staticRiverCoords={riverKml?.coords}
-        staticAreaCoords={areaKml?.coords}
-      />
     </div>
   );
 };
